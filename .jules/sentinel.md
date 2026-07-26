@@ -6,3 +6,7 @@
 - Modified `sync_state` behavior within `src/hooks/useRealtime.ts` to explicitly broadcast the `messages` array upon `request_state`, ensuring late joiners receive the full state (board, players, and messages).
 - Introduced Dark/Light mode toggle to the codebase in `src/app/globals.css` (.dark) and settings modal inside `src/app/room/[id]/page.tsx`. Additionally inserted a script block within `src/app/layout.tsx` to handle initializing the stored theme locally from localstorage prior to full mount, avoiding FOUC (flash of unstyled content).
 
+2024-07-26 - [Sudoku Board Styling, Scoring, and Realtime Improvements]
+- Overrode local memory constraints on highlighting via user request to implement cross-highlighting (rows, cols, 3x3 box) in `src/components/game/SudokuBoard.tsx` and adjusted background colors for incorrect values while resolving z-index bugs that caused text overlapping.
+- Enabled negative scoring by removing `Math.max(0, ...)` constraints in `src/store/gameStore.ts`.
+- Addressed potential race conditions for late joiners in `src/hooks/useRealtime.ts` by adding a short retry timer `setTimeout(..., 800)` that re-sends a `request_state` broadcast if the initial `grid` is null.

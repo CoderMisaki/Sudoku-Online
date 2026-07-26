@@ -101,7 +101,7 @@ export const useGameStore = create<GameStore>()(
     if (mode === 'classic' && value !== null && !isCorrect) {
       // Return state with score penalty but no grid change
       const currentScore = state.room.players[playerId]?.score || 0;
-      const newScore = Math.max(0, currentScore - 5);
+      const newScore = currentScore - 5;
 
       const newRoom = {
         ...state.room,
@@ -126,7 +126,7 @@ export const useGameStore = create<GameStore>()(
     if (value !== null) {
       const currentScore = state.room.players[playerId]?.score || 0;
       const scoreDiff = isCorrect ? 10 : -5;
-      const newScore = Math.max(0, currentScore + scoreDiff);
+      const newScore = currentScore + scoreDiff;
 
       newRoom = {
         ...state.room,
