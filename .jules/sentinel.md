@@ -1,12 +1,17 @@
-2024-07-26 - [Supabase ENV Validation, Realtime Sync, UI Fixes & Persisted State]
-- Implemented secure obfuscated fallback string logic for NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY inside `src/services/supabase.ts` to ensure Realtime still works when proper environment variables aren't injected at build/runtime. The `isSupabaseEnvValid` is now permanently set to true to disable the offline warning banner.
-- Decreased the opacity styling for the background and border/ring within `src/components/game/SudokuBoard.tsx` where `isSameValue && !isSelected` to ensure numbers are fully legible and not distracted by strong highlight colors.
-- Enlarged the Chat Dashboard UI panel on Desktop by giving it a minimum height and `flex-1` instead of constraining it to 140px inside `src/app/room/[id]/page.tsx`.
-- Refactored `src/store/gameStore.ts` to implement Zustand's `persist` middleware using `localStorage` to avoid game state loss on page refresh. Transferred chat `messages` into the store so chat history is also preserved.
-- Modified `sync_state` behavior within `src/hooks/useRealtime.ts` to explicitly broadcast the `messages` array upon `request_state`, ensuring late joiners receive the full state (board, players, and messages).
-- Introduced Dark/Light mode toggle to the codebase in `src/app/globals.css` (.dark) and settings modal inside `src/app/room/[id]/page.tsx`. Additionally inserted a script block within `src/app/layout.tsx` to handle initializing the stored theme locally from localstorage prior to full mount, avoiding FOUC (flash of unstyled content).
+2025-07-26 - State Pollution and Synchronization
 
-2024-07-26 - [Sudoku Board Styling, Scoring, and Realtime Improvements]
-- Overrode local memory constraints on highlighting via user request to implement cross-highlighting (rows, cols, 3x3 box) in `src/components/game/SudokuBoard.tsx` and adjusted background colors for incorrect values while resolving z-index bugs that caused text overlapping.
-- Enabled negative scoring by removing `Math.max(0, ...)` constraints in `src/store/gameStore.ts`.
-- Addressed potential race conditions for late joiners in `src/hooks/useRealtime.ts` by adding a short retry timer `setTimeout(..., 800)` that re-sends a `request_state` broadcast if the initial `grid` is null.
+Learnings:
+- Next.js multiplayer application logic relying on Zustand's `persist` store without scoping to room IDs can leak state across differently generated rooms.
+- Realtime web socket events without validating matching room identifiers will process broadcast messages meant for other isolated instances.
+- Missing chat-input checks allows global keyboard listeners intended for the game board to intercept users typings, interfering with the board.
+- When creating state-machine synchronizations using web sockets, joiners might experience a race condition requesting game state if there isn't a robust retry mechanism.
+
+Findings:
+- State scopes for different rooms leaked through Zustand's unconstrained global memory persistence.
+- Sudoku board keyboard handlers intercepted input intended for chat textareas.
+- Sync logic for late joiners relied on a single 800ms delayed ping which, if missed, froze the room connection.
+
+Vulnerability Patterns:
+- **Improper State Isolation:** Global state persistence across distinct conceptual bounds without validation.
+- **Missing Event Scoping:** Web socket listener processing broadcast commands regardless of destination contexts (missing room validation checks in `sync_state`).
+- **Global Listener Interception:** Failing to ignore targeted text inputs within document-level `keydown` events.
