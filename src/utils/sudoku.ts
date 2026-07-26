@@ -96,3 +96,25 @@ export const checkConflicts = (grid: Grid): Grid => {
 
   return newGrid;
 };
+
+export const isValidMove = (grid: Grid, r: number, c: number, value: number) => {
+  // Cek baris (horizontal)
+  for (let i = 0; i < 9; i++) {
+    if (i !== c && grid[r][i].value === value) return false;
+  }
+  // Cek kolom (vertikal)
+  for (let i = 0; i < 9; i++) {
+    if (i !== r && grid[i][c].value === value) return false;
+  }
+  // Cek 3x3 blok
+  const boxR = Math.floor(r / 3) * 3;
+  const boxC = Math.floor(c / 3) * 3;
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) {
+      if ((boxR + i !== r || boxC + j !== c) && grid[boxR + i][boxC + j].value === value) {
+        return false;
+      }
+    }
+  }
+  return true;
+};

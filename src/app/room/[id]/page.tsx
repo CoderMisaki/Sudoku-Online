@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useGameStore } from '../../../store/gameStore';
 import { useRealtime } from '../../../hooks/useRealtime';
-import { generatePuzzle } from '../../../utils/sudoku';
+import { generatePuzzle, isValidMove } from '../../../utils/sudoku';
 import { getOrCreateUserId } from '../../../utils/uuid';
 import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
@@ -193,9 +193,30 @@ export default function RoomPage() {
   const handleNumpadClick = useCallback((num: number) => {
     if (!selectedCell || !userId) return;
 
-    // Check if correct
+    // Tarik state grid manual agar kita bisa jalankan verifikasinya
+    const grid = useGameStore.getState().grid;
+    if (!grid) return;
+
+    const { row, col } = selectedCell;
+    const cell = grid[row][col];
+
+    if (cell.isLocked) return;
+
+    // Cek apakah cell sedang dikunci pemain lain
+    const key = `${row}-${col}`;
+    const currentLock = locks[key];
+    if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
+      return;
+    }
+
+    // Blokir jika melanggar logika posisi Sudoku
+    if (!isValidMove(grid, row, col, num)) {
+      toast.error('Angka sudah ada di baris/kolom/blok!', { id: 'conflict', duration: 1500 });
+      return;
+    }
+
     if (solution) {
-      const isCorrect = solution[selectedCell.row][selectedCell.col] === num;
+      const isCorrect = solution[row][col] === num;
       if (isCorrect) {
         toast.success('✅', { duration: 1500, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
       } else {
@@ -203,9 +224,9 @@ export default function RoomPage() {
       }
     }
 
-    updateCell(selectedCell.row, selectedCell.col, num, userId);
-    broadcastMove(selectedCell.row, selectedCell.col, num);
-  }, [selectedCell, userId, updateCell, broadcastMove, solution]);
+    updateCell(row, col, num, userId);
+    broadcastMove(row, col, num);
+  }, [selectedCell, userId, updateCell, broadcastMove, solution, locks]);
 
 
   if (loading) {
