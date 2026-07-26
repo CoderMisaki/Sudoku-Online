@@ -127,7 +127,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
               key={`${rIndex}-${cIndex}`}
               onClick={() => handleCellClick(rIndex, cIndex)}
               className={cn(
-                "relative flex items-center justify-center bg-background text-xl font-medium sm:text-2xl cursor-pointer transition-colors duration-150",
+                "relative flex items-center justify-center bg-background text-xl font-medium sm:text-2xl cursor-pointer transition-all duration-150",
                 {
                   "border-b-2": rIndex % 3 === 2 && rIndex !== 8,
                   "border-r-2": cIndex % 3 === 2 && cIndex !== 8,

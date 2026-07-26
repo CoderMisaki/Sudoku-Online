@@ -21,3 +21,10 @@ I fixed a few issues requested by the user:
 - Highlight color in Sudoku board to show the same values has been updated to use `bg-sky-500/20`, an opaque light blue color that does not block the text from showing.
 - Online sync bug for new player joiners who see 0 players and no board. Handled real-time presence events (joins and leaves) so that host can broadcast a `sync_state` to all players, providing room data, grid, and solution to everyone when a new player joins. Players automatically check this state and populate their games.
 - Show the Room ID in header instead of hiding it from smaller screens. It also has a copy room code button!
+
+2026-07-26 - UI Improvements and Connection Status Banner
+
+- Fixed Highlight Number: Modified highlight `isSameValue && !isSelected` from a solid background to `ring-2 ring-sky-400 ring-inset bg-sky-500/10` so the number remains visible.
+- Fixed Mobile Chat UI: Set `max-h-[140px]` on Players card and `min-h-[200px] max-h-[300px]` on the Chat card in `page.tsx` so the chat is comfortably readable on mobile.
+- Handled Supabase Realtime Sync properly in `useRealtime.ts` by ensuring new players get a `sync_state` directly broadcast from the host.
+- Added Connection Status Banners: Implemented checks for unconfigured or placeholder `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Created UI banners in `RoomPage` to display environment variable errors and Supabase WebSocket connection statuses ('CHANNEL_ERROR', 'TIMED_OUT', etc).

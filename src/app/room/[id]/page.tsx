@@ -10,7 +10,8 @@ import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
-import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, Send } from 'lucide-react';
+import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff } from 'lucide-react';
+import { isSupabaseEnvValid } from '../../../services/supabase';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
 
@@ -36,7 +37,7 @@ export default function RoomPage() {
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const { broadcastMove, broadcastCursor, lockCell, locks, messages, broadcastChat } = useRealtime(roomId);
+  const { broadcastMove, broadcastCursor, lockCell, locks, messages, broadcastChat, realtimeStatus, connectionError } = useRealtime(roomId);
   const [chatInput, setChatInput] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -214,80 +215,85 @@ export default function RoomPage() {
         </div>
       </header>
 
+      {/* BANNER 1: Jika ENV Vercel / Supabase Belum Valid */}
+      {!isSupabaseEnvValid && (
+        <div className="bg-red-500/10 border-b border-red-500/20 text-red-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>
+            <strong>ENV NOT VALID:</strong> Environment Variables Supabase (<code className="bg-red-500/20 px-1 py-0.5 rounded">NEXT_PUBLIC_SUPABASE_URL</code> & <code className="bg-red-500/20 px-1 py-0.5 rounded">NEXT_PUBLIC_SUPABASE_ANON_KEY</code>) belum dipasang atau masih placeholder di Vercel. Fitur multiplayer realtime mati.
+          </span>
+        </div>
+      )}
+
+      {/* BANNER 2: Jika ENV Valid tapi WebSockets Supabase Offline / Channel Error */}
+      {isSupabaseEnvValid && (realtimeStatus === 'CHANNEL_ERROR' || realtimeStatus === 'TIMED_OUT' || connectionError) && (
+        <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center">
+          <WifiOff className="w-4 h-4 flex-shrink-0" />
+          <span>
+            <strong>ROOM OFFLINE:</strong> {connectionError || `Koneksi WebSocket gagal (${realtimeStatus})`}. Pastikan fitur Realtime di Dashboard Supabase telah diaktifkan.
+          </span>
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Sidebar Left: Players & Chat */}
-        <div className="space-y-6 flex flex-col h-full lg:col-span-2">
-          <Card className="flex-1 flex flex-col overflow-hidden max-h-[50vh] lg:max-h-none">
-            <div className="p-4 border-b border-border bg-background/50 flex items-center justify-between">
-              <h2 className="font-semibold flex items-center gap-2">
+        <div className="space-y-4 flex flex-col h-full lg:col-span-2">
+          <Card className="flex-shrink-0 flex flex-col overflow-hidden max-h-[140px] lg:max-h-none">
+            <div className="p-3 border-b border-border bg-background/50 flex items-center justify-between">
+              <h2 className="font-semibold text-sm flex items-center gap-2">
                 <Users className="w-4 h-4" /> Players
               </h2>
-              <span className="text-xs text-secondary bg-secondary/10 px-2 py-1 rounded-full">
+              <span className="text-xs text-secondary bg-secondary/10 px-2 py-0.5 rounded-full">
                 {Object.keys(room?.players || {}).length} / {room?.maxPlayers || 4}
               </span>
             </div>
-            <div className="p-4 overflow-y-auto flex-1 space-y-3">
+            <div className="p-3 overflow-y-auto flex-1 space-y-2 text-xs sm:text-sm">
               {Object.values(room?.players || {}).map(player => (
                 <div key={player.id} className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
                     <div
-                      className="w-3 h-3 rounded-full"
+                      className="w-2.5 h-2.5 rounded-full"
                       style={{ backgroundColor: player.color }}
                     />
-                    <span className="text-sm font-medium">
-                      {player.username} {player.isHost && <span className="text-xs text-secondary">(Host)</span>}
+                    <span className="font-medium">
+                      {player.username} {player.isHost && <span className="text-secondary">(Host)</span>}
                     </span>
                   </div>
-                  <span className="text-sm font-mono">{player.score}</span>
+                  <span className="font-mono">{player.score}</span>
                 </div>
               ))}
             </div>
           </Card>
 
-          <Card className="flex-1 flex flex-col overflow-hidden max-h-[50vh] lg:max-h-none">
-            <div className="p-4 border-b border-border bg-background/50">
-              <h2 className="font-semibold">Chat</h2>
+          <Card className="flex-shrink-0 flex flex-col overflow-hidden max-h-[140px] lg:max-h-none">
+            <div className="p-3 border-b border-border bg-background/50">
+              <h2 className="font-semibold text-sm">Chat</h2>
             </div>
-            <div className="flex-1 p-4 flex flex-col overflow-y-auto space-y-2 text-sm">
+            <div className="flex-1 p-3 flex flex-col overflow-y-auto space-y-2 text-xs sm:text-sm">
               {messages.length === 0 ? (
-                <div className="text-secondary italic text-center mt-auto mb-auto">No messages yet.</div>
+                <div className="text-secondary italic text-center my-auto">No messages yet.</div>
               ) : (
                 messages.map(msg => (
                   <div key={msg.id} className="flex flex-col">
-                    <span className="font-semibold text-xs">{msg.username}</span>
-                    <span className="bg-secondary/10 px-2 py-1 rounded-md w-fit max-w-full break-words">{msg.text}</span>
+                    <span className="font-semibold text-[11px] text-secondary">{msg.username}</span>
+                    <span className="bg-secondary/10 px-2.5 py-1 rounded-md w-fit max-w-full break-words text-xs">{msg.text}</span>
                   </div>
                 ))
               )}
               <div ref={chatEndRef} />
             </div>
-            <div className="p-3 border-t border-border">
-              <form onSubmit={handleChatSubmit} className="flex items-end gap-2">
-                <textarea id="chat-textarea"
+            <div className="p-2.5 border-t border-border">
+              <form onSubmit={handleChatSubmit} className="flex items-center gap-2">
+                <input
+                  type="text"
                   value={chatInput}
                   onChange={e => setChatInput(e.target.value)}
-                  // Enter acts as new line, no submission. Default behavior of textarea is already new line.
                   placeholder="Type a message..."
-                  className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-foreground resize-none min-h-[40px] max-h-[120px]"
-                  rows={1}
-                  style={{
-                    height: 'auto',
-                    minHeight: '40px',
-                  }}
-                  onInput={(e) => {
-                    const target = e.target as HTMLTextAreaElement;
-                    target.style.height = 'auto';
-                    target.style.height = `${Math.min(target.scrollHeight, 120)}px`;
-                  }}
+                  className="flex-1 bg-background border border-border rounded-lg px-3 py-1.5 text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-foreground"
                 />
-                <Button
-                  type="submit"
-                  size="sm"
-                  disabled={!chatInput.trim()}
-                  className="h-10 w-10 p-0 flex-shrink-0"
-                >
-                  <Send className="w-4 h-4" />
+                <Button type="submit" size="sm" className="h-8 px-3 text-xs">
+                  Send
                 </Button>
               </form>
             </div>
