@@ -2,3 +2,7 @@
 **Vulnerability:** The realtime broadcast handlers for events like `cursor`, `cell_lock`, and `move` were directly trusting the payload data `row`, `col`, and `value` without any bounds or type checking. Malicious peers on the same channel could broadcast payloads causing out-of-bounds array access (`grid[row][col]`), unbounded memory growth via the `locks` dictionary, and ultimately causing the client application to crash.
 **Learning:** Client-side components must independently validate broadcasted events received over peer-to-peer (or relay) channels, just as a backend service validates input from a client. Treating peer data as trusted is a high-impact DoS vector.
 **Prevention:** Implement strict type checks and bounds checks (e.g., verifying row and col are within the 0-8 Sudoku board boundaries, and values are 1-9 or null) immediately upon receiving realtime broadcast payloads, before updating application state.
+
+2026-07-26 - [Home Page Replaced]
+Updated the src/app/page.tsx to the new multiplayer room creation logic.
+No critical vulnerabilities observed during this task, as it was a simple UI update.
