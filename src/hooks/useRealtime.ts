@@ -157,11 +157,25 @@ export function useRealtime(roomId: string) {
             online_at: new Date().toISOString(),
           });
 
-          channel.send({
-            type: 'broadcast',
-            event: 'request_state',
-            payload: { userId }
-          });
+          // Mengirim request state langsung dan diulang setelah 800ms untuk mencegah race condition
+          const sendRequest = () => {
+            channel.send({
+              type: 'broadcast',
+              event: 'request_state',
+              payload: { userId }
+            });
+          };
+
+          sendRequest();
+          setTimeout(() => {
+            const currentGrid = useGameStore.getState().grid;
+            if (!currentGrid) {
+              sendRequest();
+            }
+          }, 800);
+
+          // We intentionally do not return the cleanup function inside subscribe since it returns a Subscription.
+          // The interval cleanup handles normal component unmount.
         } else if (status === 'CHANNEL_ERROR') {
           setConnectionError('CHANNEL_ERROR: Koneksi WebSocket ditolak atau channel error.');
         } else if (status === 'TIMED_OUT') {

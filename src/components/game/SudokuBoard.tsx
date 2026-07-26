@@ -25,11 +25,10 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
   const handleCellClick = useCallback((row: number, col: number) => {
     if (!grid) return;
 
-    // Check if locked by someone else
     const key = `${row}-${col}`;
     const currentLock = locks[key];
     if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
-      return; // Can't select, locked by another player
+      return;
     }
 
     setSelectedCell({ row, col });
@@ -43,7 +42,6 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     const { row, col } = selectedCell;
     const cell = grid[row][col];
 
-    // Check lock again just in case
     const key = `${row}-${col}`;
     const currentLock = locks[key];
     if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
@@ -56,9 +54,9 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
         if (solution) {
           const isCorrect = solution[row][col] === val;
           if (isCorrect) {
-            toast.success('✅', { duration: 1500, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
+            toast.success('✅', { duration: 1200, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
           } else {
-            toast.error('❌', { duration: 1500, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
+            toast.error('❌', { duration: 1200, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
           }
         }
         updateCell(row, col, val, userId);
@@ -88,30 +86,31 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
   if (!grid) return null;
 
   return (
-    <div className="w-full aspect-square max-w-[600px] border-[3px] border-foreground bg-foreground grid grid-cols-9 grid-rows-9 gap-px p-1 mx-auto rounded-md shadow-lg overflow-hidden relative select-none mt-4 mb-4">
+    <div className="w-full aspect-square max-w-[600px] border-[3px] border-foreground bg-foreground grid grid-cols-9 grid-rows-9 gap-px p-1 mx-auto rounded-md shadow-lg overflow-hidden relative select-none mt-2 mb-2">
       {grid.map((row, rIndex) => (
         row.map((cell, cIndex) => {
           const isSelected = selectedCell?.row === rIndex && selectedCell?.col === cIndex;
 
-          // Determine if this cell is highlighted because it's in the same row/col/box as selected
+          // Check apakah sel segaris / sekotak 3x3 dengan sel yang dipencet (Cross Highlight)
+          const isRelated = !!selectedCell && (
+            selectedCell.row === rIndex ||
+            selectedCell.col === cIndex ||
+            (Math.floor(selectedCell.row / 3) === Math.floor(rIndex / 3) &&
+             Math.floor(selectedCell.col / 3) === Math.floor(cIndex / 3))
+          );
 
+          // Check apakah angka sel sama dengan angka di sel yang dipencet
           let isSameValue = false;
-
           if (selectedCell) {
-            const { row: sR, col: sC } = selectedCell;
-
-
-            const selectedVal = grid[sR][sC].value;
+            const selectedVal = grid[selectedCell.row][selectedCell.col].value;
             isSameValue = selectedVal !== null && cell.value === selectedVal;
           }
 
-          // Check if cell is currently locked by someone else
           const lockKey = `${rIndex}-${cIndex}`;
           const currentLock = locks[lockKey];
           const isLockedByOther = currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now();
           const lockerPlayer = isLockedByOther ? room?.players[currentLock.userId] : null;
 
-          // Check if another player's cursor is here
           let otherCursorPlayer = null;
           if (room && !isLockedByOther) {
             for (const p of Object.values(room.players)) {
@@ -127,17 +126,23 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
               key={`${rIndex}-${cIndex}`}
               onClick={() => handleCellClick(rIndex, cIndex)}
               className={cn(
-                "relative flex items-center justify-center bg-background text-xl font-medium sm:text-2xl cursor-pointer transition-all duration-150",
+                "relative flex items-center justify-center text-xl font-medium sm:text-2xl cursor-pointer transition-colors duration-150 bg-background",
                 {
-                  "border-b-2": rIndex % 3 === 2 && rIndex !== 8,
-                  "border-r-2": cIndex % 3 === 2 && cIndex !== 8,
-                  "border-foreground": (rIndex % 3 === 2 && rIndex !== 8) || (cIndex % 3 === 2 && cIndex !== 8),
+                  // Garis tebal pemisah blok 3x3
+                  "border-b-2 border-foreground": rIndex % 3 === 2 && rIndex !== 8,
+                  "border-r-2 border-foreground": cIndex % 3 === 2 && cIndex !== 8,
 
-                  "bg-secondary/20": isSelected,
-                  "text-foreground font-semibold": cell.isLocked,
-                  "text-secondary": !cell.isLocked,
-                  "bg-red-50 text-red-600": cell.isConflicting,
-                  "ring-1 ring-sky-400/20 ring-inset bg-sky-500/5": isSameValue && !isSelected,
+                  // Tingkat Warna Latar (Soft Pastels khas Sudoku.com)
+                  "bg-sky-500/40": isSelected,                        // Kotak yang di-tap langsung
+                  "bg-sky-400/30": isSameValue && !isSelected,       // Kotak dengan angka yang sama
+                  "bg-sky-500/10": isRelated && !isSelected && !isSameValue, // Lintas baris, kolom & blok 3x3
+                  "bg-red-500/25": cell.isConflicting,               // Jika angka bentrok / salah
+
+                  // Warna Teks Angka
+                  "text-foreground font-bold": cell.isLocked,
+                  "text-sky-400 font-semibold": !cell.isLocked && cell.value !== null && !cell.isConflicting,
+                  "text-red-400 font-bold": cell.isConflicting,
+
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }
               )}
@@ -150,27 +155,28 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                     animate={{ scale: 1, opacity: 1 }}
                     exit={{ scale: 0.8, opacity: 0 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                    className="relative z-10 font-sans pointer-events-none" // z-10 mengunci angka tepat di atas latar highlight
                   >
                     {cell.value}
                   </motion.span>
                 )}
               </AnimatePresence>
 
-              {/* Notes display */}
+              {/* Tampilan Catatan / Pensil */}
               {cell.value === null && cell.notes.length > 0 && (
-                <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 p-1">
+                <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 p-0.5 pointer-events-none z-10">
                   {[1,2,3,4,5,6,7,8,9].map(n => (
-                    <div key={n} className="flex items-center justify-center text-[10px] text-secondary/60 leading-none">
+                    <div key={n} className="flex items-center justify-center text-[9px] text-secondary/70 leading-none">
                       {cell.notes.includes(n) ? n : ''}
                     </div>
                   ))}
                 </div>
               )}
 
-              {/* Other player cursor/lock indicator */}
+              {/* Kursor / Indikator Player Lain */}
               {(otherCursorPlayer || lockerPlayer) && (
                 <div
-                  className="absolute inset-0 border-2 pointer-events-none transition-all duration-300"
+                  className="absolute inset-0 border-2 pointer-events-none z-20 transition-all duration-200"
                   style={{ borderColor: lockerPlayer ? lockerPlayer.color : otherCursorPlayer?.color }}
                 />
               )}
