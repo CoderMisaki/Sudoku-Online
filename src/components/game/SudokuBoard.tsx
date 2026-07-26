@@ -98,14 +98,6 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
         row.map((cell, cIndex) => {
           const isSelected = selectedCell?.row === rIndex && selectedCell?.col === cIndex;
 
-          // Check apakah sel segaris / sekotak 3x3 dengan sel yang dipencet (Cross Highlight)
-          const isRelated = !!selectedCell && (
-            selectedCell.row === rIndex ||
-            selectedCell.col === cIndex ||
-            (Math.floor(selectedCell.row / 3) === Math.floor(rIndex / 3) &&
-             Math.floor(selectedCell.col / 3) === Math.floor(cIndex / 3))
-          );
-
           // Check apakah angka sel sama dengan angka di sel yang dipencet
           let isSameValue = false;
           if (selectedCell) {
@@ -138,16 +130,15 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "border-b-2 border-foreground": rIndex % 3 === 2 && rIndex !== 8,
                   "border-r-2 border-foreground": cIndex % 3 === 2 && cIndex !== 8,
 
-                  // Tingkat Warna Latar - Pink Edition!
-                  "bg-pink-500/40": isSelected,                        // Kotak yang langsung di-tap
+                  // Highlight Minimalist + Indikator Merah Salah
+                  "bg-pink-500/40": isSelected,                        // Kotak yang langsung di-tap (Biru/Pink)
                   "bg-pink-500/20": isSameValue && !isSelected,       // Highlight angka kembar
-                  "bg-pink-500/5": isRelated && !isSelected && !isSameValue, // Lintas baris tipis agar tak jadi putih
-                  "bg-red-500/25": cell.isConflicting,
+                  "bg-red-500/20": cell.isConflicting || cell.isWrong, // Background JADI MERAH jika tebakan SALAH / Bentrok
 
-                  // Warna Teks Angka
-                  "text-foreground font-bold": cell.isLocked,
-                  "text-sky-400 font-bold": !cell.isLocked && cell.value !== null && !cell.isConflicting,
-                  "text-red-400 font-bold": cell.isConflicting,
+                  // Warna Teks Angka (Kembali menjadi putih seperti default)
+                  "text-foreground font-bold": cell.isLocked, // Angka Asli bawaan soal
+                  "text-foreground font-medium": !cell.isLocked && cell.value !== null && !cell.isConflicting && !cell.isWrong, // Angka pemain (Warna putih/gelap biasa)
+                  "text-red-500 font-bold": cell.isConflicting || cell.isWrong, // Angka merah kalau melanggar
 
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }
@@ -162,7 +153,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                     exit={{ scale: 0.8, opacity: 0 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 25 }}
                     // z-20 dan drop-shadow memastikan angka melayang tegak di atas background warna cell
-                    className="relative z-20 font-sans pointer-events-none drop-shadow-md"
+                    className="relative z-10 font-sans pointer-events-none"
                   >
                     {cell.value}
                   </motion.span>

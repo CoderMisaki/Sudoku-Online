@@ -14,6 +14,7 @@ import { Play, Users, Sparkles } from 'lucide-react';
 export default function Home() {
   const router = useRouter();
   const setUserInfo = useGameStore(state => state.setUserInfo);
+  const resetGame = useGameStore(state => state.resetGame);
 
   const [username, setUsername] = useState('');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -50,6 +51,7 @@ export default function Home() {
     }
 
     handleSaveUsername(username);
+    resetGame();
 
     // Generate random room code
     const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -77,6 +79,7 @@ export default function Home() {
     }
 
     handleSaveUsername(username);
+    resetGame();
     router.push(`/room/${joinCode.trim().toUpperCase()}`);
   };
 

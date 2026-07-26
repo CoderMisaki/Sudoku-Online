@@ -18,6 +18,7 @@ export interface CellData {
   notes: number[];
   filledBy?: string; // Player ID
   isConflicting?: boolean;
+  isWrong?: boolean;
 }
 
 export type Grid = CellData[][];
