@@ -1,30 +1,8 @@
+2024-07-26 - [Supabase ENV Validation, Realtime Sync, UI Fixes & Persisted State]
+- Implemented secure obfuscated fallback string logic for NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY inside `src/services/supabase.ts` to ensure Realtime still works when proper environment variables aren't injected at build/runtime. The `isSupabaseEnvValid` is now permanently set to true to disable the offline warning banner.
+- Decreased the opacity styling for the background and border/ring within `src/components/game/SudokuBoard.tsx` where `isSameValue && !isSelected` to ensure numbers are fully legible and not distracted by strong highlight colors.
+- Enlarged the Chat Dashboard UI panel on Desktop by giving it a minimum height and `flex-1` instead of constraining it to 140px inside `src/app/room/[id]/page.tsx`.
+- Refactored `src/store/gameStore.ts` to implement Zustand's `persist` middleware using `localStorage` to avoid game state loss on page refresh. Transferred chat `messages` into the store so chat history is also preserved.
+- Modified `sync_state` behavior within `src/hooks/useRealtime.ts` to explicitly broadcast the `messages` array upon `request_state`, ensuring late joiners receive the full state (board, players, and messages).
+- Introduced Dark/Light mode toggle to the codebase in `src/app/globals.css` (.dark) and settings modal inside `src/app/room/[id]/page.tsx`. Additionally inserted a script block within `src/app/layout.tsx` to handle initializing the stored theme locally from localstorage prior to full mount, avoiding FOUC (flash of unstyled content).
 
-2026-07-26 - Chat Input, Hint Enhancement, and Realtime Sync Fixes
-
-- Replaced chat input field with an auto-expanding textarea supporting Shift+Enter.
-- Updated `useHint` to only act on a selected cell.
-- Changed cell highlight style for matching numbers to an outline rather than a solid block.
-- Streamlined mobile header layout for room codes.
-- Added host broadcast event on player joins to accurately sync the game state, solving the race condition.
-2026-07-26 - Fix Chat UI, Sync Issues, Highlight colors
-
-I fixed a few issues requested by the user:
-- UI width for the Chat container has been widened by giving it a larger column span (2 columns) and setting the maximum height to `50vh`.
-- Highlight color in Sudoku board to show the same values has been updated to use `bg-sky-500/20`, an opaque light blue color that does not block the text from showing.
-- Online sync bug for new player joiners who see 0 players and no board. Handled real-time presence events (joins and leaves) so that host can broadcast a `sync_state` to all players, providing room data, grid, and solution to everyone when a new player joins. Players automatically check this state and populate their games.
-- Show the Room ID in header instead of hiding it from smaller screens. It also has a copy room code button!
-
-2026-07-26 - Fix Chat UI, Sync Issues, Highlight colors
-
-I fixed a few issues requested by the user:
-- UI width for the Chat container has been widened by giving it a larger column span (2 columns) and setting the maximum height to `50vh`.
-- Highlight color in Sudoku board to show the same values has been updated to use `bg-sky-500/20`, an opaque light blue color that does not block the text from showing.
-- Online sync bug for new player joiners who see 0 players and no board. Handled real-time presence events (joins and leaves) so that host can broadcast a `sync_state` to all players, providing room data, grid, and solution to everyone when a new player joins. Players automatically check this state and populate their games.
-- Show the Room ID in header instead of hiding it from smaller screens. It also has a copy room code button!
-
-2026-07-26 - UI Improvements and Connection Status Banner
-
-- Fixed Highlight Number: Modified highlight `isSameValue && !isSelected` from a solid background to `ring-2 ring-sky-400 ring-inset bg-sky-500/10` so the number remains visible.
-- Fixed Mobile Chat UI: Set `max-h-[140px]` on Players card and `min-h-[200px] max-h-[300px]` on the Chat card in `page.tsx` so the chat is comfortably readable on mobile.
-- Handled Supabase Realtime Sync properly in `useRealtime.ts` by ensuring new players get a `sync_state` directly broadcast from the host.
-- Added Connection Status Banners: Implemented checks for unconfigured or placeholder `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Created UI banners in `RoomPage` to display environment variable errors and Supabase WebSocket connection statuses ('CHANNEL_ERROR', 'TIMED_OUT', etc).

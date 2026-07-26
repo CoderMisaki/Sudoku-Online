@@ -31,13 +31,42 @@ export default function RoomPage() {
   const updateCell = useGameStore(state => state.updateCell);
   const solution = useGameStore(state => state.solution);
   const selectedCell = useGameStore(state => state.selectedCell);
+  const messages = useGameStore(state => state.messages);
   const player = useGameStore(state => state.room?.players[userId || '']);
   const hintsRemaining = player?.hints ?? 3;
 
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const { broadcastMove, broadcastCursor, lockCell, locks, messages, broadcastChat, realtimeStatus, connectionError } = useRealtime(roomId);
+  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+
+
+  const applyTheme = useCallback((newTheme: 'light' | 'dark' | 'system') => {
+    if (newTheme === 'dark') {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
+    } else if (newTheme === 'light') {
+      document.documentElement.classList.add('light');
+      document.documentElement.classList.remove('dark');
+    } else {
+      document.documentElement.classList.remove('dark', 'light');
+    }
+  }, []);
+
+  useEffect(() => {
+    const storedTheme = localStorage.getItem('sudoku_theme') as 'light' | 'dark' | 'system' || 'system';
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTheme(storedTheme);
+    applyTheme(storedTheme);
+  }, [applyTheme]);
+
+  const toggleTheme = () => {
+    const newTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+    localStorage.setItem('sudoku_theme', newTheme);
+    applyTheme(newTheme);
+  };
+  const { broadcastMove, broadcastCursor, lockCell, locks, broadcastChat, realtimeStatus, connectionError } = useRealtime(roomId);
   const [chatInput, setChatInput] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -239,7 +268,7 @@ export default function RoomPage() {
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Sidebar Left: Players & Chat */}
         <div className="space-y-4 flex flex-col h-full lg:col-span-2">
-          <Card className="flex-shrink-0 flex flex-col overflow-hidden max-h-[140px] lg:max-h-none">
+          <Card className="flex-shrink-0 flex flex-col overflow-hidden min-h-[250px] lg:min-h-0 lg:flex-1">
             <div className="p-3 border-b border-border bg-background/50 flex items-center justify-between">
               <h2 className="font-semibold text-sm flex items-center gap-2">
                 <Users className="w-4 h-4" /> Players
@@ -266,7 +295,7 @@ export default function RoomPage() {
             </div>
           </Card>
 
-          <Card className="flex-shrink-0 flex flex-col overflow-hidden max-h-[140px] lg:max-h-none">
+          <Card className="flex-shrink-0 flex flex-col overflow-hidden min-h-[250px] lg:min-h-0 lg:flex-1">
             <div className="p-3 border-b border-border bg-background/50">
               <h2 className="font-semibold text-sm">Chat</h2>
             </div>
@@ -347,10 +376,15 @@ export default function RoomPage() {
         </div>
       </main>
 
-      <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Settings">
+            <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Settings">
         <div className="space-y-4">
-          <p className="text-secondary text-sm">Settings coming soon...</p>
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Tema Gelap (Dark Mode)</span>
+            <Button variant="outline" size="sm" onClick={toggleTheme}>
+              {theme === 'dark' ? 'Aktif' : 'Nonaktif'}
+            </Button>
+          </div>
+          <div className="flex justify-end pt-4 border-t border-border">
             <Button onClick={() => setIsSettingsOpen(false)}>Close</Button>
           </div>
         </div>

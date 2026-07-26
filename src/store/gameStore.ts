@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { Grid, RoomState, Player } from '../types/game';
+import { persist } from 'zustand/middleware';
+import { Grid, RoomState, Player, ChatMessage } from '../types/game';
 import { checkConflicts } from '../utils/sudoku';
 
 type HistoryEntry = {
@@ -33,11 +34,22 @@ interface GameStore {
   useHint: (playerId: string) => { row: number, col: number, value: number } | null;
 
   // UI State
+
+  messages: ChatMessage[];
+  addMessage: (msg: ChatMessage) => void;
+  setMessages: (msgs: ChatMessage[]) => void;
+
   selectedCell: { row: number; col: number } | null;
   setSelectedCell: (cell: { row: number; col: number } | null) => void;
 }
 
-export const useGameStore = create<GameStore>((set) => ({
+export const useGameStore = create<GameStore>()(
+  persist(
+    (set) => ({
+  messages: [],
+  addMessage: (msg) => set((state) => ({ messages: [...state.messages, msg] })),
+  setMessages: (msgs) => set({ messages: msgs }),
+
   userId: null,
   username: null,
   setUserInfo: (id, username) => set({ userId: id, username }),
@@ -238,4 +250,10 @@ export const useGameStore = create<GameStore>((set) => ({
 
   selectedCell: null,
   setSelectedCell: (cell) => set({ selectedCell: cell }),
-}));
+    }),
+    {
+      name: "sudoku-game-storage",
+      partialize: (state) => ({ room: state.room, grid: state.grid, solution: state.solution, messages: state.messages }),
+    }
+  )
+);
