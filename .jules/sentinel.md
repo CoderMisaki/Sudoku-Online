@@ -1,13 +1,15 @@
-## 2026-07-26 - [CRITICAL] Prevent DoS via Unvalidated Broadcast Payloads
-**Vulnerability:** The realtime broadcast handlers for events like `cursor`, `cell_lock`, and `move` were directly trusting the payload data `row`, `col`, and `value` without any bounds or type checking. Malicious peers on the same channel could broadcast payloads causing out-of-bounds array access (`grid[row][col]`), unbounded memory growth via the `locks` dictionary, and ultimately causing the client application to crash.
-**Learning:** Client-side components must independently validate broadcasted events received over peer-to-peer (or relay) channels, just as a backend service validates input from a client. Treating peer data as trusted is a high-impact DoS vector.
-**Prevention:** Implement strict type checks and bounds checks (e.g., verifying row and col are within the 0-8 Sudoku board boundaries, and values are 1-9 or null) immediately upon receiving realtime broadcast payloads, before updating application state.
+2026-07-26 - Fix Chat UI, Sync Issues, Highlight colors
 
-2026-07-26 - [Home Page Replaced]
-Updated the src/app/page.tsx to the new multiplayer room creation logic.
-No critical vulnerabilities observed during this task, as it was a simple UI update.
+I fixed a few issues requested by the user:
+- UI width for the Chat container has been widened by giving it a larger column span (2 columns) and setting the maximum height to `50vh`.
+- Highlight color in Sudoku board to show the same values has been updated to use `bg-sky-500/20`, an opaque light blue color that does not block the text from showing.
+- Online sync bug for new player joiners who see 0 players and no board. Handled real-time presence events (joins and leaves) so that host can broadcast a `sync_state` to all players, providing room data, grid, and solution to everyone when a new player joins. Players automatically check this state and populate their games.
+- Show the Room ID in header instead of hiding it from smaller screens. It also has a copy room code button!
 
-2026-07-26 - [Refactored Sudoku Board UI, implemented Hint and Toasts]
-- Removed crosshair highlights from SudokuBoard to prevent distraction, using only single-cell highlighting for selection and same-number visibility using a monochrome color scheme.
-- Refactored Room page UI for responsivness, removing undo button, resolving numpad overflow, and adding a basic chat window along with Settings modal.
-- Ensured to add `react-hot-toast` for ✅ and ❌ validation indicators on gameplay as per requirements.
+2026-07-26 - Fix Chat UI, Sync Issues, Highlight colors
+
+I fixed a few issues requested by the user:
+- UI width for the Chat container has been widened by giving it a larger column span (2 columns) and setting the maximum height to `50vh`.
+- Highlight color in Sudoku board to show the same values has been updated to use `bg-sky-500/20`, an opaque light blue color that does not block the text from showing.
+- Online sync bug for new player joiners who see 0 players and no board. Handled real-time presence events (joins and leaves) so that host can broadcast a `sync_state` to all players, providing room data, grid, and solution to everyone when a new player joins. Players automatically check this state and populate their games.
+- Show the Room ID in header instead of hiding it from smaller screens. It also has a copy room code button!

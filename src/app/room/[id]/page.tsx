@@ -174,8 +174,8 @@ export default function RoomPage() {
       <header className="border-b border-border bg-card px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <h1 className="text-xl font-bold">Sudoku Together</h1>
-          <div className="h-6 w-px bg-border hidden sm:block" />
-          <div className="hidden sm:flex items-center gap-2 text-sm text-secondary bg-background px-3 py-1.5 rounded-full border border-border">
+          <div className="h-6 w-px bg-border hidden" />
+          <div className="flex items-center gap-2 text-sm text-secondary bg-background px-3 py-1.5 rounded-full border border-border">
             <span>Room Code:</span>
             <span className="font-mono font-medium text-foreground tracking-wider">{roomId}</span>
             <button
@@ -205,10 +205,10 @@ export default function RoomPage() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Sidebar Left: Players & Chat */}
-        <div className="space-y-6 flex flex-col h-full lg:col-span-1">
-          <Card className="flex-1 flex flex-col overflow-hidden max-h-[40vh] lg:max-h-none">
+        <div className="space-y-6 flex flex-col h-full lg:col-span-2">
+          <Card className="flex-1 flex flex-col overflow-hidden max-h-[50vh] lg:max-h-none">
             <div className="p-4 border-b border-border bg-background/50 flex items-center justify-between">
               <h2 className="font-semibold flex items-center gap-2">
                 <Users className="w-4 h-4" /> Players
@@ -235,7 +235,7 @@ export default function RoomPage() {
             </div>
           </Card>
 
-          <Card className="flex-1 flex flex-col overflow-hidden max-h-[30vh] lg:max-h-none">
+          <Card className="flex-1 flex flex-col overflow-hidden max-h-[50vh] lg:max-h-none">
             <div className="p-4 border-b border-border bg-background/50">
               <h2 className="font-semibold">Chat</h2>
             </div>
