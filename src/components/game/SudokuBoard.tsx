@@ -4,6 +4,7 @@ import React, { useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store/gameStore';
 import { cn } from '../../utils/cn';
 import { motion, AnimatePresence } from 'framer-motion';
+import toast from 'react-hot-toast';
 
 interface SudokuBoardProps {
   broadcastMove: (row: number, col: number, value: number | null) => void;
@@ -19,6 +20,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
   const room = useGameStore(state => state.room);
   const userId = useGameStore(state => state.userId);
   const updateCell = useGameStore(state => state.updateCell);
+  const solution = useGameStore(state => state.solution);
 
   const handleCellClick = useCallback((row: number, col: number) => {
     if (!grid) return;
@@ -51,6 +53,14 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     if (e.key >= '1' && e.key <= '9') {
       const val = parseInt(e.key);
       if (!cell.isLocked) {
+        if (solution) {
+          const isCorrect = solution[row][col] === val;
+          if (isCorrect) {
+            toast.success('✅', { duration: 1500, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
+          } else {
+            toast.error('❌', { duration: 1500, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
+          }
+        }
         updateCell(row, col, val, userId);
         broadcastMove(row, col, val);
       }
@@ -68,7 +78,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     } else if (e.key === 'ArrowRight') {
       handleCellClick(row, Math.min(8, col + 1));
     }
-  }, [selectedCell, grid, userId, locks, updateCell, broadcastMove, handleCellClick]);
+  }, [selectedCell, grid, userId, locks, updateCell, broadcastMove, handleCellClick, solution]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -78,21 +88,18 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
   if (!grid) return null;
 
   return (
-    <div className="w-full aspect-square max-w-[600px] border-[3px] border-foreground bg-foreground grid grid-cols-9 grid-rows-9 gap-px p-px mx-auto rounded-md shadow-lg overflow-hidden relative select-none">
+    <div className="w-full aspect-square max-w-[600px] border-[3px] border-foreground bg-foreground grid grid-cols-9 grid-rows-9 gap-px p-1 mx-auto rounded-md shadow-lg overflow-hidden relative select-none mt-4 mb-4">
       {grid.map((row, rIndex) => (
         row.map((cell, cIndex) => {
           const isSelected = selectedCell?.row === rIndex && selectedCell?.col === cIndex;
 
           // Determine if this cell is highlighted because it's in the same row/col/box as selected
-          let isHighlighted = false;
+
           let isSameValue = false;
 
           if (selectedCell) {
             const { row: sR, col: sC } = selectedCell;
-            const sameRow = rIndex === sR;
-            const sameCol = cIndex === sC;
-            const sameBox = Math.floor(rIndex / 3) === Math.floor(sR / 3) && Math.floor(cIndex / 3) === Math.floor(sC / 3);
-            isHighlighted = sameRow || sameCol || sameBox;
+
 
             const selectedVal = grid[sR][sC].value;
             isSameValue = selectedVal !== null && cell.value === selectedVal;
@@ -125,12 +132,12 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "border-b-2": rIndex % 3 === 2 && rIndex !== 8,
                   "border-r-2": cIndex % 3 === 2 && cIndex !== 8,
                   "border-foreground": (rIndex % 3 === 2 && rIndex !== 8) || (cIndex % 3 === 2 && cIndex !== 8),
-                  "bg-hover": isHighlighted && !isSelected,
+
                   "bg-secondary/20": isSelected,
                   "text-foreground font-semibold": cell.isLocked,
                   "text-secondary": !cell.isLocked,
                   "bg-red-50 text-red-600": cell.isConflicting,
-                  "bg-blue-50": isSameValue && !isSelected,
+                  "bg-secondary/10": isSameValue && !isSelected,
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }
               )}

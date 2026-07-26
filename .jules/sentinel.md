@@ -6,3 +6,8 @@
 2026-07-26 - [Home Page Replaced]
 Updated the src/app/page.tsx to the new multiplayer room creation logic.
 No critical vulnerabilities observed during this task, as it was a simple UI update.
+
+2026-07-26 - [Refactored Sudoku Board UI, implemented Hint and Toasts]
+- Removed crosshair highlights from SudokuBoard to prevent distraction, using only single-cell highlighting for selection and same-number visibility using a monochrome color scheme.
+- Refactored Room page UI for responsivness, removing undo button, resolving numpad overflow, and adding a basic chat window along with Settings modal.
+- Ensured to add `react-hot-toast` for ✅ and ❌ validation indicators on gameplay as per requirements.

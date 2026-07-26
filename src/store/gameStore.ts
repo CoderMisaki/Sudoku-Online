@@ -30,6 +30,7 @@ interface GameStore {
 
   undo: () => void;
   redo: () => void;
+  useHint: (playerId: string) => { row: number, col: number, value: number } | null;
 
   // UI State
   selectedCell: { row: number; col: number } | null;
@@ -201,6 +202,66 @@ export const useGameStore = create<GameStore>((set) => ({
     }
     return state;
   }),
+
+
+  useHint: (playerId) => {
+    let result = null;
+    set((state) => {
+      if (!state.grid || !state.room || !state.solution) return state;
+
+      const player = state.room.players[playerId];
+      if (!player || player.hints <= 0) return state;
+
+      // Find an empty or incorrect cell
+      let targetRow = -1;
+      let targetCol = -1;
+      let targetVal = -1;
+
+      // Prefer currently selected cell if empty/wrong
+      if (state.selectedCell) {
+        const { row, col } = state.selectedCell;
+        const currentCell = state.grid[row][col];
+        const correctVal = state.solution[row][col];
+        if (!currentCell.isLocked && currentCell.value !== correctVal) {
+          targetRow = row;
+          targetCol = col;
+          targetVal = correctVal;
+        }
+      }
+
+      // Fallback: search grid
+      if (targetRow === -1) {
+        outer: for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            const currentCell = state.grid[r][c];
+            const correctVal = state.solution[r][c];
+            if (!currentCell.isLocked && currentCell.value !== correctVal) {
+              targetRow = r;
+              targetCol = c;
+              targetVal = correctVal;
+              break outer;
+            }
+          }
+        }
+      }
+
+      if (targetRow === -1) return state; // Grid full and correct
+
+      result = { row: targetRow, col: targetCol, value: targetVal };
+
+      // Update room state (hints - 1)
+      const newRoom = {
+        ...state.room,
+        players: {
+          ...state.room.players,
+          [playerId]: { ...player, hints: player.hints - 1 }
+        }
+      };
+
+      return { room: newRoom };
+    });
+    return result;
+  },
 
   selectedCell: null,
   setSelectedCell: (cell) => set({ selectedCell: cell }),

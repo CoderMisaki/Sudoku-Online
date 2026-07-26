@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
 import { RealtimeChannel } from '@supabase/supabase-js';
+import { ChatMessage } from '../types/game';
 
 export function useRealtime(roomId: string) {
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -10,6 +11,7 @@ export function useRealtime(roomId: string) {
 
   // Expose an active locks state
   const [locks, setLocks] = useState<Record<string, { userId: string, expiresAt: number }>>({});
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   useEffect(() => {
     if (!roomId || !userId || !username) return;
@@ -49,6 +51,10 @@ export function useRealtime(roomId: string) {
           ...prev,
           [key]: { userId: payload.userId, expiresAt: Date.now() + 5000 }
         }));
+      })
+      .on('broadcast', { event: 'chat' }, ({ payload }) => {
+        // payload: ChatMessage
+        setMessages(prev => [...prev, payload]);
       })
       .on('broadcast', { event: 'move' }, ({ payload }) => {
         // payload: { row, col, value, userId }
@@ -130,5 +136,24 @@ export function useRealtime(roomId: string) {
     });
   };
 
-  return { broadcastCursor, broadcastMove, lockCell, locks };
+
+  const broadcastChat = (text: string) => {
+    if (!channelRef.current || !userId || !username) return;
+    const msg: ChatMessage = {
+      id: Math.random().toString(36).substring(2, 9),
+      userId,
+      username,
+      text,
+      timestamp: Date.now()
+    };
+    channelRef.current.send({
+      type: 'broadcast',
+      event: 'chat',
+      payload: msg,
+    });
+    setMessages(prev => [...prev, msg]);
+  };
+
+  return { broadcastCursor, broadcastMove, lockCell, locks, messages, broadcastChat };
+
 }
