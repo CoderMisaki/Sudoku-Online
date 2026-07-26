@@ -1,0 +1,176 @@
+"use client";
+
+import React, { useCallback, useEffect } from 'react';
+import { useGameStore } from '../../store/gameStore';
+import { cn } from '../../utils/cn';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useRealtime } from '../../hooks/useRealtime';
+
+interface SudokuBoardProps {
+  roomId: string;
+}
+
+export const SudokuBoard: React.FC<SudokuBoardProps> = ({ roomId }) => {
+  const grid = useGameStore(state => state.grid);
+  const selectedCell = useGameStore(state => state.selectedCell);
+  const setSelectedCell = useGameStore(state => state.setSelectedCell);
+  const room = useGameStore(state => state.room);
+  const userId = useGameStore(state => state.userId);
+  const updateCell = useGameStore(state => state.updateCell);
+
+  const { broadcastCursor, broadcastMove, lockCell, locks } = useRealtime(roomId);
+
+  const handleCellClick = useCallback((row: number, col: number) => {
+    if (!grid) return;
+
+    // Check if locked by someone else
+    const key = `${row}-${col}`;
+    const currentLock = locks[key];
+    if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
+      return; // Can't select, locked by another player
+    }
+
+    setSelectedCell({ row, col });
+    broadcastCursor(row, col);
+    lockCell(row, col);
+  }, [grid, locks, userId, setSelectedCell, broadcastCursor, lockCell]);
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (!selectedCell || !grid || !userId) return;
+
+    const { row, col } = selectedCell;
+    const cell = grid[row][col];
+
+    // Check lock again just in case
+    const key = `${row}-${col}`;
+    const currentLock = locks[key];
+    if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
+      return;
+    }
+
+    if (e.key >= '1' && e.key <= '9') {
+      const val = parseInt(e.key);
+      if (!cell.isLocked) {
+        updateCell(row, col, val, userId);
+        broadcastMove(row, col, val);
+      }
+    } else if (e.key === 'Backspace' || e.key === 'Delete') {
+      if (!cell.isLocked) {
+        updateCell(row, col, null, userId);
+        broadcastMove(row, col, null);
+      }
+    } else if (e.key === 'ArrowUp') {
+      handleCellClick(Math.max(0, row - 1), col);
+    } else if (e.key === 'ArrowDown') {
+      handleCellClick(Math.min(8, row + 1), col);
+    } else if (e.key === 'ArrowLeft') {
+      handleCellClick(row, Math.max(0, col - 1));
+    } else if (e.key === 'ArrowRight') {
+      handleCellClick(row, Math.min(8, col + 1));
+    }
+  }, [selectedCell, grid, userId, locks, updateCell, broadcastMove, handleCellClick]);
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
+
+  if (!grid) return null;
+
+  return (
+    <div className="w-full aspect-square max-w-[600px] border-[3px] border-foreground bg-foreground grid grid-cols-9 grid-rows-9 gap-px p-px mx-auto rounded-md shadow-lg overflow-hidden relative select-none">
+      {grid.map((row, rIndex) => (
+        row.map((cell, cIndex) => {
+          const isSelected = selectedCell?.row === rIndex && selectedCell?.col === cIndex;
+
+          // Determine if this cell is highlighted because it's in the same row/col/box as selected
+          let isHighlighted = false;
+          let isSameValue = false;
+
+          if (selectedCell) {
+            const { row: sR, col: sC } = selectedCell;
+            const sameRow = rIndex === sR;
+            const sameCol = cIndex === sC;
+            const sameBox = Math.floor(rIndex / 3) === Math.floor(sR / 3) && Math.floor(cIndex / 3) === Math.floor(sC / 3);
+            isHighlighted = sameRow || sameCol || sameBox;
+
+            const selectedVal = grid[sR][sC].value;
+            isSameValue = selectedVal !== null && cell.value === selectedVal;
+          }
+
+          // Check if cell is currently locked by someone else
+          const lockKey = `${rIndex}-${cIndex}`;
+          const currentLock = locks[lockKey];
+          const isLockedByOther = currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now();
+          const lockerPlayer = isLockedByOther ? room?.players[currentLock.userId] : null;
+
+          // Check if another player's cursor is here
+          let otherCursorPlayer = null;
+          if (room && !isLockedByOther) {
+            for (const p of Object.values(room.players)) {
+              if (p.id !== userId && p.cursor?.row === rIndex && p.cursor?.col === cIndex) {
+                otherCursorPlayer = p;
+                break;
+              }
+            }
+          }
+
+          return (
+            <div
+              key={`${rIndex}-${cIndex}`}
+              onClick={() => handleCellClick(rIndex, cIndex)}
+              className={cn(
+                "relative flex items-center justify-center bg-background text-xl font-medium sm:text-2xl cursor-pointer transition-colors duration-150",
+                {
+                  "border-b-2": rIndex % 3 === 2 && rIndex !== 8,
+                  "border-r-2": cIndex % 3 === 2 && cIndex !== 8,
+                  "border-foreground": (rIndex % 3 === 2 && rIndex !== 8) || (cIndex % 3 === 2 && cIndex !== 8),
+                  "bg-hover": isHighlighted && !isSelected,
+                  "bg-secondary/20": isSelected,
+                  "text-foreground font-semibold": cell.isLocked,
+                  "text-secondary": !cell.isLocked,
+                  "bg-red-50 text-red-600": cell.isConflicting,
+                  "bg-blue-50": isSameValue && !isSelected,
+                  "cursor-not-allowed opacity-80": isLockedByOther
+                }
+              )}
+            >
+              <AnimatePresence mode="popLayout">
+                {cell.value !== null && (
+                  <motion.span
+                    key={cell.value}
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.8, opacity: 0 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                  >
+                    {cell.value}
+                  </motion.span>
+                )}
+              </AnimatePresence>
+
+              {/* Notes display */}
+              {cell.value === null && cell.notes.length > 0 && (
+                <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 p-1">
+                  {[1,2,3,4,5,6,7,8,9].map(n => (
+                    <div key={n} className="flex items-center justify-center text-[10px] text-secondary/60 leading-none">
+                      {cell.notes.includes(n) ? n : ''}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Other player cursor/lock indicator */}
+              {(otherCursorPlayer || lockerPlayer) && (
+                <div
+                  className="absolute inset-0 border-2 pointer-events-none transition-all duration-300"
+                  style={{ borderColor: lockerPlayer ? lockerPlayer.color : otherCursorPlayer?.color }}
+                />
+              )}
+            </div>
+          );
+        })
+      ))}
+    </div>
+  );
+};

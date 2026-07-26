@@ -1,0 +1,245 @@
+"use client";
+
+import { useEffect, useState, use, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { useGameStore } from '../../../store/gameStore';
+import { useRealtime } from '../../../hooks/useRealtime';
+import { generatePuzzle } from '../../../utils/sudoku';
+import { getOrCreateUserId } from '../../../utils/uuid';
+import { Button } from '../../../components/ui/Button';
+import { Card } from '../../../components/ui/Card';
+import { SudokuBoard } from '../../../components/game/SudokuBoard';
+import { Copy, Users, Settings, LogOut, CheckCircle2, RotateCcw } from 'lucide-react';
+import { Difficulty, GameMode } from '../../../types/game';
+
+const PLAYER_COLORS = ['#666666', '#111111', '#333333', '#475569', '#374151'];
+
+export default function RoomPage({ params }: { params: Promise<{ id: string }> }) {
+  const resolvedParams = use(params);
+  const roomId = resolvedParams.id;
+  const router = useRouter();
+
+  const userId = useGameStore(state => state.userId);
+  const username = useGameStore(state => state.username);
+  const room = useGameStore(state => state.room);
+  const setRoom = useGameStore(state => state.setRoom);
+  const setGameData = useGameStore(state => state.setGameData);
+  const setUserInfo = useGameStore(state => state.setUserInfo);
+  const updateCell = useGameStore(state => state.updateCell);
+  const selectedCell = useGameStore(state => state.selectedCell);
+
+  const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Initialize Realtime
+  const { broadcastMove } = useRealtime(roomId);
+
+  useEffect(() => {
+    const storedUserId = getOrCreateUserId();
+    const storedUsername = localStorage.getItem('sudoku_username');
+
+    if (!storedUserId || !storedUsername) {
+      router.push('/');
+      return;
+    }
+
+    if (!userId) {
+      setUserInfo(storedUserId, storedUsername);
+    }
+
+    const tempConfigStr = sessionStorage.getItem('temp_room_config');
+    let isHost = false;
+    let difficulty: Difficulty = 'medium';
+    let mode: GameMode = 'collaborative';
+    let maxPlayers = 4;
+
+    if (tempConfigStr) {
+      const config = JSON.parse(tempConfigStr);
+      isHost = config.isHost;
+      if (isHost) {
+        difficulty = config.difficulty as Difficulty;
+        mode = config.mode as GameMode;
+        maxPlayers = config.maxPlayers;
+      }
+      sessionStorage.removeItem('temp_room_config');
+    }
+
+    if (!room && isHost) {
+      const { initialGrid, solutionGrid } = generatePuzzle(difficulty);
+
+      setRoom({
+        id: roomId,
+        code: roomId,
+        hostId: storedUserId,
+        difficulty,
+        mode,
+        maxPlayers,
+        status: 'playing',
+        players: {
+          [storedUserId]: {
+            id: storedUserId,
+            username: storedUsername,
+            color: PLAYER_COLORS[0],
+            isHost: true,
+            score: 0,
+            status: 'online'
+          }
+        },
+        createdAt: Date.now(),
+        startedAt: Date.now()
+      });
+      setGameData(initialGrid, solutionGrid);
+    }
+
+    const t = setTimeout(() => setLoading(false), 0);
+    return () => clearTimeout(t);
+  }, [roomId, router, userId, room, setRoom, setGameData, setUserInfo]);
+
+  const copyRoomCode = () => {
+    navigator.clipboard.writeText(roomId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const leaveRoom = () => {
+    setRoom(null);
+    router.push('/');
+  };
+
+  const handleNumpadClick = useCallback((num: number) => {
+    if (!selectedCell || !userId) return;
+    updateCell(selectedCell.row, selectedCell.col, num, userId);
+    broadcastMove(selectedCell.row, selectedCell.col, num);
+  }, [selectedCell, userId, updateCell, broadcastMove]);
+
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center bg-background text-foreground">Loading room...</div>;
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col bg-background text-foreground">
+      {/* Header */}
+      <header className="border-b border-border bg-card px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <h1 className="text-xl font-bold">Sudoku Together</h1>
+          <div className="h-6 w-px bg-border hidden sm:block" />
+          <div className="hidden sm:flex items-center gap-2 text-sm text-secondary bg-background px-3 py-1.5 rounded-full border border-border">
+            <span>Room Code:</span>
+            <span className="font-mono font-medium text-foreground tracking-wider">{roomId}</span>
+            <button
+              onClick={copyRoomCode}
+              className="ml-2 hover:text-foreground transition-colors"
+            >
+              {copied ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="hidden md:flex items-center gap-2 mr-4">
+            <span className="text-sm font-medium">{username}</span>
+            <div className="w-8 h-8 rounded-full bg-secondary/20 flex items-center justify-center text-sm font-bold">
+              {username?.charAt(0).toUpperCase()}
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => {}} className="px-2">
+            <Settings className="w-5 h-5" />
+          </Button>
+          <Button variant="outline" size="sm" onClick={leaveRoom}>
+            <LogOut className="w-4 h-4 mr-2" />
+            Leave
+          </Button>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* Sidebar Left: Players & Chat */}
+        <div className="space-y-6 flex flex-col h-full lg:col-span-1">
+          <Card className="flex-1 flex flex-col overflow-hidden max-h-[40vh] lg:max-h-none">
+            <div className="p-4 border-b border-border bg-background/50 flex items-center justify-between">
+              <h2 className="font-semibold flex items-center gap-2">
+                <Users className="w-4 h-4" /> Players
+              </h2>
+              <span className="text-xs text-secondary bg-secondary/10 px-2 py-1 rounded-full">
+                {Object.keys(room?.players || {}).length} / {room?.maxPlayers || 4}
+              </span>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 space-y-3">
+              {Object.values(room?.players || {}).map(player => (
+                <div key={player.id} className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-3 h-3 rounded-full"
+                      style={{ backgroundColor: player.color }}
+                    />
+                    <span className="text-sm font-medium">
+                      {player.username} {player.isHost && <span className="text-xs text-secondary">(Host)</span>}
+                    </span>
+                  </div>
+                  <span className="text-sm font-mono">{player.score}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card className="flex-1 flex flex-col overflow-hidden max-h-[30vh] lg:max-h-none">
+            <div className="p-4 border-b border-border bg-background/50">
+              <h2 className="font-semibold">Chat</h2>
+            </div>
+            <div className="flex-1 p-4 flex flex-col justify-end text-sm text-secondary italic">
+              Chat coming soon...
+            </div>
+            <div className="p-3 border-t border-border">
+              <input
+                type="text"
+                placeholder="Type a message..."
+                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-foreground"
+                disabled
+              />
+            </div>
+          </Card>
+        </div>
+
+        {/* Center: Game Board */}
+        <div className="lg:col-span-3 flex flex-col items-center justify-center">
+          <div className="w-full max-w-2xl flex flex-col items-center gap-6">
+            <div className="w-full flex justify-between items-end">
+              <div>
+                <h2 className="text-2xl font-bold">{room?.difficulty.toUpperCase()}</h2>
+                <p className="text-secondary text-sm">Mode: {room?.mode}</p>
+              </div>
+              <div className="text-right">
+                <div className="text-2xl font-mono">00:00</div>
+                <p className="text-secondary text-sm">Elapsed</p>
+              </div>
+            </div>
+
+            <SudokuBoard roomId={roomId} />
+
+            {/* Controls */}
+            <div className="w-full flex justify-between items-center gap-4">
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => useGameStore.getState().undo()}>
+                  <RotateCcw className="w-4 h-4 mr-2" /> Undo
+                </Button>
+              </div>
+              <div className="flex gap-2">
+                {/* Number Pad for Mobile/Mouse users */}
+                {[1,2,3,4,5,6,7,8,9].map(n => (
+                  <button
+                    key={n}
+                    onClick={() => handleNumpadClick(n)}
+                    className="w-10 h-10 rounded-lg border border-border bg-card hover:bg-hover font-semibold text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-foreground"
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
