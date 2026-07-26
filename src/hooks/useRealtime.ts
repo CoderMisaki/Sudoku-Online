@@ -36,12 +36,14 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'cursor' }, ({ payload }) => {
         // payload: { userId, row, col }
+        if (typeof payload.row !== "number" || typeof payload.col !== "number" || payload.row < 0 || payload.row > 8 || payload.col < 0 || payload.col > 8) return;
         useGameStore.getState().updatePlayer(payload.userId, {
           cursor: { row: payload.row, col: payload.col }
         });
       })
       .on('broadcast', { event: 'cell_lock' }, ({ payload }) => {
         // payload: { row, col, userId }
+        if (typeof payload.row !== "number" || typeof payload.col !== "number" || payload.row < 0 || payload.row > 8 || payload.col < 0 || payload.col > 8) return;
         const key = `${payload.row}-${payload.col}`;
         setLocks(prev => ({
           ...prev,
@@ -50,6 +52,8 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'move' }, ({ payload }) => {
         // payload: { row, col, value, userId }
+        if (typeof payload.row !== "number" || typeof payload.col !== "number" || payload.row < 0 || payload.row > 8 || payload.col < 0 || payload.col > 8) return;
+        if (payload.value !== null && (typeof payload.value !== "number" || payload.value < 1 || payload.value > 9)) return;
         useGameStore.getState().updateCell(payload.row, payload.col, payload.value, payload.userId);
       })
       .subscribe(async (status) => {
