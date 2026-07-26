@@ -10,7 +10,7 @@ import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
-import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb } from 'lucide-react';
+import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, Send } from 'lucide-react';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
 
@@ -44,13 +44,19 @@ export default function RoomPage() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleChatSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleChatSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (chatInput.trim()) {
       broadcastChat(chatInput.trim());
       setChatInput('');
+      const textarea = document.getElementById('chat-textarea');
+      if (textarea) {
+        textarea.style.height = '40px';
+      }
     }
   };
+
+
 
   // Initialize Realtime
 
@@ -138,12 +144,20 @@ export default function RoomPage() {
 
   const handleHint = useCallback(() => {
     if (!userId) return;
+    if (!selectedCell) {
+      toast.error('Pilih kotak kosong terlebih dahulu untuk menggunakan hint!');
+      return;
+    }
+
     const hintData = useGameStore.getState().useHint(userId);
     if (hintData) {
       updateCell(hintData.row, hintData.col, hintData.value, userId);
       broadcastMove(hintData.row, hintData.col, hintData.value);
+      toast.success('Hint digunakan untuk 1 kotak!');
+    } else {
+      toast.error('Pilih kotak yang belum terisi angka yang benar.');
     }
-  }, [userId, updateCell, broadcastMove]);
+  }, [userId, selectedCell, updateCell, broadcastMove]);
 
 
   const handleNumpadClick = useCallback((num: number) => {
@@ -171,35 +185,31 @@ export default function RoomPage() {
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       {/* Header */}
-      <header className="border-b border-border bg-card px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <h1 className="text-xl font-bold">Sudoku Together</h1>
-          <div className="h-6 w-px bg-border hidden" />
-          <div className="flex items-center gap-2 text-sm text-secondary bg-background px-3 py-1.5 rounded-full border border-border">
-            <span>Room Code:</span>
+      <header className="border-b border-border bg-card px-3 sm:px-6 py-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 sm:gap-4">
+          <h1 className="text-base sm:text-xl font-bold truncate">Sudoku</h1>
+          <div className="flex items-center gap-1.5 text-xs text-secondary bg-background px-2.5 py-1 rounded-full border border-border">
+            <span className="hidden sm:inline">Code:</span>
             <span className="font-mono font-medium text-foreground tracking-wider">{roomId}</span>
-            <button
-              onClick={copyRoomCode}
-              className="ml-2 hover:text-foreground transition-colors"
-            >
-              {copied ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+            <button onClick={copyRoomCode} className="hover:text-foreground transition-colors p-0.5">
+              {copied ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="hidden md:flex items-center gap-2 mr-4">
-            <span className="text-sm font-medium">{username}</span>
-            <div className="w-8 h-8 rounded-full bg-secondary/20 flex items-center justify-center text-sm font-bold">
+        <div className="flex items-center gap-2">
+          <div className="hidden md:flex items-center gap-2">
+            <span className="text-xs sm:text-sm font-medium">{username}</span>
+            <div className="w-7 h-7 rounded-full bg-secondary/20 flex items-center justify-center text-xs font-bold">
               {username?.charAt(0).toUpperCase()}
             </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(true)} className="px-2">
-            <Settings className="w-5 h-5" />
+          <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(true)} className="p-1.5 h-8 w-8">
+            <Settings className="w-4 h-4" />
           </Button>
-          <Button variant="outline" size="sm" onClick={leaveRoom}>
-            <LogOut className="w-4 h-4 mr-2" />
-            Leave
+          <Button variant="outline" size="sm" onClick={leaveRoom} className="h-8 px-2.5 text-xs">
+            <LogOut className="w-3.5 h-3.5 sm:mr-1.5" />
+            <span className="hidden sm:inline">Leave</span>
           </Button>
         </div>
       </header>
@@ -253,14 +263,32 @@ export default function RoomPage() {
               <div ref={chatEndRef} />
             </div>
             <div className="p-3 border-t border-border">
-              <form onSubmit={handleChatSubmit}>
-                <input
-                  type="text"
+              <form onSubmit={handleChatSubmit} className="flex items-end gap-2">
+                <textarea id="chat-textarea"
                   value={chatInput}
                   onChange={e => setChatInput(e.target.value)}
+                  // Enter acts as new line, no submission. Default behavior of textarea is already new line.
                   placeholder="Type a message..."
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-foreground"
+                  className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-foreground resize-none min-h-[40px] max-h-[120px]"
+                  rows={1}
+                  style={{
+                    height: 'auto',
+                    minHeight: '40px',
+                  }}
+                  onInput={(e) => {
+                    const target = e.target as HTMLTextAreaElement;
+                    target.style.height = 'auto';
+                    target.style.height = `${Math.min(target.scrollHeight, 120)}px`;
+                  }}
                 />
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={!chatInput.trim()}
+                  className="h-10 w-10 p-0 flex-shrink-0"
+                >
+                  <Send className="w-4 h-4" />
+                </Button>
               </form>
             </div>
           </Card>

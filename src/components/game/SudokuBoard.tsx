@@ -137,7 +137,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "text-foreground font-semibold": cell.isLocked,
                   "text-secondary": !cell.isLocked,
                   "bg-red-50 text-red-600": cell.isConflicting,
-                  "bg-sky-500/20": isSameValue && !isSelected,
+                  "ring-2 ring-sky-400 ring-inset bg-sky-500/10": isSameValue && !isSelected,
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }
               )}
