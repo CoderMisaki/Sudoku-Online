@@ -41,6 +41,7 @@ interface GameStore {
 
   selectedCell: { row: number; col: number } | null;
   setSelectedCell: (cell: { row: number; col: number } | null) => void;
+  resetGame: () => void;
 }
 
 export const useGameStore = create<GameStore>()(
@@ -99,7 +100,6 @@ export const useGameStore = create<GameStore>()(
 
     // In classic mode, reject wrong answers immediately
     if (mode === 'classic' && value !== null && !isCorrect) {
-      // Return state with score penalty but no grid change
       const currentScore = state.room.players[playerId]?.score || 0;
       const newScore = currentScore - 5;
 
@@ -116,14 +116,15 @@ export const useGameStore = create<GameStore>()(
     newGrid[row][col] = {
       ...newGrid[row][col],
       value,
-      filledBy: playerId
+      filledBy: playerId,
+      isWrong: value !== null && !isCorrect
     };
 
     const validatedGrid = checkConflicts(newGrid);
 
     // Calculate scoring
     let newRoom = { ...state.room };
-    if (value !== null) {
+    if (value !== null && mode !== 'zen') {
       const currentScore = state.room.players[playerId]?.score || 0;
       const scoreDiff = isCorrect ? 10 : -5;
       const newScore = currentScore + scoreDiff;
@@ -250,6 +251,7 @@ export const useGameStore = create<GameStore>()(
 
   selectedCell: null,
   setSelectedCell: (cell) => set({ selectedCell: cell }),
+  resetGame: () => set({ room: null, grid: null, solution: null, history: [], historyIndex: -1, messages: [], selectedCell: null }),
     }),
     {
       name: "sudoku-game-storage",
