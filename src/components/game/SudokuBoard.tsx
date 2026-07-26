@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store/gameStore';
+import { isValidMove } from '../../utils/sudoku';
 import { cn } from '../../utils/cn';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -51,6 +52,12 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     if (e.key >= '1' && e.key <= '9') {
       const val = parseInt(e.key);
       if (!cell.isLocked) {
+        // Cegah spam angka bila melanggar aturan blok/baris/kolom
+        if (!isValidMove(grid, row, col, val)) {
+          toast.error('Angka sudah ada di baris/kolom/blok!', { id: 'conflict', duration: 1500 });
+          return;
+        }
+
         if (solution) {
           const isCorrect = solution[row][col] === val;
           if (isCorrect) {
@@ -128,19 +135,18 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
               className={cn(
                 "relative flex items-center justify-center text-xl font-medium sm:text-2xl cursor-pointer transition-colors duration-150 bg-background",
                 {
-                  // Garis tebal pemisah blok 3x3
                   "border-b-2 border-foreground": rIndex % 3 === 2 && rIndex !== 8,
                   "border-r-2 border-foreground": cIndex % 3 === 2 && cIndex !== 8,
 
-                  // Tingkat Warna Latar (Soft Pastels khas Sudoku.com)
-                  "bg-sky-500/40": isSelected,                        // Kotak yang di-tap langsung
-                  "bg-sky-400/30": isSameValue && !isSelected,       // Kotak dengan angka yang sama
-                  "bg-sky-500/10": isRelated && !isSelected && !isSameValue, // Lintas baris, kolom & blok 3x3
-                  "bg-red-500/25": cell.isConflicting,               // Jika angka bentrok / salah
+                  // Tingkat Warna Latar - Pink Edition!
+                  "bg-pink-500/40": isSelected,                        // Kotak yang langsung di-tap
+                  "bg-pink-500/20": isSameValue && !isSelected,       // Highlight angka kembar
+                  "bg-pink-500/5": isRelated && !isSelected && !isSameValue, // Lintas baris tipis agar tak jadi putih
+                  "bg-red-500/25": cell.isConflicting,
 
                   // Warna Teks Angka
                   "text-foreground font-bold": cell.isLocked,
-                  "text-sky-400 font-semibold": !cell.isLocked && cell.value !== null && !cell.isConflicting,
+                  "text-sky-400 font-bold": !cell.isLocked && cell.value !== null && !cell.isConflicting,
                   "text-red-400 font-bold": cell.isConflicting,
 
                   "cursor-not-allowed opacity-80": isLockedByOther
@@ -155,7 +161,8 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                     animate={{ scale: 1, opacity: 1 }}
                     exit={{ scale: 0.8, opacity: 0 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                    className="relative z-10 font-sans pointer-events-none" // z-10 mengunci angka tepat di atas latar highlight
+                    // z-20 dan drop-shadow memastikan angka melayang tegak di atas background warna cell
+                    className="relative z-20 font-sans pointer-events-none drop-shadow-md"
                   >
                     {cell.value}
                   </motion.span>
