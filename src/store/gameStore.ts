@@ -207,49 +207,22 @@ export const useGameStore = create<GameStore>((set) => ({
   useHint: (playerId) => {
     let result = null;
     set((state) => {
-      if (!state.grid || !state.room || !state.solution) return state;
+      if (!state.grid || !state.room || !state.solution || !state.selectedCell) return state;
 
       const player = state.room.players[playerId];
       if (!player || player.hints <= 0) return state;
 
-      // Find an empty or incorrect cell
-      let targetRow = -1;
-      let targetCol = -1;
-      let targetVal = -1;
+      const { row, col } = state.selectedCell;
+      const currentCell = state.grid[row][col];
+      const correctVal = state.solution[row][col];
 
-      // Prefer currently selected cell if empty/wrong
-      if (state.selectedCell) {
-        const { row, col } = state.selectedCell;
-        const currentCell = state.grid[row][col];
-        const correctVal = state.solution[row][col];
-        if (!currentCell.isLocked && currentCell.value !== correctVal) {
-          targetRow = row;
-          targetCol = col;
-          targetVal = correctVal;
-        }
+      // Hint hanya bekerja pada 1 kotak yang dipilih jika belum terisi dengan benar & tidak terkunci
+      if (currentCell.isLocked || currentCell.value === correctVal) {
+        return state;
       }
 
-      // Fallback: search grid
-      if (targetRow === -1) {
-        outer: for (let r = 0; r < 9; r++) {
-          for (let c = 0; c < 9; c++) {
-            const currentCell = state.grid[r][c];
-            const correctVal = state.solution[r][c];
-            if (!currentCell.isLocked && currentCell.value !== correctVal) {
-              targetRow = r;
-              targetCol = c;
-              targetVal = correctVal;
-              break outer;
-            }
-          }
-        }
-      }
+      result = { row, col, value: correctVal };
 
-      if (targetRow === -1) return state; // Grid full and correct
-
-      result = { row: targetRow, col: targetCol, value: targetVal };
-
-      // Update room state (hints - 1)
       const newRoom = {
         ...state.room,
         players: {

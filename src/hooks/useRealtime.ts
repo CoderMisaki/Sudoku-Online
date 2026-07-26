@@ -13,7 +13,7 @@ export function useRealtime(roomId: string) {
   const [locks, setLocks] = useState<Record<string, { userId: string, expiresAt: number }>>({});
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
-  useEffect(() => {
+    useEffect(() => {
     if (!roomId || !userId || !username) return;
 
     const channel = supabase.channel(`room:${roomId}`, {
@@ -26,13 +26,18 @@ export function useRealtime(roomId: string) {
 
     channelRef.current = channel;
 
+    const syncHostState = () => {
+      const store = useGameStore.getState();
+      if (store.room && store.grid && store.solution) {
+        channel.send({
+          type: 'broadcast',
+          event: 'sync_state',
+          payload: { room: store.room, grid: store.grid, solution: store.solution }
+        });
+      }
+    };
+
     channel
-      .on('presence', { event: 'sync' }, () => {
-        const store = useGameStore.getState();
-        if (store.room && store.room.hostId === userId) {
-          // You might sync missing players here if needed
-        }
-      })
       .on('presence', { event: 'join' }, ({ newPresences }) => {
         const store = useGameStore.getState();
         const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
@@ -46,7 +51,7 @@ export function useRealtime(roomId: string) {
             if (!newPlayers[pid]) {
               newPlayers[pid] = {
                 id: pid,
-                username: p.username || 'Unknown',
+                username: p.username || 'Player',
                 color: PLAYER_COLORS[Object.keys(newPlayers).length % PLAYER_COLORS.length],
                 isHost: false,
                 score: 0,
@@ -61,21 +66,9 @@ export function useRealtime(roomId: string) {
           });
 
           if (changed) {
-            const newRoom = { ...store.room, players: newPlayers };
-            store.setRoom(newRoom);
-            channel.send({
-              type: 'broadcast',
-              event: 'sync_state',
-              payload: { room: newRoom, grid: store.grid, solution: store.solution }
-            });
-          } else {
-            // Send state anyway so the new person gets it
-            channel.send({
-              type: 'broadcast',
-              event: 'sync_state',
-              payload: { room: store.room, grid: store.grid, solution: store.solution }
-            });
+            store.setRoom({ ...store.room, players: newPlayers });
           }
+          syncHostState();
         }
       })
       .on('presence', { event: 'leave' }, ({ leftPresences }) => {
@@ -91,36 +84,31 @@ export function useRealtime(roomId: string) {
           });
 
           if (changed) {
-            const newRoom = { ...store.room, players: newPlayers };
-            store.setRoom(newRoom);
-            channel.send({
-              type: 'broadcast',
-              event: 'sync_state',
-              payload: { room: newRoom, grid: store.grid, solution: store.solution }
-            });
+            const updatedRoom = { ...store.room, players: newPlayers };
+            store.setRoom(updatedRoom);
+            syncHostState();
           }
         }
+      })
+      .on('broadcast', { event: 'request_state' }, () => {
+        syncHostState();
       })
       .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
         const store = useGameStore.getState();
-        if (!store.room || store.room.hostId !== userId) {
-          if (payload.room) {
-            store.setRoom(payload.room);
-          }
-          if (payload.grid && payload.solution) {
-            store.setGameData(payload.grid, payload.solution);
-          }
+        if (payload.room) {
+          store.setRoom(payload.room);
+        }
+        if (payload.grid && payload.solution) {
+          store.setGameData(payload.grid, payload.solution);
         }
       })
       .on('broadcast', { event: 'cursor' }, ({ payload }) => {
-        // payload: { userId, row, col }
         if (typeof payload.row !== "number" || typeof payload.col !== "number" || payload.row < 0 || payload.row > 8 || payload.col < 0 || payload.col > 8) return;
         useGameStore.getState().updatePlayer(payload.userId, {
           cursor: { row: payload.row, col: payload.col }
         });
       })
       .on('broadcast', { event: 'cell_lock' }, ({ payload }) => {
-        // payload: { row, col, userId }
         if (typeof payload.row !== "number" || typeof payload.col !== "number" || payload.row < 0 || payload.row > 8 || payload.col < 0 || payload.col > 8) return;
         const key = `${payload.row}-${payload.col}`;
         setLocks(prev => ({
@@ -128,25 +116,12 @@ export function useRealtime(roomId: string) {
           [key]: { userId: payload.userId, expiresAt: Date.now() + 5000 }
         }));
       })
-      .on('broadcast', { event: 'chat' }, ({ payload }) => {
-        // payload: ChatMessage
-        setMessages(prev => [...prev, payload]);
-      })
       .on('broadcast', { event: 'move' }, ({ payload }) => {
-        // payload: { row, col, value, userId }
-        if (typeof payload.row !== "number" || typeof payload.col !== "number" || payload.row < 0 || payload.row > 8 || payload.col < 0 || payload.col > 8) return;
-        if (payload.value !== null && (typeof payload.value !== "number" || payload.value < 1 || payload.value > 9)) return;
+        if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
         useGameStore.getState().updateCell(payload.row, payload.col, payload.value, payload.userId);
       })
-      .on('broadcast', { event: 'request_state' }, () => {
-        const store = useGameStore.getState();
-        if (store.room && store.room.hostId === userId) {
-          channel.send({
-            type: 'broadcast',
-            event: 'sync_state',
-            payload: { room: store.room, grid: store.grid, solution: store.solution }
-          });
-        }
+      .on('broadcast', { event: 'chat' }, ({ payload }) => {
+        setMessages(prev => [...prev, payload]);
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
@@ -156,7 +131,7 @@ export function useRealtime(roomId: string) {
             online_at: new Date().toISOString(),
           });
 
-          // Request state on join if we are not host
+          // Minta state dari host
           channel.send({
             type: 'broadcast',
             event: 'request_state',
@@ -186,6 +161,7 @@ export function useRealtime(roomId: string) {
       supabase.removeChannel(channel);
     };
   }, [roomId, userId, username]);
+
 
   const broadcastCursor = (row: number, col: number) => {
     if (!channelRef.current || !userId) return;
@@ -246,5 +222,5 @@ export function useRealtime(roomId: string) {
     setMessages(prev => [...prev, msg]);
   };
 
-  return { broadcastCursor, broadcastMove, lockCell, locks, messages, broadcastChat };
+return { broadcastCursor, broadcastMove, lockCell, locks, messages, broadcastChat };
 }
