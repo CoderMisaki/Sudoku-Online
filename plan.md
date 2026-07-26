@@ -1,0 +1,9 @@
+1. **Fix Settings Button:** Currently, the settings button does nothing (`onClick={() => {}}`). Implement basic modal/state for settings (e.g., sound toggles or theme), or disable it if not intended to function.
+2. **Fix Sudoku Board Margins:** Add padding or margins to `SudokuBoard` so it doesn't touch the screen edges, especially on mobile. Adjust the container CSS.
+3. **Fix Chat Functionality:** Implement the chat using the existing `useRealtime` hook. Add a new `messages` state in `room/[id]/page.tsx`, and a new broadcast event `chat`. Make the chat container scrollable.
+4. **Fix Numpad Buttons:** The number buttons currently break the layout or go out of bounds (nembus layar). Make the numpad grid responsive (`flex-wrap` or `grid` with proper sizing).
+5. **Fix Cell Selection Highlighting ("Putih Putih"):** The current code highlights all cells in the same row, col, and block when a cell is selected, which the user finds annoying. Modify `SudokuBoard.tsx` to only highlight cells with the *same value* as the selected cell, or remove the crosshair highlight entirely based on the user's request.
+6. **Remove Undo Feature:** The user requested to remove the Undo feature for real-time online play. Remove the "Undo" button from the UI and remove `undo` related logic if not needed.
+7. **Add Correct/Incorrect Notifications:** Add temporary notifications (✅ and ❌) when a number is placed. The `updateCell` function needs to return/trigger this state, or the UI component needs to check the value against the solution. Display it at the top of the screen for 1.5 seconds.
+8. **Responsive Design:** Ensure the entire UI is fully responsive across mobile, tablet, and desktop without layout breaks.
+9. **Add Hint Feature:** Add a hint button. Each user gets 3 hints. Update the `Player` state to include `hints: number`. When used, fill the selected cell with the correct value from `solution` and broadcast the move.
