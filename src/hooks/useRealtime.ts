@@ -11,7 +11,6 @@ export function useRealtime(roomId: string) {
 
   // Expose an active locks state
   const [locks, setLocks] = useState<Record<string, { userId: string, expiresAt: number }>>({});
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
 
 
   // Status koneksi WebSocket
@@ -38,7 +37,7 @@ export function useRealtime(roomId: string) {
         channel.send({
           type: 'broadcast',
           event: 'sync_state',
-          payload: { room: store.room, grid: store.grid, solution: store.solution }
+          payload: { room: store.room, grid: store.grid, solution: store.solution, messages: store.messages }
         });
       }
     };
@@ -107,7 +106,7 @@ export function useRealtime(roomId: string) {
           channel.send({
             type: 'broadcast',
             event: 'sync_state',
-            payload: { room: store.room, grid: store.grid, solution: store.solution }
+            payload: { room: store.room, grid: store.grid, solution: store.solution, messages: store.messages }
           });
         }
       })
@@ -118,6 +117,9 @@ export function useRealtime(roomId: string) {
         }
         if (payload.grid && payload.solution) {
           store.setGameData(payload.grid, payload.solution);
+        }
+        if (payload.messages) {
+          store.setMessages(payload.messages);
         }
       })
       .on('broadcast', { event: 'cursor' }, ({ payload }) => {
@@ -139,7 +141,7 @@ export function useRealtime(roomId: string) {
         useGameStore.getState().updateCell(payload.row, payload.col, payload.value, payload.userId);
       })
       .on('broadcast', { event: 'chat' }, ({ payload }) => {
-        setMessages(prev => [...prev, payload]);
+        useGameStore.getState().addMessage(payload);
       })
       .subscribe(async (status, err) => {
         setRealtimeStatus(status as 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED');
@@ -246,8 +248,8 @@ export function useRealtime(roomId: string) {
       event: 'chat',
       payload: msg,
     });
-    setMessages(prev => [...prev, msg]);
+    useGameStore.getState().addMessage(msg);
   };
 
-return { broadcastCursor, broadcastMove, lockCell, locks, messages, broadcastChat, realtimeStatus, connectionError };
+return { broadcastCursor, broadcastMove, lockCell, locks, broadcastChat, realtimeStatus, connectionError };
 }
