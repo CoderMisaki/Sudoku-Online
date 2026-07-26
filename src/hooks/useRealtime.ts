@@ -28,13 +28,89 @@ export function useRealtime(roomId: string) {
 
     channel
       .on('presence', { event: 'sync' }, () => {
-        // Here we could update players in room state based on presence
+        const store = useGameStore.getState();
+        if (store.room && store.room.hostId === userId) {
+          // You might sync missing players here if needed
+        }
       })
-      .on('presence', { event: 'join' }, ({ key, newPresences }) => {
-        console.log('join', key, newPresences);
+      .on('presence', { event: 'join' }, ({ newPresences }) => {
+        const store = useGameStore.getState();
+        const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
+
+        if (store.room && store.room.hostId === userId) {
+          const newPlayers = { ...store.room.players };
+          let changed = false;
+
+          newPresences.forEach((p) => {
+            const pid = p.user_id;
+            if (!newPlayers[pid]) {
+              newPlayers[pid] = {
+                id: pid,
+                username: p.username || 'Unknown',
+                color: PLAYER_COLORS[Object.keys(newPlayers).length % PLAYER_COLORS.length],
+                isHost: false,
+                score: 0,
+                hints: 3,
+                status: 'online'
+              };
+              changed = true;
+            } else if (newPlayers[pid].status !== 'online') {
+              newPlayers[pid].status = 'online';
+              changed = true;
+            }
+          });
+
+          if (changed) {
+            const newRoom = { ...store.room, players: newPlayers };
+            store.setRoom(newRoom);
+            channel.send({
+              type: 'broadcast',
+              event: 'sync_state',
+              payload: { room: newRoom, grid: store.grid, solution: store.solution }
+            });
+          } else {
+            // Send state anyway so the new person gets it
+            channel.send({
+              type: 'broadcast',
+              event: 'sync_state',
+              payload: { room: store.room, grid: store.grid, solution: store.solution }
+            });
+          }
+        }
       })
-      .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
-        console.log('leave', key, leftPresences);
+      .on('presence', { event: 'leave' }, ({ leftPresences }) => {
+        const store = useGameStore.getState();
+        if (store.room && store.room.hostId === userId) {
+          const newPlayers = { ...store.room.players };
+          let changed = false;
+          leftPresences.forEach((p) => {
+            if (newPlayers[p.user_id]) {
+              newPlayers[p.user_id].status = 'offline';
+              changed = true;
+            }
+          });
+
+          if (changed) {
+            const newRoom = { ...store.room, players: newPlayers };
+            store.setRoom(newRoom);
+            channel.send({
+              type: 'broadcast',
+              event: 'sync_state',
+              payload: { room: newRoom, grid: store.grid, solution: store.solution }
+            });
+          }
+        }
+      })
+      .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
+        const store = useGameStore.getState();
+        if (!store.room || store.room.hostId !== userId) {
+          if (payload.room) {
+            store.setRoom(payload.room);
+          }
+          if (payload.grid && payload.solution) {
+            store.setGameData(payload.grid, payload.solution);
+          }
+        }
       })
       .on('broadcast', { event: 'cursor' }, ({ payload }) => {
         // payload: { userId, row, col }
@@ -62,12 +138,29 @@ export function useRealtime(roomId: string) {
         if (payload.value !== null && (typeof payload.value !== "number" || payload.value < 1 || payload.value > 9)) return;
         useGameStore.getState().updateCell(payload.row, payload.col, payload.value, payload.userId);
       })
+      .on('broadcast', { event: 'request_state' }, () => {
+        const store = useGameStore.getState();
+        if (store.room && store.room.hostId === userId) {
+          channel.send({
+            type: 'broadcast',
+            event: 'sync_state',
+            payload: { room: store.room, grid: store.grid, solution: store.solution }
+          });
+        }
+      })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
           await channel.track({
             user_id: userId,
             username: username,
             online_at: new Date().toISOString(),
+          });
+
+          // Request state on join if we are not host
+          channel.send({
+            type: 'broadcast',
+            event: 'request_state',
+            payload: { userId }
           });
         }
       });
@@ -136,7 +229,6 @@ export function useRealtime(roomId: string) {
     });
   };
 
-
   const broadcastChat = (text: string) => {
     if (!channelRef.current || !userId || !username) return;
     const msg: ChatMessage = {
@@ -155,5 +247,4 @@ export function useRealtime(roomId: string) {
   };
 
   return { broadcastCursor, broadcastMove, lockCell, locks, messages, broadcastChat };
-
 }
