@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useGameStore } from '../../../store/gameStore';
 import { useRealtime } from '../../../hooks/useRealtime';
@@ -8,9 +8,11 @@ import { generatePuzzle } from '../../../utils/sudoku';
 import { getOrCreateUserId } from '../../../utils/uuid';
 import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
+import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
-import { Copy, Users, Settings, LogOut, CheckCircle2, RotateCcw } from 'lucide-react';
+import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb } from 'lucide-react';
 import { Difficulty, GameMode } from '../../../types/game';
+import toast from 'react-hot-toast';
 
 const PLAYER_COLORS = ['#666666', '#111111', '#333333', '#475569', '#374151'];
 
@@ -26,13 +28,32 @@ export default function RoomPage() {
   const setGameData = useGameStore(state => state.setGameData);
   const setUserInfo = useGameStore(state => state.setUserInfo);
   const updateCell = useGameStore(state => state.updateCell);
+  const solution = useGameStore(state => state.solution);
   const selectedCell = useGameStore(state => state.selectedCell);
+  const player = useGameStore(state => state.room?.players[userId || '']);
+  const hintsRemaining = player?.hints ?? 3;
 
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const { broadcastMove, broadcastCursor, lockCell, locks, messages, broadcastChat } = useRealtime(roomId);
+  const [chatInput, setChatInput] = useState('');
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleChatSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (chatInput.trim()) {
+      broadcastChat(chatInput.trim());
+      setChatInput('');
+    }
+  };
 
   // Initialize Realtime
-  const { broadcastMove, broadcastCursor, lockCell, locks } = useRealtime(roomId);
+
 
   useEffect(() => {
     if (!roomId) return;
@@ -89,6 +110,7 @@ export default function RoomPage() {
             color: PLAYER_COLORS[0],
             isHost: true,
             score: 0,
+            hints: 3,
             status: 'online'
           }
         },
@@ -113,11 +135,34 @@ export default function RoomPage() {
     router.push('/');
   };
 
+
+  const handleHint = useCallback(() => {
+    if (!userId) return;
+    const hintData = useGameStore.getState().useHint(userId);
+    if (hintData) {
+      updateCell(hintData.row, hintData.col, hintData.value, userId);
+      broadcastMove(hintData.row, hintData.col, hintData.value);
+    }
+  }, [userId, updateCell, broadcastMove]);
+
+
   const handleNumpadClick = useCallback((num: number) => {
     if (!selectedCell || !userId) return;
+
+    // Check if correct
+    if (solution) {
+      const isCorrect = solution[selectedCell.row][selectedCell.col] === num;
+      if (isCorrect) {
+        toast.success('✅', { duration: 1500, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
+      } else {
+        toast.error('❌', { duration: 1500, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
+      }
+    }
+
     updateCell(selectedCell.row, selectedCell.col, num, userId);
     broadcastMove(selectedCell.row, selectedCell.col, num);
-  }, [selectedCell, userId, updateCell, broadcastMove]);
+  }, [selectedCell, userId, updateCell, broadcastMove, solution]);
+
 
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center bg-background text-foreground">Loading room...</div>;
@@ -149,7 +194,7 @@ export default function RoomPage() {
               {username?.charAt(0).toUpperCase()}
             </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => {}} className="px-2">
+          <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(true)} className="px-2">
             <Settings className="w-5 h-5" />
           </Button>
           <Button variant="outline" size="sm" onClick={leaveRoom}>
@@ -194,16 +239,29 @@ export default function RoomPage() {
             <div className="p-4 border-b border-border bg-background/50">
               <h2 className="font-semibold">Chat</h2>
             </div>
-            <div className="flex-1 p-4 flex flex-col justify-end text-sm text-secondary italic">
-              Chat coming soon...
+            <div className="flex-1 p-4 flex flex-col overflow-y-auto space-y-2 text-sm">
+              {messages.length === 0 ? (
+                <div className="text-secondary italic text-center mt-auto mb-auto">No messages yet.</div>
+              ) : (
+                messages.map(msg => (
+                  <div key={msg.id} className="flex flex-col">
+                    <span className="font-semibold text-xs">{msg.username}</span>
+                    <span className="bg-secondary/10 px-2 py-1 rounded-md w-fit max-w-full break-words">{msg.text}</span>
+                  </div>
+                ))
+              )}
+              <div ref={chatEndRef} />
             </div>
             <div className="p-3 border-t border-border">
-              <input
-                type="text"
-                placeholder="Type a message..."
-                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-foreground"
-                disabled
-              />
+              <form onSubmit={handleChatSubmit}>
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  placeholder="Type a message..."
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-foreground"
+                />
+              </form>
             </div>
           </Card>
         </div>
@@ -230,13 +288,15 @@ export default function RoomPage() {
             />
 
             {/* Controls */}
-            <div className="w-full flex justify-between items-center gap-4">
+            <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => useGameStore.getState().undo()}>
-                  <RotateCcw className="w-4 h-4 mr-2" /> Undo
+
+                <Button variant="outline" size="sm" onClick={handleHint} disabled={hintsRemaining <= 0}>
+                  <Lightbulb className="w-4 h-4 mr-2" /> Hint ({hintsRemaining})
                 </Button>
+
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap justify-center gap-2">
                 {/* Number Pad for Mobile/Mouse users */}
                 {[1,2,3,4,5,6,7,8,9].map(n => (
                   <button
@@ -252,6 +312,15 @@ export default function RoomPage() {
           </div>
         </div>
       </main>
+
+      <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Settings">
+        <div className="space-y-4">
+          <p className="text-secondary text-sm">Settings coming soon...</p>
+          <div className="flex justify-end">
+            <Button onClick={() => setIsSettingsOpen(false)}>Close</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
