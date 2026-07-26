@@ -7,6 +7,7 @@ export interface Player {
   color: string;
   isHost: boolean;
   score: number;
+  hints: number;
   status: 'online' | 'offline';
   cursor?: { row: number; col: number } | null;
 }
@@ -33,4 +34,12 @@ export interface RoomState {
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  userId: string;
+  username: string;
+  text: string;
+  timestamp: number;
 }
