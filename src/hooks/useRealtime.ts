@@ -13,7 +13,13 @@ export function useRealtime(roomId: string) {
   const [locks, setLocks] = useState<Record<string, { userId: string, expiresAt: number }>>({});
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
-    useEffect(() => {
+
+  // Status koneksi WebSocket
+  const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED'>('CONNECTING');
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  useEffect(() => {
+
     if (!roomId || !userId || !username) return;
 
     const channel = supabase.channel(`room:${roomId}`, {
@@ -66,9 +72,14 @@ export function useRealtime(roomId: string) {
           });
 
           if (changed) {
-            store.setRoom({ ...store.room, players: newPlayers });
+            const updatedRoom = { ...store.room, players: newPlayers };
+            store.setRoom(updatedRoom);
+            channel.send({
+              type: 'broadcast',
+              event: 'sync_state',
+              payload: { room: updatedRoom, grid: store.grid, solution: store.solution }
+            });
           }
-          syncHostState();
         }
       })
       .on('presence', { event: 'leave' }, ({ leftPresences }) => {
@@ -91,7 +102,14 @@ export function useRealtime(roomId: string) {
         }
       })
       .on('broadcast', { event: 'request_state' }, () => {
-        syncHostState();
+        const store = useGameStore.getState();
+        if (store.room && store.room.hostId === userId) {
+          channel.send({
+            type: 'broadcast',
+            event: 'sync_state',
+            payload: { room: store.room, grid: store.grid, solution: store.solution }
+          });
+        }
       })
       .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
         const store = useGameStore.getState();
@@ -123,20 +141,29 @@ export function useRealtime(roomId: string) {
       .on('broadcast', { event: 'chat' }, ({ payload }) => {
         setMessages(prev => [...prev, payload]);
       })
-      .subscribe(async (status) => {
+      .subscribe(async (status, err) => {
+        setRealtimeStatus(status as 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED');
+        if (err) {
+          setConnectionError(err.message || 'Gagal terhubung ke WebSocket channel.');
+        }
+
         if (status === 'SUBSCRIBED') {
+          setConnectionError(null);
           await channel.track({
             user_id: userId,
             username: username,
             online_at: new Date().toISOString(),
           });
 
-          // Minta state dari host
           channel.send({
             type: 'broadcast',
             event: 'request_state',
             payload: { userId }
           });
+        } else if (status === 'CHANNEL_ERROR') {
+          setConnectionError('CHANNEL_ERROR: Koneksi WebSocket ditolak atau channel error.');
+        } else if (status === 'TIMED_OUT') {
+          setConnectionError('TIMED_OUT: Server Supabase tidak merespons (Timeout).');
         }
       });
 
@@ -222,5 +249,5 @@ export function useRealtime(roomId: string) {
     setMessages(prev => [...prev, msg]);
   };
 
-return { broadcastCursor, broadcastMove, lockCell, locks, messages, broadcastChat };
+return { broadcastCursor, broadcastMove, lockCell, locks, messages, broadcastChat, realtimeStatus, connectionError };
 }
