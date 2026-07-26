@@ -26,6 +26,9 @@ export default function RoomPage() {
   const username = useGameStore(state => state.username);
   const room = useGameStore(state => state.room);
   const setRoom = useGameStore(state => state.setRoom);
+  const enterRoom = useGameStore(state => state.enterRoom);
+  const grid = useGameStore(state => state.grid);
+  const resetGame = useGameStore(state => state.resetGame);
   const setGameData = useGameStore(state => state.setGameData);
   const setUserInfo = useGameStore(state => state.setUserInfo);
   const updateCell = useGameStore(state => state.updateCell);
@@ -95,7 +98,8 @@ export default function RoomPage() {
     if (!roomId) return;
 
     const storedUserId = getOrCreateUserId();
-    const storedUsername = typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') : null;
+    const storedUsername =
+      typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') : null;
 
     if (!storedUserId || !storedUsername) {
       router.push('/');
@@ -106,32 +110,47 @@ export default function RoomPage() {
       setUserInfo(storedUserId, storedUsername);
     }
 
-    const tempConfigStr = sessionStorage.getItem('temp_room_config');
-    let isHost = false;
+    // Ensure we enter the right room and clear stale state if different
+    enterRoom(roomId);
+
+    let isHostFromConfig = false;
     let difficulty: Difficulty = 'medium';
     let mode: GameMode = 'collaborative';
     let maxPlayers = 4;
 
+    const tempConfigStr = sessionStorage.getItem('temp_room_config');
+
     if (tempConfigStr) {
       try {
         const config = JSON.parse(tempConfigStr);
-        isHost = config.isHost;
-        if (isHost) {
+
+        isHostFromConfig = Boolean(config.isHost);
+
+        if (isHostFromConfig) {
           difficulty = (config.difficulty as Difficulty) || 'medium';
           mode = (config.mode as GameMode) || 'collaborative';
           maxPlayers = config.maxPlayers || 4;
         }
-      } catch (e) {
-        console.error('Failed to parse temp_room_config', e);
+      } catch (error) {
+        console.error('Failed to parse temp_room_config', error);
       }
+
       sessionStorage.removeItem('temp_room_config');
     }
 
-    // Initialize room state safely if not present
-    if (!room && isHost) {
+    const currentState = useGameStore.getState();
+    const existingRoom = currentState.room;
+
+    const isHostFromStorage = existingRoom?.hostId === storedUserId;
+    const isHostFromSession = sessionStorage.getItem(`sudoku_host_room_${roomId}`) === '1';
+
+    const isHost = isHostFromConfig || isHostFromStorage || isHostFromSession;
+
+    // Host makes a new puzzle only if there is no room for this roomId
+    if (!existingRoom && isHost) {
       const { initialGrid, solutionGrid } = generatePuzzle(difficulty);
 
-      setRoom({
+      currentState.setRoom({
         id: roomId,
         code: roomId,
         hostId: storedUserId,
@@ -147,18 +166,29 @@ export default function RoomPage() {
             isHost: true,
             score: 0,
             hints: 3,
-            status: 'online'
-          }
+            status: 'online',
+          },
         },
         createdAt: Date.now(),
-        startedAt: Date.now()
+        startedAt: Date.now(),
       });
-      setGameData(initialGrid, solutionGrid);
+
+      currentState.setGameData(initialGrid, solutionGrid);
     }
 
     const t = setTimeout(() => setLoading(false), 0);
+
     return () => clearTimeout(t);
-  }, [roomId, router, userId, room, setRoom, setGameData, setUserInfo]);
+  }, [
+    roomId,
+    router,
+    userId,
+    room,
+    setRoom,
+    setGameData,
+    setUserInfo,
+    enterRoom,
+  ]);
 
   const copyRoomCode = () => {
     navigator.clipboard.writeText(roomId);
@@ -167,7 +197,8 @@ export default function RoomPage() {
   };
 
   const leaveRoom = () => {
-    setRoom(null);
+    sessionStorage.removeItem(`sudoku_host_room_${roomId}`);
+    resetGame();
     router.push('/');
   };
 
@@ -232,6 +263,20 @@ export default function RoomPage() {
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center bg-background text-foreground">Loading room...</div>;
   }
+
+  if (!grid) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6 text-center">
+        <div className="space-y-2">
+          <h2 className="text-lg font-semibold">Menunggu host memulai room...</h2>
+          <p className="text-secondary text-sm">
+            Room code: <span className="font-mono">{roomId}</span>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">

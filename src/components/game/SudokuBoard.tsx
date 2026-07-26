@@ -38,6 +38,11 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
   }, [grid, locks, userId, setSelectedCell, broadcastCursor, lockCell]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('input, textarea, select, [contenteditable="true"]')) {
+      return;
+    }
+
     if (!selectedCell || !grid || !userId) return;
 
     const { row, col } = selectedCell;

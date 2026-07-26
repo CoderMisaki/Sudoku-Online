@@ -16,6 +16,12 @@ export default function Home() {
   const setUserInfo = useGameStore(state => state.setUserInfo);
   const resetGame = useGameStore(state => state.resetGame);
 
+  const clearRoomStateBeforeNavigate = () => {
+    resetGame();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (useGameStore as any).persist?.clearStorage?.();
+  };
+
   const [username, setUsername] = useState('');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
@@ -51,10 +57,11 @@ export default function Home() {
     }
 
     handleSaveUsername(username);
-    resetGame();
+    clearRoomStateBeforeNavigate();
 
     // Generate random room code
     const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    sessionStorage.setItem(`sudoku_host_room_${roomId}`, '1');
 
     // Store room config in session storage for the room page
     sessionStorage.setItem('temp_room_config', JSON.stringify({
@@ -79,7 +86,7 @@ export default function Home() {
     }
 
     handleSaveUsername(username);
-    resetGame();
+    clearRoomStateBeforeNavigate();
     router.push(`/room/${joinCode.trim().toUpperCase()}`);
   };
 

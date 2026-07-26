@@ -6,6 +6,7 @@ import { ChatMessage } from '../types/game';
 
 export function useRealtime(roomId: string) {
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const retryRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userId = useGameStore((state) => state.userId);
   const username = useGameStore((state) => state.username);
 
@@ -73,11 +74,7 @@ export function useRealtime(roomId: string) {
           if (changed) {
             const updatedRoom = { ...store.room, players: newPlayers };
             store.setRoom(updatedRoom);
-            channel.send({
-              type: 'broadcast',
-              event: 'sync_state',
-              payload: { room: updatedRoom, grid: store.grid, solution: store.solution }
-            });
+            syncHostState();
           }
         }
       })
@@ -111,14 +108,20 @@ export function useRealtime(roomId: string) {
         }
       })
       .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
+        // Reject sync from mismatched rooms
+        if (payload?.room?.id && payload.room.id !== roomId) return;
+
         const store = useGameStore.getState();
+
         if (payload.room) {
           store.setRoom(payload.room);
         }
+
         if (payload.grid && payload.solution) {
           store.setGameData(payload.grid, payload.solution);
         }
-        if (payload.messages) {
+
+        if (Array.isArray(payload.messages)) {
           store.setMessages(payload.messages);
         }
       })
@@ -151,31 +154,44 @@ export function useRealtime(roomId: string) {
 
         if (status === 'SUBSCRIBED') {
           setConnectionError(null);
+
           await channel.track({
             user_id: userId,
             username: username,
             online_at: new Date().toISOString(),
           });
 
-          // Mengirim request state langsung dan diulang setelah 800ms untuk mencegah race condition
           const sendRequest = () => {
             channel.send({
               type: 'broadcast',
               event: 'request_state',
-              payload: { userId }
+              payload: { userId },
             });
           };
 
           sendRequest();
-          setTimeout(() => {
-            const currentGrid = useGameStore.getState().grid;
-            if (!currentGrid) {
-              sendRequest();
-            }
-          }, 800);
 
-          // We intentionally do not return the cleanup function inside subscribe since it returns a Subscription.
-          // The interval cleanup handles normal component unmount.
+          if (retryRef.current) {
+            clearInterval(retryRef.current);
+          }
+
+          let attempts = 0;
+
+          retryRef.current = setInterval(() => {
+            const currentGrid = useGameStore.getState().grid;
+
+            attempts += 1;
+
+            if (currentGrid || attempts >= 12) {
+              if (retryRef.current) {
+                clearInterval(retryRef.current);
+                retryRef.current = null;
+              }
+              return;
+            }
+
+            sendRequest();
+          }, 800);
         } else if (status === 'CHANNEL_ERROR') {
           setConnectionError('CHANNEL_ERROR: Koneksi WebSocket ditolak atau channel error.');
         } else if (status === 'TIMED_OUT') {
@@ -200,6 +216,10 @@ export function useRealtime(roomId: string) {
     }, 1000);
 
     return () => {
+      if (retryRef.current) {
+        clearInterval(retryRef.current);
+        retryRef.current = null;
+      }
       clearInterval(interval);
       supabase.removeChannel(channel);
     };

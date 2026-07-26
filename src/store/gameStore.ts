@@ -42,14 +42,15 @@ interface GameStore {
   selectedCell: { row: number; col: number } | null;
   setSelectedCell: (cell: { row: number; col: number } | null) => void;
   resetGame: () => void;
+  enterRoom: (roomId: string) => void;
 }
 
 export const useGameStore = create<GameStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
   messages: [],
-  addMessage: (msg) => set((state) => ({ messages: [...state.messages, msg] })),
-  setMessages: (msgs) => set({ messages: msgs }),
+  addMessage: (msg) => set((state) => ({ messages: [...state.messages, msg].slice(-200) })),
+  setMessages: (msgs) => set({ messages: msgs.slice(-200) }),
 
   userId: null,
   username: null,
@@ -252,6 +253,19 @@ export const useGameStore = create<GameStore>()(
   selectedCell: null,
   setSelectedCell: (cell) => set({ selectedCell: cell }),
   resetGame: () => set({ room: null, grid: null, solution: null, history: [], historyIndex: -1, messages: [], selectedCell: null }),
+  enterRoom: (roomId) => {
+    const state = get();
+    if (state.room?.id === roomId) return;
+    set({
+      room: null,
+      grid: null,
+      solution: null,
+      history: [],
+      historyIndex: -1,
+      messages: [],
+      selectedCell: null,
+    });
+  },
     }),
     {
       name: "sudoku-game-storage",
