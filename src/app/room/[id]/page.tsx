@@ -32,7 +32,7 @@ export default function RoomPage() {
   const [loading, setLoading] = useState(true);
 
   // Initialize Realtime
-  const { broadcastMove } = useRealtime(roomId);
+  const { broadcastMove, broadcastCursor, lockCell, locks } = useRealtime(roomId);
 
   useEffect(() => {
     if (!roomId) return;
@@ -222,7 +222,12 @@ export default function RoomPage() {
               </div>
             </div>
 
-            <SudokuBoard roomId={roomId} />
+            <SudokuBoard
+              broadcastMove={broadcastMove}
+              broadcastCursor={broadcastCursor}
+              lockCell={lockCell}
+              locks={locks}
+            />
 
             {/* Controls */}
             <div className="w-full flex justify-between items-center gap-4">
