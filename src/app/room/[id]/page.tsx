@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, use, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, useCallback } from 'react';
+import { useRouter, useParams } from 'next/navigation';
 import { useGameStore } from '../../../store/gameStore';
 import { useRealtime } from '../../../hooks/useRealtime';
 import { generatePuzzle } from '../../../utils/sudoku';
@@ -14,9 +14,9 @@ import { Difficulty, GameMode } from '../../../types/game';
 
 const PLAYER_COLORS = ['#666666', '#111111', '#333333', '#475569', '#374151'];
 
-export default function RoomPage({ params }: { params: Promise<{ id: string }> }) {
-  const resolvedParams = use(params);
-  const roomId = resolvedParams.id;
+export default function RoomPage() {
+  const params = useParams();
+  const roomId = (params?.id as string) || '';
   const router = useRouter();
 
   const userId = useGameStore(state => state.userId);
@@ -35,8 +35,10 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const { broadcastMove } = useRealtime(roomId);
 
   useEffect(() => {
+    if (!roomId) return;
+
     const storedUserId = getOrCreateUserId();
-    const storedUsername = localStorage.getItem('sudoku_username');
+    const storedUsername = typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') : null;
 
     if (!storedUserId || !storedUsername) {
       router.push('/');
@@ -54,16 +56,21 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     let maxPlayers = 4;
 
     if (tempConfigStr) {
-      const config = JSON.parse(tempConfigStr);
-      isHost = config.isHost;
-      if (isHost) {
-        difficulty = config.difficulty as Difficulty;
-        mode = config.mode as GameMode;
-        maxPlayers = config.maxPlayers;
+      try {
+        const config = JSON.parse(tempConfigStr);
+        isHost = config.isHost;
+        if (isHost) {
+          difficulty = (config.difficulty as Difficulty) || 'medium';
+          mode = (config.mode as GameMode) || 'collaborative';
+          maxPlayers = config.maxPlayers || 4;
+        }
+      } catch (e) {
+        console.error('Failed to parse temp_room_config', e);
       }
       sessionStorage.removeItem('temp_room_config');
     }
 
+    // Initialize room state safely if not present
     if (!room && isHost) {
       const { initialGrid, solutionGrid } = generatePuzzle(difficulty);
 
@@ -206,8 +213,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           <div className="w-full max-w-2xl flex flex-col items-center gap-6">
             <div className="w-full flex justify-between items-end">
               <div>
-                <h2 className="text-2xl font-bold">{room?.difficulty.toUpperCase()}</h2>
-                <p className="text-secondary text-sm">Mode: {room?.mode}</p>
+                <h2 className="text-2xl font-bold">{room?.difficulty?.toUpperCase() || 'MEDIUM'}</h2>
+                <p className="text-secondary text-sm">Mode: {room?.mode || 'collaborative'}</p>
               </div>
               <div className="text-right">
                 <div className="text-2xl font-mono">00:00</div>
