@@ -4,21 +4,21 @@ import React, { useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store/gameStore';
 import { cn } from '../../utils/cn';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useRealtime } from '../../hooks/useRealtime';
 
 interface SudokuBoardProps {
-  roomId: string;
+  broadcastMove: (row: number, col: number, value: number | null) => void;
+  broadcastCursor: (row: number, col: number) => void;
+  lockCell: (row: number, col: number) => boolean | void;
+  locks: Record<string, { userId: string, expiresAt: number }>;
 }
 
-export const SudokuBoard: React.FC<SudokuBoardProps> = ({ roomId }) => {
+export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadcastCursor, lockCell, locks }) => {
   const grid = useGameStore(state => state.grid);
   const selectedCell = useGameStore(state => state.selectedCell);
   const setSelectedCell = useGameStore(state => state.setSelectedCell);
   const room = useGameStore(state => state.room);
   const userId = useGameStore(state => state.userId);
   const updateCell = useGameStore(state => state.updateCell);
-
-  const { broadcastCursor, broadcastMove, lockCell, locks } = useRealtime(roomId);
 
   const handleCellClick = useCallback((row: number, col: number) => {
     if (!grid) return;
