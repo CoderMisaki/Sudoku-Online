@@ -127,12 +127,11 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   // Highlight Minimalist + Indikator Merah Salah
                   "bg-pink-500/40": isSelected,                        // Kotak yang langsung di-tap (Biru/Pink)
                   "bg-pink-500/20": isSameValue && !isSelected,       // Highlight angka kembar
-                  "bg-red-500/20": cell.isConflicting || cell.isWrong, // Background JADI MERAH jika tebakan SALAH / Bentrok
+                  "bg-red-500": cell.isConflicting || cell.isWrong, // Background JADI MERAH jika tebakan SALAH / Bentrok
 
                   // Warna Teks Angka (Kembali menjadi putih seperti default)
-                  "text-foreground font-bold": cell.isLocked, // Angka Asli bawaan soal
+                  "text-foreground font-bold": cell.isLocked || (!cell.isLocked && (cell.isConflicting || cell.isWrong)), // Angka Asli bawaan soal atau tebakan yang salah
                   "text-foreground font-medium": !cell.isLocked && cell.value !== null && !cell.isConflicting && !cell.isWrong, // Angka pemain (Warna putih/gelap biasa)
-                  "text-red-500 font-bold": cell.isConflicting || cell.isWrong, // Angka merah kalau melanggar
 
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }
