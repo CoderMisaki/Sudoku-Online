@@ -4,7 +4,7 @@ import React, { useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store/gameStore';
 import { isValidMove } from '../../utils/sudoku';
 import { cn } from '../../utils/cn';
-import { motion, AnimatePresence } from 'framer-motion';
+
 import toast from 'react-hot-toast';
 
 interface SudokuBoardProps {
@@ -21,7 +21,6 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
   const room = useGameStore(state => state.room);
   const userId = useGameStore(state => state.userId);
   const updateCell = useGameStore(state => state.updateCell);
-  const solution = useGameStore(state => state.solution);
 
   const handleCellClick = useCallback((row: number, col: number) => {
     if (!grid) return;
@@ -63,14 +62,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
           return;
         }
 
-        if (solution) {
-          const isCorrect = solution[row][col] === val;
-          if (isCorrect) {
-            toast.success('✅', { duration: 1200, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
-          } else {
-            toast.error('❌', { duration: 1200, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
-          }
-        }
+
         updateCell(row, col, val, userId);
         broadcastMove(row, col, val);
       }
@@ -88,7 +80,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     } else if (e.key === 'ArrowRight') {
       handleCellClick(row, Math.min(8, col + 1));
     }
-  }, [selectedCell, grid, userId, locks, updateCell, broadcastMove, handleCellClick, solution]);
+  }, [selectedCell, grid, userId, locks, updateCell, broadcastMove, handleCellClick]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -149,21 +141,11 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                 }
               )}
             >
-              <AnimatePresence mode="popLayout">
-                {cell.value !== null && (
-                  <motion.span
-                    key={cell.value}
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.8, opacity: 0 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                    // z-20 dan drop-shadow memastikan angka melayang tegak di atas background warna cell
-                    className="relative z-10 font-sans pointer-events-none"
-                  >
-                    {cell.value}
-                  </motion.span>
-                )}
-              </AnimatePresence>
+              {cell.value !== null && (
+                <span className="relative z-10 font-sans pointer-events-none transition-transform duration-75 scale-100">
+                  {cell.value}
+                </span>
+              )}
 
               {/* Tampilan Catatan / Pensil */}
               {cell.value === null && cell.notes.length > 0 && (

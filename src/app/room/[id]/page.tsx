@@ -71,11 +71,33 @@ export default function RoomPage() {
   };
   const { broadcastMove, broadcastCursor, lockCell, locks, broadcastChat, realtimeStatus, connectionError } = useRealtime(roomId);
   const [chatInput, setChatInput] = useState('');
+  const [elapsedTime, setElapsedTime] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Perhitungan timer real-time berdasarkan room.startedAt
+  useEffect(() => {
+    if (!room?.startedAt) return;
+
+    const updateTimer = () => {
+      const now = Date.now();
+      const diffInSeconds = Math.floor((now - room.startedAt!) / 1000);
+      setElapsedTime(diffInSeconds > 0 ? diffInSeconds : 0);
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [room?.startedAt]);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const secs = (seconds % 60).toString().padStart(2, '0');
+    return `${mins}:${secs}`;
+  };
 
   const handleChatSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -243,7 +265,6 @@ export default function RoomPage() {
     // Blokir jika melanggar logika posisi Sudoku
     if (!isValidMove(grid, row, col, num)) {
       toast.error('Angka sudah ada di baris/kolom/blok!', { id: 'conflict', duration: 1500 });
-      return;
     }
 
     if (solution) {
@@ -404,8 +425,8 @@ export default function RoomPage() {
                 <p className="text-secondary text-sm">Mode: {room?.mode || 'collaborative'}</p>
               </div>
               <div className="text-right">
-                <div className="text-2xl font-mono">00:00</div>
-                <p className="text-secondary text-sm">Elapsed</p>
+                <div className="text-2xl font-mono">{formatTime(elapsedTime)}</div>
+                <p className="text-secondary text-sm">Timer</p>
               </div>
             </div>
 

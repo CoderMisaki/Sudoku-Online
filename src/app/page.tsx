@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 import { Modal } from '@/components/ui/Modal';
 import { Difficulty, GameMode } from '@/types/game';
-import { Play, Users, Sparkles } from 'lucide-react';
+import { Play, Users } from 'lucide-react';
 
 export default function Home() {
   const router = useRouter();
@@ -94,9 +94,6 @@ export default function Home() {
     <div className="flex flex-col flex-1 items-center justify-center bg-background text-foreground p-6">
       <main className="flex flex-col items-center max-w-md w-full gap-8 text-center">
         <div className="space-y-3">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-foreground text-background mb-2 shadow-lg">
-            <Sparkles className="w-8 h-8" />
-          </div>
           <h1 className="text-4xl font-bold tracking-tight">Sudoku Together</h1>
           <p className="text-secondary text-sm">
             Mainkan Sudoku secara multiplayer real-time bersama teman-temanmu.

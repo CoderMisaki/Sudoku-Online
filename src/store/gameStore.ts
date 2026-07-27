@@ -99,20 +99,7 @@ export const useGameStore = create<GameStore>()(
     const isCorrect = value !== null && state.solution[row][col] === value;
     const mode = state.room.mode;
 
-    // In classic mode, reject wrong answers immediately
-    if (mode === 'classic' && value !== null && !isCorrect) {
-      const currentScore = state.room.players[playerId]?.score || 0;
-      const newScore = currentScore - 5;
 
-      const newRoom = {
-        ...state.room,
-        players: {
-          ...state.room.players,
-          [playerId]: { ...state.room.players[playerId], score: newScore }
-        }
-      };
-      return { room: newRoom };
-    }
 
     newGrid[row][col] = {
       ...newGrid[row][col],
