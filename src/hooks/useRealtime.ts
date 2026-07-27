@@ -83,20 +83,37 @@ export function useRealtime(roomId: string) {
       })
       .on('presence', { event: 'leave' }, ({ leftPresences }) => {
         const store = useGameStore.getState();
-        if (store.room && store.room.hostId === userId) {
+        if (store.room) {
           const newPlayers = { ...store.room.players };
           let changed = false;
+          let hostLeft = false;
+
           leftPresences.forEach((p) => {
             if (newPlayers[p.user_id]) {
               newPlayers[p.user_id].status = 'offline';
               changed = true;
+              if (store.room && store.room.hostId === p.user_id) {
+                hostLeft = true;
+              }
             }
           });
 
           if (changed) {
-            const updatedRoom = { ...store.room, players: newPlayers };
+            let newHostId = store.room.hostId;
+            if (hostLeft) {
+              // Find the first online player to be the new host
+              const onlinePlayers = Object.values(newPlayers).filter(p => p.status === 'online');
+              if (onlinePlayers.length > 0) {
+                newHostId = onlinePlayers[0].id;
+                newPlayers[newHostId].isHost = true;
+              }
+            }
+
+            const updatedRoom = { ...store.room, players: newPlayers, hostId: newHostId };
             store.setRoom(updatedRoom);
-            syncHostState();
+            if (newHostId === userId) {
+                syncHostState();
+            }
           }
         }
       })
@@ -145,19 +162,44 @@ export function useRealtime(roomId: string) {
           [key]: { userId: payload.userId, expiresAt: Date.now() + 5000 }
         }));
       })
-      .on('broadcast', { event: 'move' }, ({ payload }) => {
+      .on('broadcast', { event: 'note' }, ({ payload }) => {
+        if (typeof payload.row !== "number" || typeof payload.col !== "number" || typeof payload.note !== "number") return;
+        useGameStore.getState().toggleNote(payload.row, payload.col, payload.note);
+      })
+      .on('broadcast', { event: 'move' }, async ({ payload }) => {
         if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
 
         const store = useGameStore.getState();
-        // Terapkan hasil terverifikasi dari sender
-        store.updateCellWithValidation(payload.row, payload.col, payload.value, payload.userId, payload.isCorrect);
+        // Independently verify the move if it's from another user and not null
+        let isCorrect = payload.isCorrect;
+        if (payload.userId !== userId && payload.value !== null && store.solutionToken) {
+          try {
+            const res = await fetch('/api/game/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                row: payload.row,
+                col: payload.col,
+                value: payload.value,
+                solutionToken: store.solutionToken
+              })
+            });
+            const data = await res.json();
+            isCorrect = Boolean(data.isCorrect);
+          } catch (e) {
+            console.error('Failed to verify move independently', e);
+          }
+        }
+
+        // Terapkan hasil terverifikasi
+        store.updateCellWithValidation(payload.row, payload.col, payload.value, payload.userId, isCorrect);
 
         // Toast notifikasi global
         if (payload.value !== null && store.room) {
           const player = store.room.players[payload.userId];
           const playerName = player?.username || 'Pemain';
 
-          if (payload.isCorrect) {
+          if (isCorrect) {
             toast.success(`${playerName}: Jawaban benar ✅`, { duration: 1500 });
           } else {
             toast.error(`${playerName}: Jawaban salah ❌`, { duration: 1500 });
@@ -327,6 +369,18 @@ export function useRealtime(roomId: string) {
     });
   };
 
+  const broadcastNote = (row: number, col: number, note: number) => {
+    if (!channelRef.current || !userId) return;
+
+    useGameStore.getState().toggleNote(row, col, note);
+
+    channelRef.current.send({
+      type: 'broadcast',
+      event: 'note',
+      payload: { userId, row, col, note },
+    });
+  };
+
   const broadcastChat = (text: string) => {
     if (!channelRef.current || !userId || !username) return;
     const msg: ChatMessage = {
@@ -346,5 +400,5 @@ export function useRealtime(roomId: string) {
     });
   };
 
-  return { broadcastCursor, broadcastMove, lockCell, locks, broadcastChat, realtimeStatus, connectionError };
+  return { broadcastCursor, broadcastMove, broadcastNote, lockCell, locks, broadcastChat, realtimeStatus, connectionError };
 }

@@ -121,11 +121,13 @@ export const useGameStore = create<GameStore>()(
         const currentNotes = newGrid[row][col].notes;
         const hasNote = currentNotes.includes(note);
 
+        let updatedNotes = hasNote ? currentNotes.filter(n => n !== note) : [...currentNotes, note].sort();
+        if (updatedNotes.length > 5) {
+          updatedNotes = updatedNotes.slice(0, 5);
+        }
         newGrid[row][col] = {
           ...newGrid[row][col],
-          notes: hasNote
-            ? currentNotes.filter(n => n !== note)
-            : [...currentNotes, note].sort()
+          notes: updatedNotes
         };
 
         return { grid: newGrid };
@@ -149,7 +151,7 @@ export const useGameStore = create<GameStore>()(
     {
       name: "sudoku-game-storage",
       // AMAN: solutionToken dan solution TIDAK disimpan di localStorage
-      partialize: (state) => ({ room: state.room, grid: state.grid, messages: state.messages }),
+      partialize: (state) => ({ messages: state.messages }),
     }
   )
 );
