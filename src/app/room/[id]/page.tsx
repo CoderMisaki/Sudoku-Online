@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { useGameStore } from '../../../store/gameStore';
 import { useRealtime } from '../../../hooks/useRealtime';
 import { generatePuzzle, isValidMove } from '../../../utils/sudoku';
+import { encryptSolution } from '../../../utils/security';
 import { getOrCreateUserId } from '../../../utils/uuid';
 import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
@@ -31,8 +32,6 @@ export default function RoomPage() {
   const resetGame = useGameStore(state => state.resetGame);
   const setGameData = useGameStore(state => state.setGameData);
   const setUserInfo = useGameStore(state => state.setUserInfo);
-  const updateCell = useGameStore(state => state.updateCell);
-  const solution = useGameStore(state => state.solution);
   const selectedCell = useGameStore(state => state.selectedCell);
   const messages = useGameStore(state => state.messages);
   const player = useGameStore(state => state.room?.players[userId || '']);
@@ -171,7 +170,7 @@ export default function RoomPage() {
     // Host makes a new puzzle only if there is no room for this roomId
     if (!existingRoom && isHost) {
       const { initialGrid, solutionGrid } = generatePuzzle(difficulty);
-
+      const encryptedToken = encryptSolution(solutionGrid);
       currentState.setRoom({
         id: roomId,
         code: roomId,
@@ -184,7 +183,7 @@ export default function RoomPage() {
           [storedUserId]: {
             id: storedUserId,
             username: storedUsername,
-            color: PLAYER_COLORS[0],
+            color: '#3b82f6',
             isHost: true,
             score: 0,
             hints: 3,
@@ -194,8 +193,8 @@ export default function RoomPage() {
         createdAt: Date.now(),
         startedAt: Date.now(),
       });
+      currentState.setGameData(initialGrid, encryptedToken);
 
-      currentState.setGameData(initialGrid, solutionGrid);
     }
 
     const t = setTimeout(() => setLoading(false), 0);
@@ -225,60 +224,57 @@ export default function RoomPage() {
   };
 
 
-  const handleHint = useCallback(() => {
-    if (!userId) return;
-    if (!selectedCell) {
+  const handleHint = useCallback(async () => {
+    if (!userId || !selectedCell) {
       toast.error('Pilih kotak kosong terlebih dahulu untuk menggunakan hint!');
       return;
     }
+    const store = useGameStore.getState();
+    const player = store.room?.players[userId];
+    if (!player || player.hints <= 0) return;
+    if (store.grid && store.grid[selectedCell.row][selectedCell.col].isLocked) return;
 
-    const hintData = useGameStore.getState().useHint(userId);
-    if (hintData) {
-      updateCell(hintData.row, hintData.col, hintData.value, userId);
-      broadcastMove(hintData.row, hintData.col, hintData.value);
-      toast.success('Hint digunakan untuk 1 kotak!');
-    } else {
-      toast.error('Pilih kotak yang belum terisi angka yang benar.');
+    if (store.solutionToken) {
+      try {
+        const res = await fetch('/api/game/hint', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ row: selectedCell.row, col: selectedCell.col, solutionToken: store.solutionToken })
+        });
+        const data = await res.json();
+        if (data.value !== undefined) {
+          broadcastMove(selectedCell.row, selectedCell.col, data.value);
+          store.updatePlayer(userId, { hints: player.hints - 1 });
+          toast.success('Hint digunakan untuk 1 kotak!');
+        }
+      } catch (e) {
+        console.error('Gagal mendapatkan hint', e);
+      }
     }
-  }, [userId, selectedCell, updateCell, broadcastMove]);
+  }, [userId, selectedCell, broadcastMove]);
+
 
 
   const handleNumpadClick = useCallback((num: number) => {
     if (!selectedCell || !userId) return;
-
-    // Tarik state grid manual agar kita bisa jalankan verifikasinya
-    const grid = useGameStore.getState().grid;
-    if (!grid) return;
-
     const { row, col } = selectedCell;
-    const cell = grid[row][col];
-
-    if (cell.isLocked) return;
-
-    // Cek apakah cell sedang dikunci pemain lain
     const key = `${row}-${col}`;
     const currentLock = locks[key];
+
     if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
       return;
     }
 
-    // Blokir jika melanggar logika posisi Sudoku
-    if (!isValidMove(grid, row, col, num)) {
+    const currentGrid = useGameStore.getState().grid;
+    if (currentGrid && currentGrid[row][col].isLocked) return;
+
+    if (currentGrid && !isValidMove(currentGrid, row, col, num)) {
       toast.error('Angka sudah ada di baris/kolom/blok!', { id: 'conflict', duration: 1500 });
+      return;
     }
 
-    if (solution) {
-      const isCorrect = solution[row][col] === num;
-      if (isCorrect) {
-        toast.success('✅', { duration: 1500, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
-      } else {
-        toast.error('❌', { duration: 1500, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
-      }
-    }
-
-    updateCell(row, col, num, userId);
     broadcastMove(row, col, num);
-  }, [selectedCell, userId, updateCell, broadcastMove, solution, locks]);
+  }, [selectedCell, userId, broadcastMove, locks]);
 
 
   if (loading) {

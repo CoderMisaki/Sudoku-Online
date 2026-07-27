@@ -3,6 +3,8 @@ import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { ChatMessage } from '../types/game';
+import { moveRateLimiter } from '../utils/rateLimiter';
+import toast from 'react-hot-toast';
 
 export function useRealtime(roomId: string) {
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -35,11 +37,11 @@ export function useRealtime(roomId: string) {
 
     const syncHostState = () => {
       const store = useGameStore.getState();
-      if (store.room && store.grid && store.solution) {
+      if (store.room && store.grid && store.solutionToken) {
         channel.send({
           type: 'broadcast',
           event: 'sync_state',
-          payload: { room: store.room, grid: store.grid, solution: store.solution, messages: store.messages }
+          payload: { room: store.room, grid: store.grid, solutionToken: store.solutionToken, messages: store.messages, senderId: userId }
         });
       }
     };
@@ -100,26 +102,29 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'request_state' }, () => {
         const store = useGameStore.getState();
+        // HANYA Host yang boleh menyiarkan sync_state
         if (store.room && store.room.hostId === userId) {
           channel.send({
             type: 'broadcast',
             event: 'sync_state',
-            payload: { room: store.room, grid: store.grid, solution: store.solution, messages: store.messages }
+            payload: { room: store.room, grid: store.grid, solutionToken: store.solutionToken, messages: store.messages, senderId: userId }
           });
         }
       })
       .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
-        // Reject sync from mismatched rooms
-        if (payload?.room?.id && payload.room.id !== roomId) return;
-
         const store = useGameStore.getState();
+
+        // Anti Event-Spoofing: Abaikan sync_state jika room ID tidak cocok atau bukan disiarkan oleh Host
+        if (!payload?.room || payload.room.id !== roomId || payload.senderId !== payload.room.hostId) {
+          return;
+        }
 
         if (payload.room) {
           store.setRoom(payload.room);
         }
 
-        if (payload.grid && payload.solution) {
-          store.setGameData(payload.grid, payload.solution);
+        if (payload.grid && payload.solutionToken) {
+          store.setGameData(payload.grid, payload.solutionToken);
         }
 
         if (Array.isArray(payload.messages)) {
@@ -144,21 +149,18 @@ export function useRealtime(roomId: string) {
         if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
 
         const store = useGameStore.getState();
-        store.updateCell(payload.row, payload.col, payload.value, payload.userId);
+        // Terapkan hasil terverifikasi dari sender
+        store.updateCellWithValidation(payload.row, payload.col, payload.value, payload.userId, payload.isCorrect);
 
-        if (payload.value !== null && store.solution && store.room) {
-          const isCorrect = store.solution[payload.row][payload.col] === payload.value;
+        // Toast notifikasi global
+        if (payload.value !== null && store.room) {
           const player = store.room.players[payload.userId];
           const playerName = player?.username || 'Pemain';
 
-          if (isCorrect) {
-            import('react-hot-toast').then(({ default: toast }) => {
-              toast.success(`${playerName}: Jawaban benar ✅`, { duration: 1500 });
-            });
+          if (payload.isCorrect) {
+            toast.success(`${playerName}: Jawaban benar ✅`, { duration: 1500 });
           } else {
-            import('react-hot-toast').then(({ default: toast }) => {
-              toast.error(`${playerName}: Jawaban salah ❌`, { duration: 1500 });
-            });
+            toast.error(`${playerName}: Jawaban salah ❌`, { duration: 1500 });
           }
         }
       })
@@ -278,12 +280,42 @@ export function useRealtime(roomId: string) {
     return true; // Locked successfully
   };
 
-  const broadcastMove = (row: number, col: number, value: number | null) => {
+  const broadcastMove = async (row: number, col: number, value: number | null) => {
     if (!channelRef.current || !userId) return;
+
+    // 1. Proteksi Anti-Bot (Rate Limiting)
+    if (!moveRateLimiter.checkAllowed()) return;
+
+    const store = useGameStore.getState();
+    let isCorrect = false;
+
+    // 2. Verifikasi jawaban ke Server API Route secara aman
+    if (value !== null && store.solutionToken) {
+      try {
+        const res = await fetch('/api/game/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            row,
+            col,
+            value,
+            solutionToken: store.solutionToken
+          })
+        });
+        const data = await res.json();
+        isCorrect = Boolean(data.isCorrect);
+      } catch (e) {
+        console.error('Gagal verifikasi jawaban ke server', e);
+      }
+    }
+
+    // 3. Update State Lokal & Disiarkan Hasil Resmi ke Seluruh Pemain
+    store.updateCellWithValidation(row, col, value, userId, isCorrect);
+
     channelRef.current.send({
       type: 'broadcast',
       event: 'move',
-      payload: { userId, row, col, value },
+      payload: { userId, row, col, value, isCorrect },
     });
   };
 
@@ -306,5 +338,5 @@ export function useRealtime(roomId: string) {
     });
   };
 
-return { broadcastCursor, broadcastMove, lockCell, locks, broadcastChat, realtimeStatus, connectionError };
+  return { broadcastCursor, broadcastMove, lockCell, locks, broadcastChat, realtimeStatus, connectionError };
 }
