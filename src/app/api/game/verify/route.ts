@@ -13,7 +13,7 @@ export function decryptSolution(token: string): number[][] | null {
     let decrypted = decipher.update(encryptedText);
     decrypted = Buffer.concat([decrypted, decipher.final()]);
     return JSON.parse(decrypted.toString());
-  } catch (err) {
+  } catch {
     return null;
   }
 }
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     const isCorrect = solution[row][col] === value;
 
     return NextResponse.json({ isCorrect });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

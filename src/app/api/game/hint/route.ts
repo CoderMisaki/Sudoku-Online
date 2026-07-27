@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const value = solution[row][col];
 
     return NextResponse.json({ value });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

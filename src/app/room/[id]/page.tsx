@@ -16,7 +16,6 @@ import { isSupabaseEnvValid } from '../../../services/supabase';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
 
-const PLAYER_COLORS = ['#666666', '#111111', '#333333', '#475569', '#374151'];
 
 export default function RoomPage() {
   const params = useParams();
@@ -420,10 +419,6 @@ export default function RoomPage() {
                 <h2 className="text-2xl font-bold">{room?.difficulty?.toUpperCase() || 'MEDIUM'}</h2>
                 <p className="text-secondary text-sm">Mode: {room?.mode || 'collaborative'}</p>
               </div>
-              <div className="text-right">
-                <div className="text-2xl font-mono">{formatTime(elapsedTime)}</div>
-                <p className="text-secondary text-sm">Timer</p>
-              </div>
             </div>
 
             <SudokuBoard
@@ -432,6 +427,11 @@ export default function RoomPage() {
               lockCell={lockCell}
               locks={locks}
             />
+
+            <div className="flex flex-col items-center">
+              <div className="text-2xl font-mono">{formatTime(elapsedTime)}</div>
+              <p className="text-secondary text-sm">Timer</p>
+            </div>
 
             {/* Controls */}
             <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
