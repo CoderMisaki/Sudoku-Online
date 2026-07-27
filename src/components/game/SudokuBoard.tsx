@@ -2,7 +2,6 @@
 
 import React, { useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store/gameStore';
-import { isValidMove } from '../../utils/sudoku';
 import { cn } from '../../utils/cn';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -57,11 +56,6 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     if (e.key >= '1' && e.key <= '9') {
       const val = parseInt(e.key);
       if (!cell.isLocked) {
-        // Cegah spam angka bila melanggar aturan blok/baris/kolom
-        if (!isValidMove(grid, row, col, val)) {
-          toast.error('Angka sudah ada di baris/kolom/blok!', { id: 'conflict', duration: 1500 });
-          return;
-        }
 
         if (solution) {
           const isCorrect = solution[row][col] === val;
@@ -138,12 +132,11 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   // Highlight Minimalist + Indikator Merah Salah
                   "bg-pink-500/40": isSelected,                        // Kotak yang langsung di-tap (Biru/Pink)
                   "bg-pink-500/20": isSameValue && !isSelected,       // Highlight angka kembar
-                  "bg-red-500/20": cell.isConflicting || cell.isWrong, // Background JADI MERAH jika tebakan SALAH / Bentrok
+                  "bg-red-500": cell.value !== null && (cell.isConflicting || cell.isWrong), // Background JADI MERAH jika tebakan SALAH / Bentrok
 
                   // Warna Teks Angka (Kembali menjadi putih seperti default)
                   "text-foreground font-bold": cell.isLocked, // Angka Asli bawaan soal
-                  "text-foreground font-medium": !cell.isLocked && cell.value !== null && !cell.isConflicting && !cell.isWrong, // Angka pemain (Warna putih/gelap biasa)
-                  "text-red-500 font-bold": cell.isConflicting || cell.isWrong, // Angka merah kalau melanggar
+                  "text-foreground font-medium": !cell.isLocked && cell.value !== null, // Angka pemain (Warna putih/gelap biasa)
 
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }

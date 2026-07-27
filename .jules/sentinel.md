@@ -15,3 +15,14 @@ Vulnerability Patterns:
 - **Improper State Isolation:** Global state persistence across distinct conceptual bounds without validation.
 - **Missing Event Scoping:** Web socket listener processing broadcast commands regardless of destination contexts (missing room validation checks in `sync_state`).
 - **Global Listener Interception:** Failing to ignore targeted text inputs within document-level `keydown` events.
+
+2024-07-27 - UI Input Constraints Hiding Global Game Logic
+
+Learnings:
+- UI components should not perform validation checks that bypass core global game rules (e.g. `isValidMove` in the UI intercepted bad moves before the store's `classic` mode logic could catch them and apply scoring penalties).
+
+Findings:
+- `isValidMove` in `SudokuBoard.tsx` blocked wrong inputs early, preventing the `-5` score penalty defined in `gameStore.ts` from applying.
+
+Vulnerability Patterns:
+- **Scattered Validation Logic:** Having partial validation in the view layer preventing necessary logic located in the central state/domain layer from executing.
