@@ -24,6 +24,7 @@ export function useRealtime(roomId: string) {
 
     const channel = supabase.channel(`room:${roomId}`, {
       config: {
+        broadcast: { self: false, ack: false },
         presence: {
           key: userId,
         },
@@ -141,7 +142,25 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'move' }, ({ payload }) => {
         if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
-        useGameStore.getState().updateCell(payload.row, payload.col, payload.value, payload.userId);
+
+        const store = useGameStore.getState();
+        store.updateCell(payload.row, payload.col, payload.value, payload.userId);
+
+        if (payload.value !== null && store.solution && store.room) {
+          const isCorrect = store.solution[payload.row][payload.col] === payload.value;
+          const player = store.room.players[payload.userId];
+          const playerName = player?.username || 'Pemain';
+
+          if (isCorrect) {
+            import('react-hot-toast').then(({ default: toast }) => {
+              toast.success(`${playerName}: Jawaban benar ✅`, { duration: 1500 });
+            });
+          } else {
+            import('react-hot-toast').then(({ default: toast }) => {
+              toast.error(`${playerName}: Jawaban salah ❌`, { duration: 1500 });
+            });
+          }
+        }
       })
       .on('broadcast', { event: 'chat' }, ({ payload }) => {
         useGameStore.getState().addMessage(payload);
@@ -277,12 +296,14 @@ export function useRealtime(roomId: string) {
       text,
       timestamp: Date.now()
     };
+
+    // Update lokal instan + broadcast serentak
+    useGameStore.getState().addMessage(msg);
     channelRef.current.send({
       type: 'broadcast',
       event: 'chat',
       payload: msg,
     });
-    useGameStore.getState().addMessage(msg);
   };
 
 return { broadcastCursor, broadcastMove, lockCell, locks, broadcastChat, realtimeStatus, connectionError };
