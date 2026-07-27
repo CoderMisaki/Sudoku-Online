@@ -20,7 +20,6 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
   const setSelectedCell = useGameStore(state => state.setSelectedCell);
   const room = useGameStore(state => state.room);
   const userId = useGameStore(state => state.userId);
-  const updateCell = useGameStore(state => state.updateCell);
 
   const handleCellClick = useCallback((row: number, col: number) => {
     if (!grid) return;
@@ -63,12 +62,10 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
         }
 
 
-        updateCell(row, col, val, userId);
         broadcastMove(row, col, val);
       }
     } else if (e.key === 'Backspace' || e.key === 'Delete') {
       if (!cell.isLocked) {
-        updateCell(row, col, null, userId);
         broadcastMove(row, col, null);
       }
     } else if (e.key === 'ArrowUp') {
@@ -80,7 +77,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     } else if (e.key === 'ArrowRight') {
       handleCellClick(row, Math.min(8, col + 1));
     }
-  }, [selectedCell, grid, userId, locks, updateCell, broadcastMove, handleCellClick]);
+  }, [selectedCell, grid, userId, locks, broadcastMove, handleCellClick]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
