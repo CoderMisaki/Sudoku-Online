@@ -4,13 +4,14 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useGameStore } from '../../../store/gameStore';
 import { useRealtime } from '../../../hooks/useRealtime';
-import { isValidMove } from '../../../utils/sudoku';
+import { generatePuzzle, isValidMove } from '../../../utils/sudoku';
+import { encryptSolution } from '../../../utils/security';
 import { getOrCreateUserId } from '../../../utils/uuid';
 import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
-import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser } from 'lucide-react';
+import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
@@ -39,7 +40,6 @@ export default function RoomPage() {
   const [loading, setLoading] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
-  const [isPencilMode, setIsPencilMode] = useState(false);
 
 
   const applyTheme = useCallback((newTheme: 'light' | 'dark' | 'system') => {
@@ -67,7 +67,7 @@ export default function RoomPage() {
     localStorage.setItem('sudoku_theme', newTheme);
     applyTheme(newTheme);
   };
-  const { broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, broadcastChat, realtimeStatus, connectionError } = useRealtime(roomId);
+  const { broadcastMove, broadcastCursor, lockCell, locks, broadcastChat, realtimeStatus, connectionError } = useRealtime(roomId);
   const [chatInput, setChatInput] = useState('');
   const [elapsedTime, setElapsedTime] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -168,6 +168,8 @@ export default function RoomPage() {
 
     // Host makes a new puzzle only if there is no room for this roomId
     if (!existingRoom && isHost) {
+      const { initialGrid, solutionGrid } = generatePuzzle(difficulty);
+      const encryptedToken = encryptSolution(solutionGrid);
       currentState.setRoom({
         id: roomId,
         code: roomId,
@@ -190,19 +192,7 @@ export default function RoomPage() {
         createdAt: Date.now(),
         startedAt: Date.now(),
       });
-
-      fetch('/api/game/create-room', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ difficulty }),
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.initialGrid && data.solutionToken) {
-          currentState.setGameData(data.initialGrid, data.solutionToken);
-        }
-      })
-      .catch(err => console.error('Failed to initialize room data:', err));
+      currentState.setGameData(initialGrid, encryptedToken);
 
     }
 
@@ -277,30 +267,13 @@ export default function RoomPage() {
     const currentGrid = useGameStore.getState().grid;
     if (currentGrid && currentGrid[row][col].isLocked) return;
 
-    if (isPencilMode && currentGrid && currentGrid[row][col].value === null) {
-      broadcastNote(row, col, num);
-    } else {
-      broadcastMove(row, col, num);
-    }
-  }, [selectedCell, userId, broadcastMove, broadcastNote, locks, isPencilMode]);
-
-  const handleEraserClick = useCallback(() => {
-    if (!selectedCell || !userId) return;
-    const { row, col } = selectedCell;
-    const key = `${row}-${col}`;
-    const currentLock = locks[key];
-
-    if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
+    if (currentGrid && !isValidMove(currentGrid, row, col, num)) {
+      toast.error('Angka sudah ada di baris/kolom/blok!', { id: 'conflict', duration: 1500 });
       return;
     }
 
-    const currentGrid = useGameStore.getState().grid;
-    if (currentGrid && currentGrid[row][col].isLocked) return;
-
-    // Broadcast null to clear cell value
-    broadcastMove(row, col, null);
+    broadcastMove(row, col, num);
   }, [selectedCell, userId, broadcastMove, locks]);
-
 
 
   if (loading) {
@@ -450,11 +423,9 @@ export default function RoomPage() {
 
             <SudokuBoard
               broadcastMove={broadcastMove}
-              broadcastNote={broadcastNote}
               broadcastCursor={broadcastCursor}
               lockCell={lockCell}
               locks={locks}
-              isPencilMode={isPencilMode}
             />
 
             <div className="flex flex-col items-center">
@@ -468,12 +439,6 @@ export default function RoomPage() {
 
                 <Button variant="outline" size="sm" onClick={handleHint} disabled={hintsRemaining <= 0}>
                   <Lightbulb className="w-4 h-4 mr-2" /> Hint ({hintsRemaining})
-                </Button>
-                <Button variant={isPencilMode ? "primary" : "outline"} size="sm" onClick={() => setIsPencilMode(!isPencilMode)}>
-                  <Edit2 className="w-4 h-4 mr-2" /> Note
-                </Button>
-                <Button variant="outline" size="sm" onClick={handleEraserClick}>
-                  <Eraser className="w-4 h-4 mr-2" /> Eraser
                 </Button>
 
               </div>

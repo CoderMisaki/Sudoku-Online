@@ -3,3 +3,12 @@
 - Updated `src/hooks/useRealtime.ts` to trigger a local `toast.success` and `toast.error` during `broadcastMove` so the initiating player can receive visual validation of their correctness locally, just before or simultaneously as the move is broadcasted globally.
 - Cleaned up unneeded Vercel boilerplate SVGs and implemented a custom minimalist Sudoku SVG grid as `icon.svg`.
 - Resolved linting errors (`@typescript-eslint/no-unused-vars`) in `hint` and `verify` API routes that surfaced from unutilized `error`/`err` variables in `catch` blocks.
+
+2026-07-27 - [Sudoku Security and Feature Improvements]
+- Addressed a critical security anomaly where `ROOM_SECRET_KEY` was exposed to the client by migrating room generation and solution token encryption to a new server-side API route (`/api/game/create-room`).
+- Fixed vulnerability regarding payload spoofing in `useRealtime.ts` by independently validating incoming move broadcasts directly through the `/api/game/verify` route using the encrypted `solutionToken`.
+- Removed fallback keys in `src/services/supabase.ts` for environment variable safety and corrected `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+- Corrected a single point of failure in the host synchronization logic in `useRealtime.ts`, enabling seamless Host Migration when the current host disconnects.
+- Cleaned up state storage inconsistencies in `gameStore.ts` `partialize` configuration to only persist `messages` across reloads to avoid visual glitches or desync behavior.
+- Softened strict validations in `SudokuBoard.tsx` allowing intentional conflicting numbers by users.
+- Introduced `Pencil/Eraser` utilities integrated deeply into `useRealtime.ts` (with a new `note` event type for broadcasting) and `gameStore.ts` (keeping a 5-note limit for cells in memory state).

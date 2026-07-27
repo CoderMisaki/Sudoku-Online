@@ -9,12 +9,14 @@ import toast from 'react-hot-toast';
 
 interface SudokuBoardProps {
   broadcastMove: (row: number, col: number, value: number | null) => void;
+  broadcastNote: (row: number, col: number, note: number) => void;
   broadcastCursor: (row: number, col: number) => void;
   lockCell: (row: number, col: number) => boolean | void;
   locks: Record<string, { userId: string, expiresAt: number }>;
+  isPencilMode: boolean;
 }
 
-export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadcastCursor, lockCell, locks }) => {
+export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, isPencilMode }) => {
   const grid = useGameStore(state => state.grid);
   const selectedCell = useGameStore(state => state.selectedCell);
   const setSelectedCell = useGameStore(state => state.setSelectedCell);
@@ -55,14 +57,11 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     if (e.key >= '1' && e.key <= '9') {
       const val = parseInt(e.key);
       if (!cell.isLocked) {
-        // Cegah spam angka bila melanggar aturan blok/baris/kolom
-        if (!isValidMove(grid, row, col, val)) {
-          toast.error('Angka sudah ada di baris/kolom/blok!', { id: 'conflict', duration: 1500 });
-          return;
+        if (isPencilMode && cell.value === null) {
+          broadcastNote(row, col, val);
+        } else {
+          broadcastMove(row, col, val);
         }
-
-
-        broadcastMove(row, col, val);
       }
     } else if (e.key === 'Backspace' || e.key === 'Delete') {
       if (!cell.isLocked) {
@@ -77,7 +76,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     } else if (e.key === 'ArrowRight') {
       handleCellClick(row, Math.min(8, col + 1));
     }
-  }, [selectedCell, grid, userId, locks, broadcastMove, handleCellClick]);
+  }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
