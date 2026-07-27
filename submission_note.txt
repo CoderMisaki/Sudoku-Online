@@ -1,7 +1,11 @@
-The requested fixes have been implemented successfully:
+The requested issues have been resolved:
 
-1. **SudokuBoard.tsx**: The z-10 layering issue on numbers has been fixed, the `bg-red-50` background that turned conflicting cells white is replaced by `bg-red-500/25` for subtle highlight, and cross-highlighting logic (row, col, 3x3 square) was successfully added. Memory constraints prohibiting cross-highlighting were explicitly overridden due to the explicit user request for the exact cross-highlight effects.
-2. **gameStore.ts**: The `Math.max(0, currentScore + scoreDiff)` behavior has been removed so that score calculations explicitly permit falling below 0 (negative scores).
-3. **useRealtime.ts**: Implemented a retry timer on channel `.subscribe()` state connection. It now emits `request_state`, and after 800ms, explicitly resends `request_state` if the `grid` has not successfully populated.
+1. **SudokuBoard Cell Styling on Error**:
+   - The cell background for incorrect or conflicting moves is now solid red (`bg-red-500`) instead of slightly transparent red (`bg-red-500/20`), making it stand out more clearly.
+   - The text color inside error cells is no longer hardcoded to red. It now follows the regular text color based on the dark/light theme (using the `text-foreground` class) so that numbers are easily readable (white in dark mode, black in light mode).
+
+2. **Classic Mode Game Logic**:
+   - For `classic` mode, when a user enters an incorrect number, the number is rejected and not populated into the cell (it remains `null`).
+   - The user will still receive a -5 score penalty for the incorrect attempt, but they will not see the wrong number placed on the board.
 
 Code has successfully been verified against build (`npm run build`) and linter checks (`npm run lint`), and `sentinel.md` has been updated with these significant changes.

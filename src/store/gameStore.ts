@@ -78,11 +78,15 @@ export const useGameStore = create<GameStore>()(
 
         const mode = state.room.mode;
 
+        const isWrongMove = value !== null && !isCorrect;
+        // Pada mode classic jika jawaban salah, angkanya tidak dimasukkan (tetap null)
+        const shouldRejectWrongMove = isWrongMove && mode === 'classic';
+
         newGrid[row][col] = {
           ...newGrid[row][col],
-          value,
-          filledBy: playerId,
-          isWrong: value !== null && !isCorrect
+          value: shouldRejectWrongMove ? null : value,
+          filledBy: shouldRejectWrongMove ? undefined : playerId,
+          isWrong: shouldRejectWrongMove ? false : isWrongMove
         };
 
         const validatedGrid = checkConflicts(newGrid);
