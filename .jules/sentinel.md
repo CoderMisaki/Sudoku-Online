@@ -1,8 +1,5 @@
-
-# 2025-07-27 - [Sudoku Together] Bugfixes and optimizations
-- Avoid useRealtime duplicate hook mountings to prevent Supabase websocket collision
-\n# 2025-07-27 - [Anti-Cheat & Security] Client-side state and websocket spoofing prevention\n- Removed `solution` unencrypted keys from local storage and real-time state.\n- Enforced server-side route checking for solution verifications.\n- Secured `sync_state` updates on WebSocket from spoofing and restricted it to host.
-# 2025-07-27 - [UI & Game Logic] Sudoku styling & logic updates
-- Updated SudokuBoard.tsx to use solid red background for wrong/conflicting moves.
-- Text color now aligns with the default light/dark theme instead of turning red when there is an error.
-- Updated classic mode game logic so that incorrect moves are rejected (value isn't recorded), but score penalties are still applied.
+2024-07-27 - [Sudoku Realtime Logic and Feedback Improvements]
+- Found that toast notifications during an answer verification check (`broadcastMove`) were missing for the player who actually submitted the answer, preventing immediate feedback on success or failure.
+- Updated `src/hooks/useRealtime.ts` to trigger a local `toast.success` and `toast.error` during `broadcastMove` so the initiating player can receive visual validation of their correctness locally, just before or simultaneously as the move is broadcasted globally.
+- Cleaned up unneeded Vercel boilerplate SVGs and implemented a custom minimalist Sudoku SVG grid as `icon.svg`.
+- Resolved linting errors (`@typescript-eslint/no-unused-vars`) in `hint` and `verify` API routes that surfaced from unutilized `error`/`err` variables in `catch` blocks.

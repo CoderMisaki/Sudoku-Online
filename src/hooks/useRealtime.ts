@@ -312,6 +312,14 @@ export function useRealtime(roomId: string) {
     // 3. Update State Lokal & Disiarkan Hasil Resmi ke Seluruh Pemain
     store.updateCellWithValidation(row, col, value, userId, isCorrect);
 
+    if (value !== null) {
+      if (isCorrect) {
+        toast.success('Jawaban benar ✅', { duration: 1500 });
+      } else {
+        toast.error('Jawaban salah ❌', { duration: 1500 });
+      }
+    }
+
     channelRef.current.send({
       type: 'broadcast',
       event: 'move',
