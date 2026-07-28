@@ -118,6 +118,8 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
             }
           }
 
+          const isError = cell.isConflicting || cell.isWrong;
+
           return (
             <div
               key={`${rIndex}-${cIndex}`}
@@ -128,16 +130,22 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "border-b-2 border-foreground": rIndex % 3 === 2 && rIndex !== 8,
                   "border-r-2 border-foreground": cIndex % 3 === 2 && cIndex !== 8,
 
-                  // Highlight Minimalist + Indikator Merah Salah
-                  "bg-secondary/40": isSelected,                        // Kotak yang langsung di-tap
+                  // Highlight sel yang dipilih
+                  "bg-secondary/40": isSelected && !isError,
 
-                  "bg-red-500/80": cell.isConflicting || cell.isWrong, // Background JADI MERAH jika tebakan SALAH / Bentrok
+                  // Background merah HANYA untuk sel yang error/conflict, tapi jangan tutup angka
+                  "bg-red-500/30": isError && !isSelected,
 
-                  // Warna Teks Angka (Kembali menjadi putih seperti default)
-                  "text-foreground font-bold": !isSameValue && (cell.isLocked || (!cell.isLocked && (cell.isConflicting || cell.isWrong))), // Angka Asli bawaan soal atau tebakan yang salah
-                  "text-foreground font-medium": !isSameValue && (!cell.isLocked && cell.value !== null && !cell.isConflicting && !cell.isWrong), // Angka pemain (Warna putih/gelap biasa)
-                  "text-pink-300 font-bold": isSameValue && (cell.isLocked || (!cell.isLocked && (cell.isConflicting || cell.isWrong))), // Angka Asli kembar
-                  "text-pink-300 font-medium": isSameValue && (!cell.isLocked && cell.value !== null && !cell.isConflicting && !cell.isWrong), // Angka pemain kembar
+                  // Highlight angka kembar: gunakan ring/outline pink, BUKAN merubah warna teks saja
+                  "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected && !isError,
+                  "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected && isError,
+                  "ring-2 ring-white ring-inset": isSameValue && isSelected,
+
+                  // Warna teks angka (pastikan terbaca jelas)
+                  "text-foreground font-bold": !isSameValue && (cell.isLocked || isError),
+                  "text-foreground font-medium": !isSameValue && !cell.isLocked && !isError,
+                  "text-pink-500 font-bold": isSameValue && (cell.isLocked || isError),
+                  "text-pink-500 font-medium": isSameValue && !cell.isLocked && !isError,
 
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }
