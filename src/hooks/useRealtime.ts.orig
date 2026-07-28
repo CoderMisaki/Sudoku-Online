@@ -116,7 +116,6 @@ export function useRealtime(roomId: string) {
           leftPresences.forEach((p) => {
             if (newPlayers[p.user_id]) {
               newPlayers[p.user_id].status = 'offline';
-              newPlayers[p.user_id].isHost = false; // Reset status host jika player keluar
               changed = true;
               if (store.room && store.room.hostId === p.user_id) {
                 hostLeft = true;
@@ -131,10 +130,7 @@ export function useRealtime(roomId: string) {
               const onlinePlayers = Object.values(newPlayers).filter(p => p.status === 'online');
               if (onlinePlayers.length > 0) {
                 newHostId = onlinePlayers[0].id;
-                // Pastikan hanya newHostId yang memiliki isHost = true
-                Object.keys(newPlayers).forEach(pid => {
-                  newPlayers[pid].isHost = (pid === newHostId);
-                });
+                newPlayers[newHostId].isHost = true;
               }
             }
 
