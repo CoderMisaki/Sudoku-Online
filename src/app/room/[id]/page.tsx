@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useGameStore } from '../../../store/gameStore';
 import { useRealtime } from '../../../hooks/useRealtime';
-import { isValidMove } from '../../../utils/sudoku';
+// import { isValidMove } from '../../../utils/sudoku';
 import { getOrCreateUserId } from '../../../utils/uuid';
 import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
@@ -97,7 +97,7 @@ export default function RoomPage() {
       } else {
         toast.error('Gagal membuat game baru', { id: 'nextGame' });
       }
-    } catch (e) {
+    } catch {
       toast.error('Gagal membuat game baru', { id: 'nextGame' });
     }
   };
@@ -518,7 +518,7 @@ export default function RoomPage() {
                   onKeyDown={e => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
-                      handleChatSubmit(e);
+                      handleChatSubmit(e as unknown as React.FormEvent);
                     }
                   }}
                   placeholder="Type a message..."

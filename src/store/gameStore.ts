@@ -19,6 +19,7 @@ interface GameStore {
   solutionToken: string | null;
 
   setGameData: (grid: Grid, solutionToken: string) => void;
+  setOptimisticMove: (row: number, col: number, value: number) => void;
   updateCellWithValidation: (row: number, col: number, value: number | null, playerId: string, isCorrect: boolean) => void;
   toggleNote: (row: number, col: number, note: number) => void;
 
@@ -63,6 +64,22 @@ export const useGameStore = create<GameStore>()(
       grid: null,
       solutionToken: null,
 
+      setOptimisticMove: (row, col, value) => set((state) => {
+        if (!state.grid) return state;
+        const currentCell = state.grid[row][col];
+        if (currentCell.isLocked) return state;
+
+        const newGrid = [...state.grid];
+        newGrid[row] = [...newGrid[row]];
+        newGrid[row][col] = {
+          ...newGrid[row][col],
+          value,
+          isPending: true
+        };
+
+        return { grid: newGrid };
+      }),
+
       setGameData: (grid, solutionToken) => {
         const validatedGrid = checkConflicts(grid);
         set({ grid: validatedGrid, solutionToken });
@@ -72,7 +89,8 @@ export const useGameStore = create<GameStore>()(
         if (!state.grid || !state.room) return state;
 
         const currentCell = state.grid[row][col];
-        if (currentCell.isLocked || currentCell.value === value) return state;
+        if (currentCell.isLocked) return state;
+        if (currentCell.value === value && !currentCell.isPending) return state;
 
         const newGrid = [...state.grid];
         newGrid[row] = [...newGrid[row]];
@@ -87,7 +105,8 @@ export const useGameStore = create<GameStore>()(
           ...newGrid[row][col],
           value: shouldRejectWrongMove ? null : value,
           filledBy: shouldRejectWrongMove ? undefined : playerId,
-          isWrong: shouldRejectWrongMove ? false : isWrongMove
+          isWrong: shouldRejectWrongMove ? false : isWrongMove,
+          isPending: false
         };
 
         const validatedGrid = checkConflicts(newGrid);

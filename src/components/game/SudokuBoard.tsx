@@ -2,10 +2,10 @@
 
 import React, { useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store/gameStore';
-import { isValidMove } from '../../utils/sudoku';
+// import { isValidMove } from '../../utils/sudoku';
 import { cn } from '../../utils/cn';
 
-import toast from 'react-hot-toast';
+// import toast from 'react-hot-toast';
 
 interface SudokuBoardProps {
   broadcastMove: (row: number, col: number, value: number | null) => void;

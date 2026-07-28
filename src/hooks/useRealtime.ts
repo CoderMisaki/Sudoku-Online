@@ -167,43 +167,24 @@ export function useRealtime(roomId: string) {
         if (typeof payload.row !== "number" || typeof payload.col !== "number" || typeof payload.note !== "number") return;
         useGameStore.getState().toggleNote(payload.row, payload.col, payload.note);
       })
-      .on('broadcast', { event: 'move' }, async ({ payload }) => {
+      .on('broadcast', { event: 'move' }, ({ payload }) => {
         if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
 
         const store = useGameStore.getState();
-        // Independently verify the move if it's from another user and not null
-        let isCorrect = payload.isCorrect;
-        if (payload.userId !== userId && payload.value !== null && store.solutionToken) {
-          try {
-            const res = await fetch('/api/game/verify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                row: payload.row,
-                col: payload.col,
-                value: payload.value,
-                solutionToken: store.solutionToken
-              })
-            });
-            const data = await res.json();
-            isCorrect = Boolean(data.isCorrect);
-          } catch (e) {
-            console.error('Failed to verify move independently', e);
-          }
-        }
+        const isCorrect = payload.isCorrect;
 
-        // Terapkan hasil terverifikasi
+        // Terapkan hasil yang diterima (Instan dari broadcast)
         store.updateCellWithValidation(payload.row, payload.col, payload.value, payload.userId, isCorrect);
 
-        // Toast notifikasi global
-        if (payload.value !== null && store.room) {
+        // Toast notifikasi global HANYA JIKA BUKAN DARI DIRI SENDIRI
+        if (payload.value !== null && store.room && payload.userId !== userId) {
           const player = store.room.players[payload.userId];
           const playerName = player?.username || 'Pemain';
 
           if (isCorrect) {
-            toast.success(`${playerName}: Jawaban benar ✅`, { duration: 1500 });
+            toast.success(`${playerName}: Jawaban benar ✅`, { id: `move-${payload.row}-${payload.col}-${payload.userId}`, duration: 1500 });
           } else {
-            toast.error(`${playerName}: Jawaban salah ❌`, { duration: 1500 });
+            toast.error(`${playerName}: Jawaban salah ❌`, { id: `move-${payload.row}-${payload.col}-${payload.userId}`, duration: 1500 });
           }
         }
       })
@@ -326,51 +307,63 @@ export function useRealtime(roomId: string) {
     return true; // Locked successfully
   };
 
-  const broadcastMove = async (row: number, col: number, value: number | null) => {
+  const broadcastMove = (row: number, col: number, value: number | null) => {
     if (!channelRef.current || !userId) return;
 
     // 1. Proteksi Anti-Bot (Rate Limiting)
     if (!moveRateLimiter.checkAllowed()) return;
 
     const store = useGameStore.getState();
-    let isCorrect = false;
 
-    // 2. Verifikasi jawaban ke Server API Route secara aman
-    if (value !== null && store.solutionToken) {
-      try {
-        const res = await fetch('/api/game/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            row,
-            col,
-            value,
-            solutionToken: store.solutionToken
-          })
+    // Jika hapus nilai (value === null)
+    if (value === null) {
+      store.updateCellWithValidation(row, col, null, userId, false);
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'move',
+        payload: { userId, row, col, value: null, isCorrect: false },
+      });
+      return;
+    }
+
+    // 2. Optimistic Update (UI Instan)
+    store.setOptimisticMove(row, col, value);
+
+    // 3. Verifikasi jawaban ke Server (Asinkron / Non-blocking)
+    if (store.solutionToken) {
+      fetch('/api/game/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          row,
+          col,
+          value,
+          solutionToken: store.solutionToken
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        const isCorrect = Boolean(data.isCorrect);
+
+        // Update State Lokal Final & Apply Score
+        store.updateCellWithValidation(row, col, value, userId, isCorrect);
+
+        if (isCorrect) {
+          toast.success('Jawaban benar ✅', { id: `move-${row}-${col}`, duration: 1500 });
+        } else {
+          toast.error('Jawaban salah ❌', { id: `move-${row}-${col}`, duration: 1500 });
+        }
+
+        channelRef.current!.send({
+          type: 'broadcast',
+          event: 'move',
+          payload: { userId, row, col, value, isCorrect },
         });
-        const data = await res.json();
-        isCorrect = Boolean(data.isCorrect);
-      } catch (e) {
+      })
+      .catch(e => {
         console.error('Gagal verifikasi jawaban ke server', e);
-      }
+      });
     }
-
-    // 3. Update State Lokal & Disiarkan Hasil Resmi ke Seluruh Pemain
-    store.updateCellWithValidation(row, col, value, userId, isCorrect);
-
-    if (value !== null) {
-      if (isCorrect) {
-        toast.success('Jawaban benar ✅', { duration: 1500 });
-      } else {
-        toast.error('Jawaban salah ❌', { duration: 1500 });
-      }
-    }
-
-    channelRef.current.send({
-      type: 'broadcast',
-      event: 'move',
-      payload: { userId, row, col, value, isCorrect },
-    });
   };
 
   const broadcastNote = (row: number, col: number, note: number) => {
