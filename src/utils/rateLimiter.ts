@@ -1,7 +1,7 @@
 class ActionRateLimiter {
   private lastActionTime: number = 0;
   private actionCount: number = 0;
-  private readonly cooldownMs: number = 150; // Minimal interval 150ms per move (kecepatan maksimal manusia)
+  private readonly cooldownMs: number = 40; // 40ms interval (~25 aksi/detik)
 
   public checkAllowed(): boolean {
     const now = Date.now();
@@ -9,8 +9,8 @@ class ActionRateLimiter {
 
     if (timeDiff < this.cooldownMs) {
       this.actionCount++;
-      if (this.actionCount > 3) {
-        console.warn('Anti-Cheat: Terdeteksi perintah terlalu cepat (Bot/Script)!');
+      if (this.actionCount > 10) {
+        console.warn('Anti-Cheat: Terdeteksi perintah terlalu cepat!');
         return false;
       }
     } else {
