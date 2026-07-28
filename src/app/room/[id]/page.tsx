@@ -10,7 +10,7 @@ import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
-import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser } from 'lucide-react';
+import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
@@ -40,6 +40,7 @@ export default function RoomPage() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [isPencilMode, setIsPencilMode] = useState(false);
+  const [isEraserMode, setIsEraserMode] = useState(false);
 
 
   const applyTheme = useCallback((newTheme: 'light' | 'dark' | 'system') => {
@@ -69,11 +70,39 @@ export default function RoomPage() {
   };
   const { broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, broadcastChat, realtimeStatus, connectionError } = useRealtime(roomId);
   const [chatInput, setChatInput] = useState('');
+  const [newMsgNotif, setNewMsgNotif] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Check if user is scrolled near bottom
+    const chatContainer = chatEndRef.current?.parentElement;
+    if (chatContainer) {
+      // Don't auto-scroll on every render, only when near bottom to prevent screen jumping
+      const isNearBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 150;
+      if (isNearBottom) {
+        requestAnimationFrame(() => {
+          chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        });
+      }
+    } else {
+       requestAnimationFrame(() => {
+          chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+       });
+    }
+
+    // Check if new message is from others and not initial load
+    if (messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      // Only show notif if it's not our own message
+      if (lastMsg.userId !== userId) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setNewMsgNotif(true);
+        const timer = setTimeout(() => setNewMsgNotif(false), 1500);
+        return () => clearTimeout(timer);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
 
   // Perhitungan timer real-time berdasarkan room.startedAt
@@ -106,6 +135,11 @@ export default function RoomPage() {
       if (textarea) {
         textarea.style.height = '40px';
       }
+
+      // Force scroll to bottom when user sends a message
+      requestAnimationFrame(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      });
     }
   };
 
@@ -277,14 +311,22 @@ export default function RoomPage() {
     const currentGrid = useGameStore.getState().grid;
     if (currentGrid && currentGrid[row][col].isLocked) return;
 
-    if (isPencilMode && currentGrid && currentGrid[row][col].value === null) {
+    if (isEraserMode && currentGrid && currentGrid[row][col].value === null) {
+      // Check if note exists, if yes broadcast to remove
+      if (currentGrid[row][col].notes.includes(num)) {
+         broadcastNote(row, col, num);
+      }
+    } else if (isPencilMode && currentGrid && currentGrid[row][col].value === null) {
       broadcastNote(row, col, num);
     } else {
       broadcastMove(row, col, num);
     }
-  }, [selectedCell, userId, broadcastMove, broadcastNote, locks, isPencilMode]);
+  }, [selectedCell, userId, broadcastMove, broadcastNote, locks, isPencilMode, isEraserMode]);
 
   const handleEraserClick = useCallback(() => {
+    setIsEraserMode(!isEraserMode);
+    setIsPencilMode(false);
+
     if (!selectedCell || !userId) return;
     const { row, col } = selectedCell;
     const key = `${row}-${col}`;
@@ -297,9 +339,11 @@ export default function RoomPage() {
     const currentGrid = useGameStore.getState().grid;
     if (currentGrid && currentGrid[row][col].isLocked) return;
 
-    // Broadcast null to clear cell value
-    broadcastMove(row, col, null);
-  }, [selectedCell, userId, broadcastMove, locks]);
+    // Broadcast null to clear cell value if it has a value
+    if (currentGrid && currentGrid[row][col].value !== null) {
+      broadcastMove(row, col, null);
+    }
+  }, [isEraserMode, selectedCell, userId, broadcastMove, locks]);
 
 
 
@@ -406,9 +450,18 @@ export default function RoomPage() {
 
           <Card className="flex-shrink-0 flex flex-col overflow-hidden min-h-[250px] lg:min-h-0 lg:flex-1">
             <div className="p-3 border-b border-border bg-background/50">
-              <h2 className="font-semibold text-sm">Chat</h2>
+              <h2 className="font-semibold text-sm flex items-center justify-between w-full">
+                <div className="flex items-center gap-2">
+                  <MessageCircle className="w-4 h-4" /> Chat
+                </div>
+                {newMsgNotif && (
+                  <span className="text-xs bg-primary text-primary-foreground px-2 py-0.5 rounded-full animate-pulse transition-opacity duration-300 flex items-center gap-1 shadow-sm">
+                    ✉️ +1
+                  </span>
+                )}
+              </h2>
             </div>
-            <div className="flex-1 p-3 flex flex-col overflow-y-auto space-y-2 text-xs sm:text-sm">
+            <div className="flex-1 p-3 flex flex-col overflow-y-auto space-y-2 text-xs sm:text-sm" style={{ maxHeight: '400px' }}>
               {messages.length === 0 ? (
                 <div className="text-secondary italic text-center my-auto">No messages yet.</div>
               ) : (
@@ -423,13 +476,25 @@ export default function RoomPage() {
             </div>
             <div className="p-2.5 border-t border-border">
               <form onSubmit={handleChatSubmit} className="flex items-center gap-2">
-                <input
-                  type="text"
+                <textarea
+                  id="chat-textarea"
                   value={chatInput}
-                  onChange={e => setChatInput(e.target.value)}
+                  onChange={e => {
+                    setChatInput(e.target.value);
+                    e.target.style.height = '40px';
+                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleChatSubmit(e);
+                    }
+                  }}
                   placeholder="Type a message..."
-                  className="flex-1 bg-background border border-border rounded-lg px-3 py-1.5 text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-foreground"
+                  className="flex-1 bg-background border border-border rounded-lg px-3 py-1.5 text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-foreground resize-none min-h-[40px] max-h-[120px] overflow-y-auto"
+                  rows={1}
                 />
+
                 <Button type="submit" size="sm" className="h-8 px-3 text-xs">
                   Send
                 </Button>
@@ -455,6 +520,7 @@ export default function RoomPage() {
               lockCell={lockCell}
               locks={locks}
               isPencilMode={isPencilMode}
+              isEraserMode={isEraserMode}
             />
 
             <div className="flex flex-col items-center">
@@ -469,10 +535,10 @@ export default function RoomPage() {
                 <Button variant="outline" size="sm" onClick={handleHint} disabled={hintsRemaining <= 0}>
                   <Lightbulb className="w-4 h-4 mr-2" /> Hint ({hintsRemaining})
                 </Button>
-                <Button variant={isPencilMode ? "primary" : "outline"} size="sm" onClick={() => setIsPencilMode(!isPencilMode)}>
+                <Button variant={isPencilMode ? "primary" : "outline"} size="sm" onClick={() => { setIsPencilMode(!isPencilMode); setIsEraserMode(false); }}>
                   <Edit2 className="w-4 h-4 mr-2" /> Note
                 </Button>
-                <Button variant="outline" size="sm" onClick={handleEraserClick}>
+                <Button variant={isEraserMode ? "primary" : "outline"} size="sm" onClick={handleEraserClick}>
                   <Eraser className="w-4 h-4 mr-2" /> Eraser
                 </Button>
 

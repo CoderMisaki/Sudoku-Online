@@ -14,9 +14,10 @@ interface SudokuBoardProps {
   lockCell: (row: number, col: number) => boolean | void;
   locks: Record<string, { userId: string, expiresAt: number }>;
   isPencilMode: boolean;
+  isEraserMode: boolean;
 }
 
-export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, isPencilMode }) => {
+export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, isPencilMode, isEraserMode }) => {
   const grid = useGameStore(state => state.grid);
   const selectedCell = useGameStore(state => state.selectedCell);
   const setSelectedCell = useGameStore(state => state.setSelectedCell);
@@ -57,7 +58,11 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     if (e.key >= '1' && e.key <= '9') {
       const val = parseInt(e.key);
       if (!cell.isLocked) {
-        if (isPencilMode && cell.value === null) {
+        if (isEraserMode && cell.value === null) {
+          if (cell.notes.includes(val)) {
+            broadcastNote(row, col, val);
+          }
+        } else if (isPencilMode && cell.value === null) {
           broadcastNote(row, col, val);
         } else {
           broadcastMove(row, col, val);
@@ -76,7 +81,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     } else if (e.key === 'ArrowRight') {
       handleCellClick(row, Math.min(8, col + 1));
     }
-  }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode]);
+  }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -124,9 +129,9 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "border-r-2 border-foreground": cIndex % 3 === 2 && cIndex !== 8,
 
                   // Highlight Minimalist + Indikator Merah Salah
-                  "bg-pink-500/40": isSelected,                        // Kotak yang langsung di-tap (Biru/Pink)
-                  "bg-pink-500/20": isSameValue && !isSelected,       // Highlight angka kembar
-                  "bg-red-500": cell.isConflicting || cell.isWrong, // Background JADI MERAH jika tebakan SALAH / Bentrok
+                  "bg-secondary/40": isSelected,                        // Kotak yang langsung di-tap
+                  "bg-secondary/20": isSameValue && !isSelected,       // Highlight angka kembar
+                  "bg-red-500/80": cell.isConflicting || cell.isWrong, // Background JADI MERAH jika tebakan SALAH / Bentrok
 
                   // Warna Teks Angka (Kembali menjadi putih seperti default)
                   "text-foreground font-bold": cell.isLocked || (!cell.isLocked && (cell.isConflicting || cell.isWrong)), // Angka Asli bawaan soal atau tebakan yang salah
