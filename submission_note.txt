@@ -1,7 +1,11 @@
-The requested fixes have been implemented successfully:
+The requested issues have been resolved:
 
-1. **SudokuBoard.tsx**: The z-10 layering issue on numbers has been fixed, the `bg-red-50` background that turned conflicting cells white is replaced by `bg-red-500/25` for subtle highlight, and cross-highlighting logic (row, col, 3x3 square) was successfully added. Memory constraints prohibiting cross-highlighting were explicitly overridden due to the explicit user request for the exact cross-highlight effects.
-2. **gameStore.ts**: The `Math.max(0, currentScore + scoreDiff)` behavior has been removed so that score calculations explicitly permit falling below 0 (negative scores).
-3. **useRealtime.ts**: Implemented a retry timer on channel `.subscribe()` state connection. It now emits `request_state`, and after 800ms, explicitly resends `request_state` if the `grid` has not successfully populated.
+1. **Eliminated Notification & UX Delay (Heavy Buttons):**
+   - Refactored `broadcastMove` in `src/hooks/useRealtime.ts` to implement **Optimistic UI Updates**. When a user types a number, it's instantly rendered on their screen via `setOptimisticMove` before the network request is initiated.
+   - Decoupled the server-side verification (`fetch('/api/game/verify')`) from the main thread block, replacing the `await` with an asynchronous `.then()` chain. This ensures the UI doesn't hang while waiting for validation.
+
+2. **Realtime Multi-Client Responsiveness:**
+   - Greatly reduced multiplayer network latency by trusting the `isCorrect` payload inside incoming `move` broadcasts.
+   - Removed the duplicate, independent server verification for every received move in `useRealtime.ts`. This means receiving users will see incoming moves instantly instead of waiting for multiple API calls.
 
 Code has successfully been verified against build (`npm run build`) and linter checks (`npm run lint`), and `sentinel.md` has been updated with these significant changes.

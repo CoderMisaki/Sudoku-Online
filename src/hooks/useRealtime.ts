@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
+import { Grid } from "../types/game";
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { ChatMessage } from '../types/game';
+import { moveRateLimiter } from '../utils/rateLimiter';
+import toast from 'react-hot-toast';
 
 export function useRealtime(roomId: string) {
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -24,6 +27,7 @@ export function useRealtime(roomId: string) {
 
     const channel = supabase.channel(`room:${roomId}`, {
       config: {
+        broadcast: { self: false, ack: false },
         presence: {
           key: userId,
         },
@@ -34,11 +38,11 @@ export function useRealtime(roomId: string) {
 
     const syncHostState = () => {
       const store = useGameStore.getState();
-      if (store.room && store.grid && store.solution) {
+      if (store.room && store.grid && store.solutionToken) {
         channel.send({
           type: 'broadcast',
           event: 'sync_state',
-          payload: { room: store.room, grid: store.grid, solution: store.solution, messages: store.messages }
+          payload: { room: store.room, grid: store.grid, solutionToken: store.solutionToken, messages: store.messages, senderId: userId }
         });
       }
     };
@@ -80,45 +84,65 @@ export function useRealtime(roomId: string) {
       })
       .on('presence', { event: 'leave' }, ({ leftPresences }) => {
         const store = useGameStore.getState();
-        if (store.room && store.room.hostId === userId) {
+        if (store.room) {
           const newPlayers = { ...store.room.players };
           let changed = false;
+          let hostLeft = false;
+
           leftPresences.forEach((p) => {
             if (newPlayers[p.user_id]) {
               newPlayers[p.user_id].status = 'offline';
               changed = true;
+              if (store.room && store.room.hostId === p.user_id) {
+                hostLeft = true;
+              }
             }
           });
 
           if (changed) {
-            const updatedRoom = { ...store.room, players: newPlayers };
+            let newHostId = store.room.hostId;
+            if (hostLeft) {
+              // Find the first online player to be the new host
+              const onlinePlayers = Object.values(newPlayers).filter(p => p.status === 'online');
+              if (onlinePlayers.length > 0) {
+                newHostId = onlinePlayers[0].id;
+                newPlayers[newHostId].isHost = true;
+              }
+            }
+
+            const updatedRoom = { ...store.room, players: newPlayers, hostId: newHostId };
             store.setRoom(updatedRoom);
-            syncHostState();
+            if (newHostId === userId) {
+                syncHostState();
+            }
           }
         }
       })
       .on('broadcast', { event: 'request_state' }, () => {
         const store = useGameStore.getState();
+        // HANYA Host yang boleh menyiarkan sync_state
         if (store.room && store.room.hostId === userId) {
           channel.send({
             type: 'broadcast',
             event: 'sync_state',
-            payload: { room: store.room, grid: store.grid, solution: store.solution, messages: store.messages }
+            payload: { room: store.room, grid: store.grid, solutionToken: store.solutionToken, messages: store.messages, senderId: userId }
           });
         }
       })
       .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
-        // Reject sync from mismatched rooms
-        if (payload?.room?.id && payload.room.id !== roomId) return;
-
         const store = useGameStore.getState();
+
+        // Anti Event-Spoofing: Abaikan sync_state jika room ID tidak cocok atau bukan disiarkan oleh Host
+        if (!payload?.room || payload.room.id !== roomId || payload.senderId !== payload.room.hostId) {
+          return;
+        }
 
         if (payload.room) {
           store.setRoom(payload.room);
         }
 
-        if (payload.grid && payload.solution) {
-          store.setGameData(payload.grid, payload.solution);
+        if (payload.grid && payload.solutionToken) {
+          store.setGameData(payload.grid, payload.solutionToken);
         }
 
         if (Array.isArray(payload.messages)) {
@@ -139,9 +163,33 @@ export function useRealtime(roomId: string) {
           [key]: { userId: payload.userId, expiresAt: Date.now() + 5000 }
         }));
       })
+      .on('broadcast', { event: 'note' }, ({ payload }) => {
+        if (typeof payload.row !== "number" || typeof payload.col !== "number" || typeof payload.note !== "number") return;
+        useGameStore.getState().toggleNote(payload.row, payload.col, payload.note);
+      })
       .on('broadcast', { event: 'move' }, ({ payload }) => {
         if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
-        useGameStore.getState().updateCell(payload.row, payload.col, payload.value, payload.userId);
+
+        const store = useGameStore.getState();
+        const isCorrect = payload.isCorrect;
+
+        // Terapkan hasil yang diterima (Instan dari broadcast)
+        store.updateCellWithValidation(payload.row, payload.col, payload.value, payload.userId, isCorrect);
+
+        // Toast notifikasi global HANYA JIKA BUKAN DARI DIRI SENDIRI
+        if (payload.value !== null && store.room && payload.userId !== userId) {
+          const player = store.room.players[payload.userId];
+          const playerName = player?.username || 'Pemain';
+
+          if (isCorrect) {
+            toast.success(`${playerName}: Jawaban benar ✅`, { id: `move-${payload.row}-${payload.col}-${payload.userId}`, duration: 1500 });
+          } else {
+            toast.error(`${playerName}: Jawaban salah ❌`, { id: `move-${payload.row}-${payload.col}-${payload.userId}`, duration: 1500 });
+          }
+        }
+      })
+      .on('broadcast', { event: 'next_game' }, ({ payload }) => {
+        useGameStore.getState().startNextGame(payload.grid, payload.solutionToken);
       })
       .on('broadcast', { event: 'chat' }, ({ payload }) => {
         useGameStore.getState().addMessage(payload);
@@ -261,10 +309,84 @@ export function useRealtime(roomId: string) {
 
   const broadcastMove = (row: number, col: number, value: number | null) => {
     if (!channelRef.current || !userId) return;
+
+    // 1. Proteksi Anti-Bot (Rate Limiting)
+    if (!moveRateLimiter.checkAllowed()) return;
+
+    const store = useGameStore.getState();
+
+    // Jika hapus nilai (value === null)
+    if (value === null) {
+      store.updateCellWithValidation(row, col, null, userId, false);
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'move',
+        payload: { userId, row, col, value: null, isCorrect: false },
+      });
+      return;
+    }
+
+    // 2. Optimistic Update (UI Instan)
+    store.setOptimisticMove(row, col, value);
+
+    // 3. Verifikasi jawaban ke Server (Asinkron / Non-blocking)
+    if (store.solutionToken) {
+      fetch('/api/game/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          row,
+          col,
+          value,
+          solutionToken: store.solutionToken
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        const isCorrect = Boolean(data.isCorrect);
+
+        // Update State Lokal Final & Apply Score
+        store.updateCellWithValidation(row, col, value, userId, isCorrect);
+
+        if (isCorrect) {
+          toast.success('Jawaban benar ✅', { id: `move-${row}-${col}`, duration: 1500 });
+        } else {
+          toast.error('Jawaban salah ❌', { id: `move-${row}-${col}`, duration: 1500 });
+        }
+
+        channelRef.current!.send({
+          type: 'broadcast',
+          event: 'move',
+          payload: { userId, row, col, value, isCorrect },
+        });
+      })
+      .catch(e => {
+        console.error('Gagal verifikasi jawaban ke server', e);
+      });
+    }
+  };
+
+  const broadcastNote = (row: number, col: number, note: number) => {
+    if (!channelRef.current || !userId) return;
+
+    useGameStore.getState().toggleNote(row, col, note);
+
     channelRef.current.send({
       type: 'broadcast',
-      event: 'move',
-      payload: { userId, row, col, value },
+      event: 'note',
+      payload: { userId, row, col, note },
+    });
+  };
+
+  const broadcastNextGame = (newGrid: Grid, newSolutionToken: string) => {
+    if (!channelRef.current || !userId) return;
+
+    useGameStore.getState().startNextGame(newGrid, newSolutionToken);
+
+    channelRef.current.send({
+      type: 'broadcast',
+      event: 'next_game',
+      payload: { grid: newGrid, solutionToken: newSolutionToken },
     });
   };
 
@@ -277,13 +399,15 @@ export function useRealtime(roomId: string) {
       text,
       timestamp: Date.now()
     };
+
+    // Update lokal instan + broadcast serentak
+    useGameStore.getState().addMessage(msg);
     channelRef.current.send({
       type: 'broadcast',
       event: 'chat',
       payload: msg,
     });
-    useGameStore.getState().addMessage(msg);
   };
 
-return { broadcastCursor, broadcastMove, lockCell, locks, broadcastChat, realtimeStatus, connectionError };
+  return { broadcastCursor, broadcastMove, broadcastNote, lockCell, locks, broadcastChat, broadcastNextGame, realtimeStatus, connectionError };
 }

@@ -1,0 +1,41 @@
+--- src/app/room/[id]/page.tsx
++++ src/app/room/[id]/page.tsx
+@@ -4,8 +4,7 @@
+ import { useRouter, useParams } from 'next/navigation';
+ import { useGameStore } from '../../../store/gameStore';
+ import { useRealtime } from '../../../hooks/useRealtime';
+-import { generatePuzzle, isValidMove } from '../../../utils/sudoku';
+-import { encryptSolution } from '../../../utils/security';
++import { isValidMove } from '../../../utils/sudoku';
+ import { getOrCreateUserId } from '../../../utils/uuid';
+ import { Button } from '../../../components/ui/Button';
+ import { Card } from '../../../components/ui/Card';
+@@ -166,8 +165,6 @@
+
+     // Host makes a new puzzle only if there is no room for this roomId
+     if (!existingRoom && isHost) {
+-      const { initialGrid, solutionGrid } = generatePuzzle(difficulty);
+-      const encryptedToken = encryptSolution(solutionGrid);
+       currentState.setRoom({
+         id: roomId,
+         code: roomId,
+@@ -188,7 +185,19 @@
+         createdAt: Date.now(),
+         startedAt: Date.now(),
+       });
+-      currentState.setGameData(initialGrid, encryptedToken);
++
++      fetch('/api/game/create-room', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ difficulty }),
++      })
++      .then(res => res.json())
++      .then(data => {
++        if (data.initialGrid && data.solutionToken) {
++          currentState.setGameData(data.initialGrid, data.solutionToken);
++        }
++      })
++      .catch(err => console.error('Failed to initialize room data:', err));
+
+     }

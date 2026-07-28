@@ -2,26 +2,27 @@
 
 import React, { useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store/gameStore';
-import { isValidMove } from '../../utils/sudoku';
+// import { isValidMove } from '../../utils/sudoku';
 import { cn } from '../../utils/cn';
-import { motion, AnimatePresence } from 'framer-motion';
-import toast from 'react-hot-toast';
+
+// import toast from 'react-hot-toast';
 
 interface SudokuBoardProps {
   broadcastMove: (row: number, col: number, value: number | null) => void;
+  broadcastNote: (row: number, col: number, note: number) => void;
   broadcastCursor: (row: number, col: number) => void;
   lockCell: (row: number, col: number) => boolean | void;
   locks: Record<string, { userId: string, expiresAt: number }>;
+  isPencilMode: boolean;
+  isEraserMode: boolean;
 }
 
-export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadcastCursor, lockCell, locks }) => {
+export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, isPencilMode, isEraserMode }) => {
   const grid = useGameStore(state => state.grid);
   const selectedCell = useGameStore(state => state.selectedCell);
   const setSelectedCell = useGameStore(state => state.setSelectedCell);
   const room = useGameStore(state => state.room);
   const userId = useGameStore(state => state.userId);
-  const updateCell = useGameStore(state => state.updateCell);
-  const solution = useGameStore(state => state.solution);
 
   const handleCellClick = useCallback((row: number, col: number) => {
     if (!grid) return;
@@ -57,26 +58,18 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     if (e.key >= '1' && e.key <= '9') {
       const val = parseInt(e.key);
       if (!cell.isLocked) {
-        // Cegah spam angka bila melanggar aturan blok/baris/kolom
-        if (!isValidMove(grid, row, col, val)) {
-          toast.error('Angka sudah ada di baris/kolom/blok!', { id: 'conflict', duration: 1500 });
-          return;
-        }
-
-        if (solution) {
-          const isCorrect = solution[row][col] === val;
-          if (isCorrect) {
-            toast.success('✅', { duration: 1200, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
-          } else {
-            toast.error('❌', { duration: 1200, style: { background: 'transparent', boxShadow: 'none' }, icon: null });
+        if (isEraserMode && cell.value === null) {
+          if (cell.notes.includes(val)) {
+            broadcastNote(row, col, val);
           }
+        } else if (isPencilMode && cell.value === null) {
+          broadcastNote(row, col, val);
+        } else {
+          broadcastMove(row, col, val);
         }
-        updateCell(row, col, val, userId);
-        broadcastMove(row, col, val);
       }
     } else if (e.key === 'Backspace' || e.key === 'Delete') {
       if (!cell.isLocked) {
-        updateCell(row, col, null, userId);
         broadcastMove(row, col, null);
       }
     } else if (e.key === 'ArrowUp') {
@@ -88,7 +81,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     } else if (e.key === 'ArrowRight') {
       handleCellClick(row, Math.min(8, col + 1));
     }
-  }, [selectedCell, grid, userId, locks, updateCell, broadcastMove, handleCellClick, solution]);
+  }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -125,6 +118,8 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
             }
           }
 
+          const isError = cell.isConflicting || cell.isWrong;
+
           return (
             <div
               key={`${rIndex}-${cIndex}`}
@@ -135,35 +130,31 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "border-b-2 border-foreground": rIndex % 3 === 2 && rIndex !== 8,
                   "border-r-2 border-foreground": cIndex % 3 === 2 && cIndex !== 8,
 
-                  // Highlight Minimalist + Indikator Merah Salah
-                  "bg-pink-500/40": isSelected,                        // Kotak yang langsung di-tap (Biru/Pink)
-                  "bg-pink-500/20": isSameValue && !isSelected,       // Highlight angka kembar
-                  "bg-red-500/20": cell.isConflicting || cell.isWrong, // Background JADI MERAH jika tebakan SALAH / Bentrok
+                  // Highlight sel yang dipilih
+                  "bg-secondary/40": isSelected && !isError,
 
-                  // Warna Teks Angka (Kembali menjadi putih seperti default)
-                  "text-foreground font-bold": cell.isLocked, // Angka Asli bawaan soal
-                  "text-foreground font-medium": !cell.isLocked && cell.value !== null && !cell.isConflicting && !cell.isWrong, // Angka pemain (Warna putih/gelap biasa)
-                  "text-red-500 font-bold": cell.isConflicting || cell.isWrong, // Angka merah kalau melanggar
+                  // Background merah HANYA untuk sel yang error/conflict, tapi jangan tutup angka
+                  "bg-red-500/30": isError && !isSelected,
+
+                  // Highlight angka kembar: gunakan ring/outline pink, BUKAN merubah warna teks saja
+                  "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected,
+                  "ring-2 ring-white ring-inset": isSameValue && isSelected,
+
+                  // Warna teks angka (pastikan terbaca jelas)
+                  "text-foreground font-bold": !isSameValue && (cell.isLocked || isError),
+                  "text-foreground font-medium": !isSameValue && !cell.isLocked && !isError,
+                  "text-pink-500 font-bold": isSameValue && (cell.isLocked || isError),
+                  "text-pink-500 font-medium": isSameValue && !cell.isLocked && !isError,
 
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }
               )}
             >
-              <AnimatePresence mode="popLayout">
-                {cell.value !== null && (
-                  <motion.span
-                    key={cell.value}
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.8, opacity: 0 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-                    // z-20 dan drop-shadow memastikan angka melayang tegak di atas background warna cell
-                    className="relative z-10 font-sans pointer-events-none"
-                  >
-                    {cell.value}
-                  </motion.span>
-                )}
-              </AnimatePresence>
+              {cell.value !== null && (
+                <span className="relative z-10 font-sans pointer-events-none transition-transform duration-75 scale-100">
+                  {cell.value}
+                </span>
+              )}
 
               {/* Tampilan Catatan / Pensil */}
               {cell.value === null && cell.notes.length > 0 && (
