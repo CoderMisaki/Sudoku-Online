@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
+import { Grid } from "../types/game";
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { ChatMessage } from '../types/game';
 import { moveRateLimiter } from '../utils/rateLimiter';
@@ -206,6 +207,9 @@ export function useRealtime(roomId: string) {
           }
         }
       })
+      .on('broadcast', { event: 'next_game' }, ({ payload }) => {
+        useGameStore.getState().startNextGame(payload.grid, payload.solutionToken);
+      })
       .on('broadcast', { event: 'chat' }, ({ payload }) => {
         useGameStore.getState().addMessage(payload);
       })
@@ -381,6 +385,18 @@ export function useRealtime(roomId: string) {
     });
   };
 
+  const broadcastNextGame = (newGrid: Grid, newSolutionToken: string) => {
+    if (!channelRef.current || !userId) return;
+
+    useGameStore.getState().startNextGame(newGrid, newSolutionToken);
+
+    channelRef.current.send({
+      type: 'broadcast',
+      event: 'next_game',
+      payload: { grid: newGrid, solutionToken: newSolutionToken },
+    });
+  };
+
   const broadcastChat = (text: string) => {
     if (!channelRef.current || !userId || !username) return;
     const msg: ChatMessage = {
@@ -400,5 +416,5 @@ export function useRealtime(roomId: string) {
     });
   };
 
-  return { broadcastCursor, broadcastMove, broadcastNote, lockCell, locks, broadcastChat, realtimeStatus, connectionError };
+  return { broadcastCursor, broadcastMove, broadcastNote, lockCell, locks, broadcastChat, broadcastNextGame, realtimeStatus, connectionError };
 }

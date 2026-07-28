@@ -18,3 +18,7 @@
 - Fixed the eraser feature functionality by implementing an \`isEraserMode\` toggle. This mode correctly toggles pencil notes in a targeted cell without wiping the entire cell inadvertently when not intended. Tapping the Eraser button when selecting a filled cell clears the cell's main value.
 - Improved the chat UI: replaced the plain text input with an auto-resizing \`textarea\` (max height 120px) preventing layout overflow, and refactored the auto-scrolling logic using \`requestAnimationFrame\` to eliminate abrupt screen shaking when a new message arrives, especially for long messages.
 - Added a visual unread message notification (✉️ +1) beside the chat title that momentarily appears for 1.5s when a new message is received from other players.
+2023-10-25 - [Supabase Realtime with Next.js]
+- To prevent Supabase channel subscription errors ('cannot add presence callbacks... after subscribe()'), the `useRealtime` hook must only be called once per room in the component tree. Hoist the hook to a parent component and pass its state and functions down as props to children components.
+2026-07-28 - [Supabase Realtime with Next.js]
+- To reset a realtime game, the host can trigger an API call to generate a new puzzle and then broadcast a `next_game` event to all players using the same channel, avoiding the need to tear down and recreate rooms or WebSocket connections.
