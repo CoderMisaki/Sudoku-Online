@@ -26,3 +26,8 @@
 2026-07-28 - [Obfuscate Supabase Credentials and Adjust UI Highlights]
 - Replaced `process.env` references for Supabase URL and keys with inline obfuscated strings (reversed strings) in `src/services/supabase.ts` per explicit user request.
 - Adjusted cell highlighting in `src/components/game/SudokuBoard.tsx` to fix a UX issue where the background highlight for matching numbers obscured the numbers themselves. Changed the highlight logic to apply a light pink text color instead of a background color, keeping the number fully visible.
+
+2026-07-28 - [Optimistic UI and Realtime Delay Fixes]
+- Implemented an optimistic UI update for `broadcastMove` in `src/hooks/useRealtime.ts` by decoupling the API verification call (`fetch`) from blocking the local UI rendering. The move is immediately rendered using a new `setOptimisticMove` in `src/store/gameStore.ts` before verifying with the server via an asynchronous `.then()` chain.
+- Reduced significant multiplayer latency by eliminating redundant, independent server verifications for incoming `move` broadcasts in `useRealtime.ts`, trusting the payload's `isCorrect` status distributed by the initiator instead.
+- Added an `isPending` state to `CellData` in `src/types/game.ts` to manage optimistic state handling during validations inside `updateCellWithValidation`.
