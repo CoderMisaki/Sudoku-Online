@@ -466,12 +466,19 @@ export default function RoomPage() {
                 <div key={player.id} className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div
-                      className="w-2.5 h-2.5 rounded-full"
+                      className={`w-2.5 h-2.5 rounded-full ${player.status === 'offline' ? 'opacity-40' : ''}`}
                       style={{ backgroundColor: player.color }}
                     />
-                    <span className="font-medium">
-                      {player.username} {player.isHost && <span className="text-secondary">(Host)</span>}
+                    <span className={`font-medium ${player.status === 'offline' ? 'line-through text-secondary/60' : ''}`}>
+                      {player.username}
                     </span>
+                    {player.status === 'offline' ? (
+                      <span className="text-red-500 font-semibold text-[11px] bg-red-500/10 px-1.5 py-0.5 rounded">
+                        ( Leave Room )
+                      </span>
+                    ) : player.isHost ? (
+                      <span className="text-secondary text-xs">(Host)</span>
+                    ) : null}
                   </div>
                   <span className="font-mono">{player.score}</span>
                 </div>
