@@ -1,8 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Obfuscated to prevent easy scraping
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseUrl = 'oc.esabapus.pzxjyeyvszkqwirrdwyo//:sptth'.split('').reverse().join('');
+const supabaseAnonKey = 'zFnPVRon_QRp-4KvBEe2X_Imp8sU9nk_elbahsilbup_bs'.split('').reverse().join('');
 
 // Create a single supabase client for interacting with your database
 
