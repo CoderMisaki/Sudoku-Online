@@ -130,12 +130,14 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
 
                   // Highlight Minimalist + Indikator Merah Salah
                   "bg-secondary/40": isSelected,                        // Kotak yang langsung di-tap
-                  "bg-secondary/20": isSameValue && !isSelected,       // Highlight angka kembar
+
                   "bg-red-500/80": cell.isConflicting || cell.isWrong, // Background JADI MERAH jika tebakan SALAH / Bentrok
 
                   // Warna Teks Angka (Kembali menjadi putih seperti default)
-                  "text-foreground font-bold": cell.isLocked || (!cell.isLocked && (cell.isConflicting || cell.isWrong)), // Angka Asli bawaan soal atau tebakan yang salah
-                  "text-foreground font-medium": !cell.isLocked && cell.value !== null && !cell.isConflicting && !cell.isWrong, // Angka pemain (Warna putih/gelap biasa)
+                  "text-foreground font-bold": !isSameValue && (cell.isLocked || (!cell.isLocked && (cell.isConflicting || cell.isWrong))), // Angka Asli bawaan soal atau tebakan yang salah
+                  "text-foreground font-medium": !isSameValue && (!cell.isLocked && cell.value !== null && !cell.isConflicting && !cell.isWrong), // Angka pemain (Warna putih/gelap biasa)
+                  "text-pink-300 font-bold": isSameValue && (cell.isLocked || (!cell.isLocked && (cell.isConflicting || cell.isWrong))), // Angka Asli kembar
+                  "text-pink-300 font-medium": isSameValue && (!cell.isLocked && cell.value !== null && !cell.isConflicting && !cell.isWrong), // Angka pemain kembar
 
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }

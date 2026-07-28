@@ -22,3 +22,7 @@
 - To prevent Supabase channel subscription errors ('cannot add presence callbacks... after subscribe()'), the `useRealtime` hook must only be called once per room in the component tree. Hoist the hook to a parent component and pass its state and functions down as props to children components.
 2026-07-28 - [Supabase Realtime with Next.js]
 - To reset a realtime game, the host can trigger an API call to generate a new puzzle and then broadcast a `next_game` event to all players using the same channel, avoiding the need to tear down and recreate rooms or WebSocket connections.
+
+2026-07-28 - [Obfuscate Supabase Credentials and Adjust UI Highlights]
+- Replaced `process.env` references for Supabase URL and keys with inline obfuscated strings (reversed strings) in `src/services/supabase.ts` per explicit user request.
+- Adjusted cell highlighting in `src/components/game/SudokuBoard.tsx` to fix a UX issue where the background highlight for matching numbers obscured the numbers themselves. Changed the highlight logic to apply a light pink text color instead of a background color, keeping the number fully visible.
