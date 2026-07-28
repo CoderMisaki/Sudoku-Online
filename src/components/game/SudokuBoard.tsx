@@ -137,8 +137,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "bg-red-500/30": isError && !isSelected,
 
                   // Highlight angka kembar: gunakan ring/outline pink, BUKAN merubah warna teks saja
-                  "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected && !isError,
-                  "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected && isError,
+                  "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected,
                   "ring-2 ring-white ring-inset": isSameValue && isSelected,
 
                   // Warna teks angka (pastikan terbaca jelas)
