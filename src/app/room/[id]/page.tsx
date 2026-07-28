@@ -68,8 +68,39 @@ export default function RoomPage() {
     localStorage.setItem('sudoku_theme', newTheme);
     applyTheme(newTheme);
   };
-  const { broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, broadcastChat, realtimeStatus, connectionError } = useRealtime(roomId);
+  const { broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, broadcastChat, broadcastNextGame, realtimeStatus, connectionError } = useRealtime(roomId);
   const [chatInput, setChatInput] = useState('');
+  const isGameCompleted = React.useMemo(() => {
+    if (!grid) return false;
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const cell = grid[r][c];
+        if (cell.value === null || cell.isConflicting || cell.isWrong) return false;
+      }
+    }
+    return true;
+  }, [grid]);
+
+  const handleNextGame = async () => {
+    if (!room) return;
+    try {
+      toast.loading('Mempersiapkan game baru...', { id: 'nextGame' });
+      const res = await fetch('/api/game/create-room', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ difficulty: room.difficulty })
+      });
+      const data = await res.json();
+      if (res.ok && data.initialGrid && data.solutionToken) {
+        broadcastNextGame(data.initialGrid, data.solutionToken);
+        toast.success('Game baru dimulai!', { id: 'nextGame' });
+      } else {
+        toast.error('Gagal membuat game baru', { id: 'nextGame' });
+      }
+    } catch (e) {
+      toast.error('Gagal membuat game baru', { id: 'nextGame' });
+    }
+  };
   const [newMsgNotif, setNewMsgNotif] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -509,6 +540,16 @@ export default function RoomPage() {
             <div className="w-full flex justify-between items-end">
               <div>
                 <h2 className="text-2xl font-bold">{room?.difficulty?.toUpperCase() || 'MEDIUM'}</h2>
+                {isGameCompleted && player?.isHost && (
+                  <Button onClick={handleNextGame} className="mt-2 bg-green-600 hover:bg-green-700 text-white">
+                    Next Game
+                  </Button>
+                )}
+                {isGameCompleted && !player?.isHost && (
+                  <div className="mt-2 text-sm text-green-500 font-medium animate-pulse">
+                    Game selesai! Menunggu host...
+                  </div>
+                )}
                 <p className="text-secondary text-sm">Mode: {room?.mode || 'collaborative'}</p>
               </div>
             </div>

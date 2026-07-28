@@ -1,0 +1,14 @@
+1. Update `.env.local` to include the requested environment variables:
+`NEXT_PUBLIC_SUPABASE_URL=https://oywdrriwqkzsvyeyjxzp.supabase.co`
+`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_kn9Us8pmI_X2eEBvK4-pRQ_noRVPnFz`
+Also fallback to ANON_KEY in `src/services/supabase.ts`.
+
+2. Implement a "Next Game" feature in `src/app/room/[id]/page.tsx` that appears when the game is completed (all cells filled without conflicts).
+- Create a `isGameCompleted` state.
+- Show "Next Game" button for the host.
+- Call `/api/game/create-room` to generate a new puzzle using `sudoku-gen`.
+- Broadcast this "Next Game" to other players via `broadcastNextGame`.
+
+3. Added `broadcastNextGame` in `useRealtime` hook, which emits a `next_game` event to all players to reset their states with the new grid and solution via a new `startNextGame` function in `useGameStore`.
+
+4. Everything has been implemented and there are no lint errors. The user requirement has been fulfilled. I'm ready to wrap it up and complete pre-commit steps.

@@ -30,6 +30,7 @@ interface GameStore {
   selectedCell: { row: number; col: number } | null;
   setSelectedCell: (cell: { row: number; col: number } | null) => void;
   resetGame: () => void;
+  startNextGame: (newGrid: Grid, newSolutionToken: string) => void;
   enterRoom: (roomId: string) => void;
 }
 
@@ -136,6 +137,32 @@ export const useGameStore = create<GameStore>()(
       selectedCell: null,
       setSelectedCell: (cell) => set({ selectedCell: cell }),
       resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null }),
+      startNextGame: (newGrid, newSolutionToken) => set((state) => {
+        if (!state.room) return state;
+
+        // Reset scores and hints for all players
+        const newPlayers = { ...state.room.players };
+        Object.keys(newPlayers).forEach(playerId => {
+          newPlayers[playerId] = {
+            ...newPlayers[playerId],
+            score: 0,
+            hints: 3
+          };
+        });
+
+        return {
+          room: {
+            ...state.room,
+            players: newPlayers,
+            startedAt: Date.now(), // Reset timer
+            status: 'playing'
+          },
+          grid: newGrid,
+          solutionToken: newSolutionToken,
+          selectedCell: null,
+          messages: [] // Optional: clear messages, but keeping might be fine. Let's keep messages, it's nice for chat history. Wait, user said "reset ulang lagi seperti main baru". Usually chat can be kept. Let's clear it just in case. Or let's not clear chat, it breaks communication. Actually I will leave messages alone.
+        };
+      }),
       enterRoom: (roomId) => {
         const state = get();
         if (state.room?.id === roomId) return;
