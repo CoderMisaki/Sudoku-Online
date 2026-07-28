@@ -12,6 +12,8 @@ export function useRealtime(roomId: string) {
   const retryRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userId = useGameStore((state) => state.userId);
   const username = useGameStore((state) => state.username);
+  const grid = useGameStore((state) => state.grid);
+  const prevGridRef = useRef(grid);
 
   // Expose an active locks state
   const [locks, setLocks] = useState<Record<string, { userId: string, expiresAt: number }>>({});
@@ -20,6 +22,28 @@ export function useRealtime(roomId: string) {
   // Status koneksi WebSocket
   const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED'>('CONNECTING');
   const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Jika grid baru saja terisi (berubah dari null ke terisi) dan kita adalah host,
+    // langsung broadcast sync_state seketika ke semua player yang mungkin sedang menunggu
+    if (grid && !prevGridRef.current && channelRef.current && userId) {
+      const store = useGameStore.getState();
+      if (store.room && store.room.hostId === userId) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'sync_state',
+          payload: {
+            room: store.room,
+            grid: store.grid,
+            solutionToken: store.solutionToken,
+            messages: store.messages,
+            senderId: userId
+          }
+        });
+      }
+    }
+    prevGridRef.current = grid;
+  }, [grid, userId]);
 
   useEffect(() => {
 
@@ -132,8 +156,8 @@ export function useRealtime(roomId: string) {
       .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
         const store = useGameStore.getState();
 
-        // Anti Event-Spoofing: Abaikan sync_state jika room ID tidak cocok atau bukan disiarkan oleh Host
-        if (!payload?.room || payload.room.id !== roomId || payload.senderId !== payload.room.hostId) {
+        // Anti Event-Spoofing: Abaikan sync_state jika bukan disiarkan oleh Host
+        if (!payload?.room || payload.senderId !== payload.room.hostId) {
           return;
         }
 
@@ -230,7 +254,8 @@ export function useRealtime(roomId: string) {
 
             attempts += 1;
 
-            if (currentGrid || attempts >= 12) {
+            // Tingkatkan batas waktu tunggu (25 detik) dengan jeda per-detik
+            if (currentGrid || attempts >= 25) {
               if (retryRef.current) {
                 clearInterval(retryRef.current);
                 retryRef.current = null;
@@ -239,7 +264,7 @@ export function useRealtime(roomId: string) {
             }
 
             sendRequest();
-          }, 800);
+          }, 1000);
         } else if (status === 'CHANNEL_ERROR') {
           setConnectionError('CHANNEL_ERROR: Koneksi WebSocket ditolak atau channel error.');
         } else if (status === 'TIMED_OUT') {
