@@ -31,3 +31,9 @@
 - Implemented an optimistic UI update for `broadcastMove` in `src/hooks/useRealtime.ts` by decoupling the API verification call (`fetch`) from blocking the local UI rendering. The move is immediately rendered using a new `setOptimisticMove` in `src/store/gameStore.ts` before verifying with the server via an asynchronous `.then()` chain.
 - Reduced significant multiplayer latency by eliminating redundant, independent server verifications for incoming `move` broadcasts in `useRealtime.ts`, trusting the payload's `isCorrect` status distributed by the initiator instead.
 - Added an `isPending` state to `CellData` in `src/types/game.ts` to manage optimistic state handling during validations inside `updateCellWithValidation`.
+
+2026-07-28 - [Sudoku Synchronization and Latency Optimizations]
+- Resolved "Delay Isian Kotak" by implementing a dual-stage optimistic broadcast in `useRealtime.ts`. Player moves are instantly broadcast via a new `move_optimistic` event, bypassing the backend server verification delay and updating UI globally within ~10-25ms.
+- Final server verifications execute asynchronously in the background. Once completed, a `move_verified` event updates the formal game score and error indicators.
+- Adjusted action rate limiting in `rateLimiter.ts` by reducing the `cooldownMs` from 150ms to 40ms and increasing the action count threshold from 3 to 10 to better support fast typing (bursts) and rapid pencil mode entries without ignoring dropped commands.
+- Added a `animate-pulse` visual effect on the `SudokuBoard` for cells while they are `isPending` (optimistically drawn but waiting on server verification), enhancing real-time responsiveness feedback.

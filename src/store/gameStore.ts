@@ -77,7 +77,7 @@ export const useGameStore = create<GameStore>()(
           isPending: true
         };
 
-        return { grid: newGrid };
+        return { grid: checkConflicts(newGrid) };
       }),
 
       setGameData: (grid, solutionToken) => {
@@ -90,7 +90,6 @@ export const useGameStore = create<GameStore>()(
 
         const currentCell = state.grid[row][col];
         if (currentCell.isLocked) return state;
-        if (currentCell.value === value && !currentCell.isPending) return state;
 
         const newGrid = [...state.grid];
         newGrid[row] = [...newGrid[row]];
@@ -106,7 +105,8 @@ export const useGameStore = create<GameStore>()(
           value: shouldRejectWrongMove ? null : value,
           filledBy: shouldRejectWrongMove ? undefined : playerId,
           isWrong: shouldRejectWrongMove ? false : isWrongMove,
-          isPending: false
+          isPending: false,
+          notes: value !== null ? [] : newGrid[row][col].notes
         };
 
         const validatedGrid = checkConflicts(newGrid);

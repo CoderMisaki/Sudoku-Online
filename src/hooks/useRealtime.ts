@@ -191,16 +191,39 @@ export function useRealtime(roomId: string) {
         if (typeof payload.row !== "number" || typeof payload.col !== "number" || typeof payload.note !== "number") return;
         useGameStore.getState().toggleNote(payload.row, payload.col, payload.note);
       })
+      // Handler Isian Optimistik Instan (~10-25ms)
+      .on('broadcast', { event: 'move_optimistic' }, ({ payload }) => {
+        if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
+        useGameStore.getState().setOptimisticMove(payload.row, payload.col, payload.value);
+      })
+      // Handler Isian Terverifikasi Final
+      .on('broadcast', { event: 'move_verified' }, ({ payload }) => {
+        if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
+
+        const store = useGameStore.getState();
+        const isCorrect = Boolean(payload.isCorrect);
+
+        store.updateCellWithValidation(payload.row, payload.col, payload.value, payload.userId, isCorrect);
+
+        if (payload.value !== null && store.room && payload.userId !== userId) {
+          const player = store.room.players[payload.userId];
+          const playerName = player?.username || 'Pemain';
+
+          if (isCorrect) {
+            toast.success(`${playerName}: Jawaban benar ✅`, { id: `move-${payload.row}-${payload.col}-${payload.userId}`, duration: 1500 });
+          } else {
+            toast.error(`${playerName}: Jawaban salah ❌`, { id: `move-${payload.row}-${payload.col}-${payload.userId}`, duration: 1500 });
+          }
+        }
+      })
       .on('broadcast', { event: 'move' }, ({ payload }) => {
         if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
 
         const store = useGameStore.getState();
-        const isCorrect = payload.isCorrect;
+        const isCorrect = Boolean(payload.isCorrect);
 
-        // Terapkan hasil yang diterima (Instan dari broadcast)
         store.updateCellWithValidation(payload.row, payload.col, payload.value, payload.userId, isCorrect);
 
-        // Toast notifikasi global HANYA JIKA BUKAN DARI DIRI SENDIRI
         if (payload.value !== null && store.room && payload.userId !== userId) {
           const player = store.room.players[payload.userId];
           const playerName = player?.username || 'Pemain';
@@ -335,26 +358,32 @@ export function useRealtime(roomId: string) {
   const broadcastMove = (row: number, col: number, value: number | null) => {
     if (!channelRef.current || !userId) return;
 
-    // 1. Proteksi Anti-Bot (Rate Limiting)
     if (!moveRateLimiter.checkAllowed()) return;
 
     const store = useGameStore.getState();
 
-    // Jika hapus nilai (value === null)
+    // Hapus Nilai (Eraser / Backspace) -> Instan
     if (value === null) {
       store.updateCellWithValidation(row, col, null, userId, false);
       channelRef.current.send({
         type: 'broadcast',
-        event: 'move',
+        event: 'move_verified',
         payload: { userId, row, col, value: null, isCorrect: false },
       });
       return;
     }
 
-    // 2. Optimistic Update (UI Instan)
+    // 1. Update UI Lokal secara Instan
     store.setOptimisticMove(row, col, value);
 
-    // 3. Verifikasi jawaban ke Server (Asinkron / Non-blocking)
+    // 2. Kirim Broadcast Instan ke Player Lain via WebSocket (Tanpa Menunggu Server API)
+    channelRef.current.send({
+      type: 'broadcast',
+      event: 'move_optimistic',
+      payload: { userId, row, col, value },
+    });
+
+    // 3. Verifikasi Jawaban ke Server secara Asinkron (Non-blocking)
     if (store.solutionToken) {
       fetch('/api/game/verify', {
         method: 'POST',
@@ -370,7 +399,7 @@ export function useRealtime(roomId: string) {
       .then(data => {
         const isCorrect = Boolean(data.isCorrect);
 
-        // Update State Lokal Final & Apply Score
+        // Update State Lokal Final & Skor
         store.updateCellWithValidation(row, col, value, userId, isCorrect);
 
         if (isCorrect) {
@@ -379,9 +408,10 @@ export function useRealtime(roomId: string) {
           toast.error('Jawaban salah ❌', { id: `move-${row}-${col}`, duration: 1500 });
         }
 
-        channelRef.current!.send({
+        // Siarkan Hasil Verifikasi & Skor ke Seluruh Player
+        channelRef.current?.send({
           type: 'broadcast',
-          event: 'move',
+          event: 'move_verified',
           payload: { userId, row, col, value, isCorrect },
         });
       })

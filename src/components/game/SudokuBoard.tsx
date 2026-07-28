@@ -151,7 +151,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
               )}
             >
               {cell.value !== null && (
-                <span className="relative z-10 font-sans pointer-events-none transition-transform duration-75 scale-100">
+                <span className={cn("relative z-10 font-sans pointer-events-none transition-transform duration-75 scale-100", cell.isPending && "opacity-75 animate-pulse")}>
                   {cell.value}
                 </span>
               )}
