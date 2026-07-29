@@ -486,8 +486,8 @@ export default function RoomPage() {
             </div>
           </Card>
 
-          <Card className="flex-shrink-0 flex flex-col overflow-hidden min-h-[250px] lg:min-h-0 lg:flex-1">
-            <div className="p-3 border-b border-border bg-background/50">
+          <Card className="flex-shrink-0 flex flex-col overflow-hidden h-[380px] w-full">
+            <div className="p-3 border-b border-border bg-background/50 flex-shrink-0">
               <h2 className="font-semibold text-sm flex items-center justify-between w-full">
                 <div className="flex items-center gap-2">
                   <MessageCircle className="w-4 h-4" /> Chat
@@ -499,7 +499,7 @@ export default function RoomPage() {
                 )}
               </h2>
             </div>
-            <div className="flex-1 p-3 flex flex-col overflow-y-auto space-y-2 text-xs sm:text-sm" style={{ maxHeight: '400px' }}>
+            <div className="flex-1 p-3 flex flex-col overflow-y-auto space-y-2 text-xs sm:text-sm min-h-0">
               {messages.length === 0 ? (
                 <div className="text-secondary italic text-center my-auto">No messages yet.</div>
               ) : (
@@ -512,7 +512,7 @@ export default function RoomPage() {
               )}
               <div ref={chatEndRef} />
             </div>
-            <div className="p-2.5 border-t border-border">
+            <div className="p-2.5 border-t border-border flex-shrink-0">
               <form onSubmit={handleChatSubmit} className="flex items-center gap-2">
                 <textarea
                   id="chat-textarea"
@@ -533,7 +533,7 @@ export default function RoomPage() {
                   rows={1}
                 />
 
-                <Button type="submit" size="sm" className="h-8 px-3 text-xs">
+                <Button type="submit" size="sm" className="h-8 px-3 text-xs flex-shrink-0">
                   Send
                 </Button>
               </form>
