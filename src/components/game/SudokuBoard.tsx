@@ -159,8 +159,16 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
               {/* Tampilan Catatan / Pensil */}
               {cell.value === null && cell.notes.length > 0 && (
                 <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 p-0.5 pointer-events-none z-10">
-                  {[1,2,3,4,5,6,7,8,9].map(n => (
-                    <div key={n} className="flex items-center justify-center text-[10px] sm:text-[11px] font-bold text-foreground/90 dark:text-gray-100 leading-none select-none">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
+                    <div
+                      key={n}
+                      className={cn(
+                        "flex items-center justify-center text-[10px] sm:text-[11px] leading-none select-none transition-colors duration-150",
+                        isSelected
+                          ? "text-black dark:text-black font-black" // Hitam tegas saat sel aktif terpilih
+                          : "text-foreground/90 dark:text-gray-100 font-bold" // Kembali otomatis ke warna default saat berpindah sel
+                      )}
+                    >
                       {cell.notes.includes(n) ? n : ''}
                     </div>
                   ))}
