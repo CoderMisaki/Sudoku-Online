@@ -15,17 +15,11 @@ export function useRealtime(roomId: string) {
   const grid = useGameStore((state) => state.grid);
   const prevGridRef = useRef(grid);
 
-  // Expose an active locks state
   const [locks, setLocks] = useState<Record<string, { userId: string, expiresAt: number }>>({});
-
-
-  // Status koneksi WebSocket
   const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED'>('CONNECTING');
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Jika grid baru saja terisi (berubah dari null ke terisi) dan kita adalah host,
-    // langsung broadcast sync_state seketika ke semua player yang mungkin sedang menunggu
     if (grid && !prevGridRef.current && channelRef.current && userId) {
       const store = useGameStore.getState();
       if (store.room && store.room.hostId === userId) {
@@ -46,15 +40,12 @@ export function useRealtime(roomId: string) {
   }, [grid, userId]);
 
   useEffect(() => {
-
     if (!roomId || !userId || !username) return;
 
     const channel = supabase.channel(`room:${roomId}`, {
       config: {
         broadcast: { self: false, ack: false },
-        presence: {
-          key: userId,
-        },
+        presence: { key: userId },
       },
     });
 
@@ -71,8 +62,6 @@ export function useRealtime(roomId: string) {
       }
     };
 
-
-    // Smart Presence Handler: mengecek presenceState secara instan di semua client
     const handlePresenceChange = () => {
       const store = useGameStore.getState();
       if (!store.room) return;
@@ -88,10 +77,7 @@ export function useRealtime(roomId: string) {
         });
       });
 
-      // User saat ini di browser dipastikan online
-      if (userId) {
-        onlineUserIds.add(userId);
-      }
+      if (userId) onlineUserIds.add(userId);
 
       const currentPlayers = store.room.players;
       const newPlayers = { ...currentPlayers };
@@ -99,20 +85,15 @@ export function useRealtime(roomId: string) {
 
       const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
 
-      // 1. Update status online/offline secara presisi berdasarkan WebSocket Presence
       Object.keys(newPlayers).forEach((pId) => {
         const isOnline = onlineUserIds.has(pId);
         const targetStatus = isOnline ? 'online' : 'offline';
         if (newPlayers[pId].status !== targetStatus) {
-          newPlayers[pId] = {
-            ...newPlayers[pId],
-            status: targetStatus,
-          };
+          newPlayers[pId] = { ...newPlayers[pId], status: targetStatus };
           changed = true;
         }
       });
 
-      // 2. Tambahkan pemain baru jika belum ada di list
       Object.keys(presenceState).forEach((pId) => {
         const presences = presenceState[pId] as Array<{ username?: string; user_id?: string }>;
         const presObj = presences?.[0];
@@ -133,12 +114,9 @@ export function useRealtime(roomId: string) {
         }
       });
 
-      // 3. Evaluasi Host Migration jika Host saat ini offline
       let currentHostId = store.room.hostId;
       const hostPlayer = newPlayers[currentHostId];
-      const isHostOnline = hostPlayer && hostPlayer.status === 'online';
-
-      if (!isHostOnline) {
+      if (!hostPlayer || hostPlayer.status !== 'online') {
         const onlinePlayers = Object.values(newPlayers).filter((p) => p.status === 'online');
         if (onlinePlayers.length > 0) {
           currentHostId = onlinePlayers[0].id;
@@ -149,25 +127,15 @@ export function useRealtime(roomId: string) {
       Object.keys(newPlayers).forEach((pId) => {
         const shouldBeHost = pId === currentHostId;
         if (newPlayers[pId].isHost !== shouldBeHost) {
-          newPlayers[pId] = {
-            ...newPlayers[pId],
-            isHost: shouldBeHost,
-          };
+          newPlayers[pId] = { ...newPlayers[pId], isHost: shouldBeHost };
           changed = true;
         }
       });
 
       if (changed) {
-        const updatedRoom = {
-          ...store.room,
-          players: newPlayers,
-          hostId: currentHostId,
-        };
+        const updatedRoom = { ...store.room, players: newPlayers, hostId: currentHostId };
         store.setRoom(updatedRoom);
-
-        if (currentHostId === userId) {
-          syncHostState();
-        }
+        if (currentHostId === userId) syncHostState();
       }
     };
 
@@ -180,15 +148,11 @@ export function useRealtime(roomId: string) {
         if (store.room && store.room.hostId === userId) {
           let updatedRoom = store.room;
 
-          // Memastikan pemain yang meminta state langsung diset 'online' oleh Host
           if (payload?.userId && store.room.players[payload.userId]) {
             if (store.room.players[payload.userId].status !== 'online') {
               const newPlayers = {
                 ...store.room.players,
-                [payload.userId]: {
-                  ...store.room.players[payload.userId],
-                  status: 'online' as const,
-                },
+                [payload.userId]: { ...store.room.players[payload.userId], status: 'online' as const },
               };
               updatedRoom = { ...store.room, players: newPlayers };
               store.setRoom(updatedRoom);
@@ -210,25 +174,17 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
         const store = useGameStore.getState();
-
-        if (!payload?.room || payload.senderId !== payload.room.hostId) {
-          return;
-        }
+        if (!payload?.room || payload.senderId !== payload.room.hostId) return;
 
         if (payload.room) {
           let incomingRoom = payload.room;
-
-          // Pemain lokal tidak akan pernah menganggap dirinya sendiri 'offline' saat menerima sync_state
           if (userId && incomingRoom.players && incomingRoom.players[userId]) {
             if (incomingRoom.players[userId].status !== 'online') {
               incomingRoom = {
                 ...incomingRoom,
                 players: {
                   ...incomingRoom.players,
-                  [userId]: {
-                    ...incomingRoom.players[userId],
-                    status: 'online',
-                  },
+                  [userId]: { ...incomingRoom.players[userId], status: 'online' },
                 },
               };
             }
@@ -236,7 +192,8 @@ export function useRealtime(roomId: string) {
           store.setRoom(incomingRoom);
         }
 
-        if (payload.grid && payload.solutionToken) {
+        // Jangan menimpa papan lokal jika dalam mode competition
+        if (payload.room?.mode !== 'competition' && payload.grid && payload.solutionToken) {
           store.setGameData(payload.grid, payload.solutionToken);
         }
 
@@ -244,14 +201,18 @@ export function useRealtime(roomId: string) {
           store.setMessages(payload.messages);
         }
       })
+      .on('broadcast', { event: 'progress_update' }, ({ payload }) => {
+        if (!payload?.userId) return;
+        useGameStore.getState().updatePlayerProgress(payload.userId, payload.progress, payload.rank);
+      })
       .on('broadcast', { event: 'cursor' }, ({ payload }) => {
-        if (typeof payload.row !== "number" || typeof payload.col !== "number" || payload.row < 0 || payload.row > 8 || payload.col < 0 || payload.col > 8) return;
+        if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
         useGameStore.getState().updatePlayer(payload.userId, {
           cursor: { row: payload.row, col: payload.col }
         });
       })
       .on('broadcast', { event: 'cell_lock' }, ({ payload }) => {
-        if (typeof payload.row !== "number" || typeof payload.col !== "number" || payload.row < 0 || payload.row > 8 || payload.col < 0 || payload.col > 8) return;
+        if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
         const key = `${payload.row}-${payload.col}`;
         setLocks(prev => ({
           ...prev,
@@ -259,27 +220,24 @@ export function useRealtime(roomId: string) {
         }));
       })
       .on('broadcast', { event: 'note' }, ({ payload }) => {
-        if (typeof payload.row !== "number" || typeof payload.col !== "number" || typeof payload.note !== "number") return;
+        if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
         useGameStore.getState().toggleNote(payload.row, payload.col, payload.note);
       })
-      // Handler Isian Optimistik Instan (~10-25ms)
       .on('broadcast', { event: 'move_optimistic' }, ({ payload }) => {
+        if (useGameStore.getState().room?.mode === 'competition') return;
         if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
         useGameStore.getState().setOptimisticMove(payload.row, payload.col, payload.value);
       })
-      // Handler Isian Terverifikasi Final
       .on('broadcast', { event: 'move_verified' }, ({ payload }) => {
+        if (useGameStore.getState().room?.mode === 'competition') return;
         if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
 
         const store = useGameStore.getState();
         const isCorrect = Boolean(payload.isCorrect);
-
         store.updateCellWithValidation(payload.row, payload.col, payload.value, payload.userId, isCorrect);
 
         if (payload.value !== null && store.room && payload.userId !== userId) {
-          const player = store.room.players[payload.userId];
-          const playerName = player?.username || 'Pemain';
-
+          const playerName = store.room.players[payload.userId]?.username || 'Pemain';
           if (isCorrect) {
             toast.success(`${playerName}: Jawaban benar ✅`, { id: `move-${payload.row}-${payload.col}-${payload.userId}`, duration: 1500 });
           } else {
@@ -287,74 +245,57 @@ export function useRealtime(roomId: string) {
           }
         }
       })
-      .on('broadcast', { event: 'move' }, ({ payload }) => {
-        if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
-
+      .on('broadcast', { event: 'next_game' }, async ({ payload }) => {
         const store = useGameStore.getState();
-        const isCorrect = Boolean(payload.isCorrect);
+        const currentRoom = store.room;
 
-        store.updateCellWithValidation(payload.row, payload.col, payload.value, payload.userId, isCorrect);
-
-        if (payload.value !== null && store.room && payload.userId !== userId) {
-          const player = store.room.players[payload.userId];
-          const playerName = player?.username || 'Pemain';
-
-          if (isCorrect) {
-            toast.success(`${playerName}: Jawaban benar ✅`, { id: `move-${payload.row}-${payload.col}-${payload.userId}`, duration: 1500 });
-          } else {
-            toast.error(`${playerName}: Jawaban salah ❌`, { id: `move-${payload.row}-${payload.col}-${payload.userId}`, duration: 1500 });
+        if (currentRoom?.mode === 'competition') {
+          try {
+            const res = await fetch('/api/game/create-room', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ difficulty: currentRoom.difficulty }),
+            });
+            const data = await res.json();
+            if (data.initialGrid && data.solutionToken) {
+              store.startNextGame(data.initialGrid, data.solutionToken);
+            }
+          } catch (e) {
+            console.error('Failed to create new competition puzzle', e);
           }
+        } else if (payload?.grid && payload?.solutionToken) {
+          store.startNextGame(payload.grid, payload.solutionToken);
         }
-      })
-      .on('broadcast', { event: 'next_game' }, ({ payload }) => {
-        useGameStore.getState().startNextGame(payload.grid, payload.solutionToken);
       })
       .on('broadcast', { event: 'chat' }, ({ payload }) => {
         useGameStore.getState().addMessage(payload);
       })
       .subscribe(async (status, err) => {
         setRealtimeStatus(status as 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED');
-        if (err) {
-          setConnectionError(err.message || 'Gagal terhubung ke WebSocket channel.');
-        }
+        if (err) setConnectionError(err.message || 'Gagal terhubung ke WebSocket channel.');
 
         if (status === 'SUBSCRIBED') {
           setConnectionError(null);
-
           await channel.track({
             user_id: userId,
             username: username,
             online_at: new Date().toISOString(),
           });
 
-          // Jalankan perbaikan status secepatnya saat terhubung
-          handlePresenceChange();
-
-          // Jalankan perbaikan status secepatnya saat terhubung
           handlePresenceChange();
 
           const sendRequest = () => {
-            channel.send({
-              type: 'broadcast',
-              event: 'request_state',
-              payload: { userId },
-            });
+            channel.send({ type: 'broadcast', event: 'request_state', payload: { userId } });
           };
 
           sendRequest();
 
-          if (retryRef.current) {
-            clearInterval(retryRef.current);
-          }
-
+          if (retryRef.current) clearInterval(retryRef.current);
           let attempts = 0;
 
           retryRef.current = setInterval(() => {
             const currentGrid = useGameStore.getState().grid;
-
             attempts += 1;
-
-            // Tingkatkan batas waktu tunggu (25 detik) dengan jeda per-detik
             if (currentGrid || attempts >= 25) {
               if (retryRef.current) {
                 clearInterval(retryRef.current);
@@ -362,7 +303,6 @@ export function useRealtime(roomId: string) {
               }
               return;
             }
-
             sendRequest();
           }, 1000);
         } else if (status === 'CHANNEL_ERROR') {
@@ -372,7 +312,6 @@ export function useRealtime(roomId: string) {
         }
       });
 
-    // Cleanup expired locks every second
     const interval = setInterval(() => {
       setLocks(prev => {
         const now = Date.now();
@@ -398,7 +337,6 @@ export function useRealtime(roomId: string) {
     };
   }, [roomId, userId, username]);
 
-
   const broadcastCursor = (row: number, col: number) => {
     if (!channelRef.current || !userId) return;
     channelRef.current.send({
@@ -413,9 +351,8 @@ export function useRealtime(roomId: string) {
     const key = `${row}-${col}`;
     const currentLock = locks[key];
 
-    // Don't broadcast if already locked by someone else
     if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
-      return false; // Could not lock
+      return false;
     }
 
     channelRef.current.send({
@@ -424,85 +361,101 @@ export function useRealtime(roomId: string) {
       payload: { userId, row, col },
     });
 
-    // Optimistic lock
     setLocks(prev => ({
       ...prev,
       [key]: { userId, expiresAt: Date.now() + 5000 }
     }));
-    return true; // Locked successfully
+    return true;
   };
 
   const broadcastMove = (row: number, col: number, value: number | null) => {
     if (!channelRef.current || !userId) return;
-
     if (!moveRateLimiter.checkAllowed()) return;
 
     const store = useGameStore.getState();
+    const isCompetition = store.room?.mode === 'competition';
 
-    // Hapus Nilai (Eraser / Backspace) -> Instan
     if (value === null) {
       store.updateCellWithValidation(row, col, null, userId, false);
-      channelRef.current.send({
-        type: 'broadcast',
-        event: 'move_verified',
-        payload: { userId, row, col, value: null, isCorrect: false },
-      });
+
+      if (isCompetition) {
+        const latestPlayer = useGameStore.getState().room?.players[userId];
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'progress_update',
+          payload: {
+            userId,
+            progress: latestPlayer?.progress ?? 0,
+            rank: latestPlayer?.rank ?? null,
+          },
+        });
+      } else {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'move_verified',
+          payload: { userId, row, col, value: null, isCorrect: false },
+        });
+      }
       return;
     }
 
-    // 1. Update UI Lokal secara Instan
     store.setOptimisticMove(row, col, value);
 
-    // 2. Kirim Broadcast Instan ke Player Lain via WebSocket (Tanpa Menunggu Server API)
-    channelRef.current.send({
-      type: 'broadcast',
-      event: 'move_optimistic',
-      payload: { userId, row, col, value },
-    });
+    if (!isCompetition) {
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'move_optimistic',
+        payload: { userId, row, col, value },
+      });
+    }
 
-    // 3. Verifikasi Jawaban ke Server secara Asinkron (Non-blocking)
     if (store.solutionToken) {
       fetch('/api/game/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          row,
-          col,
-          value,
-          solutionToken: store.solutionToken
+        body: JSON.stringify({ row, col, value, solutionToken: store.solutionToken }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          const isCorrect = Boolean(data.isCorrect);
+
+          store.updateCellWithValidation(row, col, value, userId, isCorrect);
+
+          if (isCorrect) {
+            toast.success('Jawaban benar ✅', { id: `move-${row}-${col}`, duration: 1500 });
+          } else {
+            toast.error('Jawaban salah ❌', { id: `move-${row}-${col}`, duration: 1500 });
+          }
+
+          const latestPlayer = useGameStore.getState().room?.players[userId];
+
+          if (isCompetition) {
+            channelRef.current?.send({
+              type: 'broadcast',
+              event: 'progress_update',
+              payload: {
+                userId,
+                progress: latestPlayer?.progress ?? 0,
+                rank: latestPlayer?.rank ?? null,
+              },
+            });
+          } else {
+            channelRef.current?.send({
+              type: 'broadcast',
+              event: 'move_verified',
+              payload: { userId, row, col, value, isCorrect },
+            });
+          }
         })
-      })
-      .then(res => res.json())
-      .then(data => {
-        const isCorrect = Boolean(data.isCorrect);
-
-        // Update State Lokal Final & Skor
-        store.updateCellWithValidation(row, col, value, userId, isCorrect);
-
-        if (isCorrect) {
-          toast.success('Jawaban benar ✅', { id: `move-${row}-${col}`, duration: 1500 });
-        } else {
-          toast.error('Jawaban salah ❌', { id: `move-${row}-${col}`, duration: 1500 });
-        }
-
-        // Siarkan Hasil Verifikasi & Skor ke Seluruh Player
-        channelRef.current?.send({
-          type: 'broadcast',
-          event: 'move_verified',
-          payload: { userId, row, col, value, isCorrect },
+        .catch((e) => {
+          console.error('Gagal verifikasi jawaban ke server', e);
         });
-      })
-      .catch(e => {
-        console.error('Gagal verifikasi jawaban ke server', e);
-      });
     }
   };
 
   const broadcastNote = (row: number, col: number, note: number) => {
     if (!channelRef.current || !userId) return;
-
     useGameStore.getState().toggleNote(row, col, note);
-
     channelRef.current.send({
       type: 'broadcast',
       event: 'note',
@@ -510,11 +463,8 @@ export function useRealtime(roomId: string) {
     });
   };
 
-  const broadcastNextGame = (newGrid: Grid, newSolutionToken: string) => {
+  const broadcastNextGame = (newGrid: Grid | null, newSolutionToken: string | null) => {
     if (!channelRef.current || !userId) return;
-
-    useGameStore.getState().startNextGame(newGrid, newSolutionToken);
-
     channelRef.current.send({
       type: 'broadcast',
       event: 'next_game',
@@ -532,7 +482,6 @@ export function useRealtime(roomId: string) {
       timestamp: Date.now()
     };
 
-    // Update lokal instan + broadcast serentak
     useGameStore.getState().addMessage(msg);
     channelRef.current.send({
       type: 'broadcast',

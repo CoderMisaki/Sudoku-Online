@@ -42,3 +42,10 @@
 - Identified an issue where a player (including the host) would get stuck in the `( Leave Room )` or 'offline' status upon reconnecting, because the `sync_state` received back from the host still contained the old 'offline' state.
 - Updated `src/hooks/useRealtime.ts` to implement a centralized `handlePresenceChange` function. This leverages the WebSocket `channel.presenceState()` as the source of truth, updating client local state correctly during `sync`, `join`, and `leave` events.
 - Ensured that both the host sending the `sync_state` and the client receiving it automatically mark themselves and the requesting user as 'online' instantly, avoiding the status freeze.
+
+2024-03-08 - [Sudoku Competition Mode Feature Addition]
+- Added "Competition" game mode to the application allowing players to solve unique individual puzzles while seeing real-time progress percentages and ranks of other players, instead of scores.
+- Extended the `Player` interface in `gameStore` with `progress` and `rank` properties to support competition tracking.
+- Decoupled real-time game board interactions (e.g., cursor, locks, cell modifications) in `useRealtime` and `SudokuBoard.tsx` for the "competition" mode.
+- Fixed a bug where progressing to the next game using `startNextGame` would reset all chat messages, preserving communication history between sessions.
+- Trigger individual server calls in `/api/game/create-room` on `next_game` for players in "competition" mode instead of receiving one shared puzzle broadcast.

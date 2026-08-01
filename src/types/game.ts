@@ -1,5 +1,5 @@
 export type Difficulty = 'easy' | 'medium' | 'hard' | 'expert' | 'evil';
-export type GameMode = 'classic' | 'learning' | 'collaborative' | 'race' | 'zen';
+export type GameMode = 'classic' | 'learning' | 'collaborative' | 'race' | 'zen' | 'competition';
 
 export interface Player {
   id: string;
@@ -7,6 +7,8 @@ export interface Player {
   color: string;
   isHost: boolean;
   score: number;
+  progress?: number; // Persentase progress (0 - 100)
+  rank?: number | null; // Peringkat juara (1, 2, 3, 4, dst)
   hints: number;
   status: 'online' | 'offline';
   cursor?: { row: number; col: number } | null;

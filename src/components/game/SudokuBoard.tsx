@@ -2,10 +2,7 @@
 
 import React, { useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store/gameStore';
-// import { isValidMove } from '../../utils/sudoku';
 import { cn } from '../../utils/cn';
-
-// import toast from 'react-hot-toast';
 
 interface SudokuBoardProps {
   broadcastMove: (row: number, col: number, value: number | null) => void;
@@ -24,19 +21,25 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
   const room = useGameStore(state => state.room);
   const userId = useGameStore(state => state.userId);
 
+  const isCompetition = room?.mode === 'competition';
+
   const handleCellClick = useCallback((row: number, col: number) => {
     if (!grid) return;
 
-    const key = `${row}-${col}`;
-    const currentLock = locks[key];
-    if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
-      return;
+    if (!isCompetition) {
+      const key = `${row}-${col}`;
+      const currentLock = locks[key];
+      if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
+        return;
+      }
     }
 
     setSelectedCell({ row, col });
-    broadcastCursor(row, col);
-    lockCell(row, col);
-  }, [grid, locks, userId, setSelectedCell, broadcastCursor, lockCell]);
+    if (!isCompetition) {
+      broadcastCursor(row, col);
+      lockCell(row, col);
+    }
+  }, [grid, locks, userId, setSelectedCell, broadcastCursor, lockCell, isCompetition]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const target = e.target as HTMLElement | null;
@@ -49,10 +52,12 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     const { row, col } = selectedCell;
     const cell = grid[row][col];
 
-    const key = `${row}-${col}`;
-    const currentLock = locks[key];
-    if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
-      return;
+    if (!isCompetition) {
+      const key = `${row}-${col}`;
+      const currentLock = locks[key];
+      if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
+        return;
+      }
     }
 
     if (e.key >= '1' && e.key <= '9') {
@@ -81,7 +86,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     } else if (e.key === 'ArrowRight') {
       handleCellClick(row, Math.min(8, col + 1));
     }
-  }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode]);
+  }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode, isCompetition]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -96,7 +101,6 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
         row.map((cell, cIndex) => {
           const isSelected = selectedCell?.row === rIndex && selectedCell?.col === cIndex;
 
-          // Check apakah angka sel sama dengan angka di sel yang dipencet
           let isSameValue = false;
           if (selectedCell) {
             const selectedVal = grid[selectedCell.row][selectedCell.col].value;
@@ -104,12 +108,12 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
           }
 
           const lockKey = `${rIndex}-${cIndex}`;
-          const currentLock = locks[lockKey];
-          const isLockedByOther = currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now();
+          const currentLock = isCompetition ? null : locks[lockKey];
+          const isLockedByOther = !isCompetition && currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now();
           const lockerPlayer = isLockedByOther ? room?.players[currentLock.userId] : null;
 
           let otherCursorPlayer = null;
-          if (room && !isLockedByOther) {
+          if (room && !isLockedByOther && !isCompetition) {
             for (const p of Object.values(room.players)) {
               if (p.id !== userId && p.cursor?.row === rIndex && p.cursor?.col === cIndex) {
                 otherCursorPlayer = p;
@@ -129,23 +133,14 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                 {
                   "border-b-2 border-foreground": rIndex % 3 === 2 && rIndex !== 8,
                   "border-r-2 border-foreground": cIndex % 3 === 2 && cIndex !== 8,
-
-                  // Highlight sel yang dipilih
                   "bg-secondary/40": isSelected && !isError,
-
-                  // Background merah HANYA untuk sel yang error/conflict, tapi jangan tutup angka
                   "bg-red-500/30": isError && !isSelected,
-
-                  // Highlight angka kembar: gunakan ring/outline pink, BUKAN merubah warna teks saja
                   "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected,
                   "ring-2 ring-white ring-inset": isSameValue && isSelected,
-
-                  // Warna teks angka (pastikan terbaca jelas)
                   "text-foreground font-bold": !isSameValue && (cell.isLocked || isError),
                   "text-foreground font-medium": !isSameValue && !cell.isLocked && !isError,
                   "text-pink-500 font-bold": isSameValue && (cell.isLocked || isError),
                   "text-pink-500 font-medium": isSameValue && !cell.isLocked && !isError,
-
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }
               )}
@@ -156,7 +151,6 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                 </span>
               )}
 
-              {/* Tampilan Catatan / Pensil */}
               {cell.value === null && cell.notes.length > 0 && (
                 <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 p-0.5 pointer-events-none z-10">
                   {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
@@ -165,8 +159,8 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                       className={cn(
                         "flex items-center justify-center text-[10px] sm:text-[11px] leading-none select-none transition-colors duration-150",
                         isSelected
-                          ? "text-black dark:text-black font-black" // Hitam tegas saat sel aktif terpilih
-                          : "text-foreground/90 dark:text-gray-100 font-bold" // Kembali otomatis ke warna default saat berpindah sel
+                          ? "text-black dark:text-black font-black"
+                          : "text-foreground/90 dark:text-gray-100 font-bold"
                       )}
                     >
                       {cell.notes.includes(n) ? n : ''}
@@ -175,7 +169,6 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                 </div>
               )}
 
-              {/* Kursor / Indikator Player Lain */}
               {(otherCursorPlayer || lockerPlayer) && (
                 <div
                   className="absolute inset-0 border-2 pointer-events-none z-20 transition-all duration-200"

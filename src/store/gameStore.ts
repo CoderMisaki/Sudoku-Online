@@ -13,6 +13,7 @@ interface GameStore {
   room: RoomState | null;
   setRoom: (room: RoomState | null) => void;
   updatePlayer: (playerId: string, data: Partial<Player>) => void;
+  updatePlayerProgress: (playerId: string, progress: number, rank?: number | null) => void;
 
   // Game State
   grid: Grid | null;
@@ -61,6 +62,23 @@ export const useGameStore = create<GameStore>()(
         };
       }),
 
+      updatePlayerProgress: (playerId, progress, rank) => set((state) => {
+        if (!state.room || !state.room.players[playerId]) return state;
+        return {
+          room: {
+            ...state.room,
+            players: {
+              ...state.room.players,
+              [playerId]: {
+                ...state.room.players[playerId],
+                progress,
+                rank: rank !== undefined ? rank : state.room.players[playerId].rank
+              }
+            }
+          }
+        };
+      }),
+
       grid: null,
       solutionToken: null,
 
@@ -97,7 +115,6 @@ export const useGameStore = create<GameStore>()(
         const mode = state.room.mode;
 
         const isWrongMove = value !== null && !isCorrect;
-        // Pada mode classic jika jawaban salah, angkanya tidak dimasukkan (tetap null)
         const shouldRejectWrongMove = isWrongMove && mode === 'classic';
 
         newGrid[row][col] = {
@@ -111,20 +128,65 @@ export const useGameStore = create<GameStore>()(
 
         const validatedGrid = checkConflicts(newGrid);
 
-        // Perhitungan Skor Resmi Terverifikasi
         let newRoom = { ...state.room };
-        if (value !== null && mode !== 'zen') {
+
+        if (mode === 'competition') {
+          // Hitung progress berdasarkan sel yang benar dan tidak berkonflik
+          let totalNonLocked = 0;
+          let correctCount = 0;
+          for (let r = 0; r < 9; r++) {
+            for (let c = 0; c < 9; c++) {
+              const cell = validatedGrid[r][c];
+              if (!cell.isLocked) {
+                totalNonLocked++;
+                if (cell.value !== null && !cell.isWrong && !cell.isConflicting) {
+                  correctCount++;
+                }
+              }
+            }
+          }
+
+          const progPercent = totalNonLocked > 0 ? Math.floor((correctCount / totalNonLocked) * 100) : 0;
+          const isComplete = totalNonLocked > 0 && correctCount === totalNonLocked;
+
+          const currentPlayer = newRoom.players[playerId];
+          let newRank = currentPlayer?.rank ?? null;
+
+          if (isComplete && !newRank) {
+            // Hitung berapa banyak player yang sudah selesai sebelumnya
+            const existingRanks = Object.values(newRoom.players)
+              .map(p => p.rank)
+              .filter((r): r is number => typeof r === 'number' && r > 0);
+            newRank = existingRanks.length + 1;
+          }
+
+          if (newRoom.players[playerId]) {
+            newRoom = {
+              ...newRoom,
+              players: {
+                ...newRoom.players,
+                [playerId]: {
+                  ...newRoom.players[playerId],
+                  progress: progPercent,
+                  rank: newRank,
+                }
+              }
+            };
+          }
+        } else if (value !== null && mode !== 'zen') {
           const currentScore = state.room.players[playerId]?.score || 0;
           const scoreDiff = isCorrect ? 10 : -5;
           const newScore = currentScore + scoreDiff;
 
-          newRoom = {
-            ...state.room,
-            players: {
-              ...state.room.players,
-              [playerId]: { ...state.room.players[playerId], score: newScore }
-            }
-          };
+          if (newRoom.players[playerId]) {
+            newRoom = {
+              ...newRoom,
+              players: {
+                ...newRoom.players,
+                [playerId]: { ...newRoom.players[playerId], score: newScore }
+              }
+            };
+          }
         }
 
         return {
@@ -156,15 +218,18 @@ export const useGameStore = create<GameStore>()(
       selectedCell: null,
       setSelectedCell: (cell) => set({ selectedCell: cell }),
       resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null }),
+
       startNextGame: (newGrid, newSolutionToken) => set((state) => {
         if (!state.room) return state;
 
-        // Reset scores and hints for all players
+        // Reset skor, progress, dan peringkat untuk semua pemain
         const newPlayers = { ...state.room.players };
         Object.keys(newPlayers).forEach(playerId => {
           newPlayers[playerId] = {
             ...newPlayers[playerId],
             score: 0,
+            progress: 0,
+            rank: null,
             hints: 3
           };
         });
@@ -173,15 +238,16 @@ export const useGameStore = create<GameStore>()(
           room: {
             ...state.room,
             players: newPlayers,
-            startedAt: Date.now(), // Reset timer
+            startedAt: Date.now(),
             status: 'playing'
           },
           grid: newGrid,
           solutionToken: newSolutionToken,
           selectedCell: null,
-          messages: [] // Optional: clear messages, but keeping might be fine. Let's keep messages, it's nice for chat history. Wait, user said "reset ulang lagi seperti main baru". Usually chat can be kept. Let's clear it just in case. Or let's not clear chat, it breaks communication. Actually I will leave messages alone.
+          // PERBAIKAN BUG: Tidak menghapus pesan chat (messages)
         };
       }),
+
       enterRoom: (roomId) => {
         const state = get();
         if (state.room?.id === roomId) return;
@@ -196,7 +262,6 @@ export const useGameStore = create<GameStore>()(
     }),
     {
       name: "sudoku-game-storage",
-      // AMAN: solutionToken dan solution TIDAK disimpan di localStorage
       partialize: (state) => ({ messages: state.messages }),
     }
   )
