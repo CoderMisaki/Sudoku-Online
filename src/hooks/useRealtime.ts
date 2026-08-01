@@ -220,7 +220,9 @@ export function useRealtime(roomId: string) {
         }));
       })
       .on('broadcast', { event: 'note' }, ({ payload }) => {
-        if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
+        // PERBAIKAN: Abaikan event note masuk jika berada di mode competition
+        if (useGameStore.getState().room?.mode === 'competition') return;
+        if (typeof payload.row !== "number" || typeof payload.col !== "number" || typeof payload.note !== "number") return;
         useGameStore.getState().toggleNote(payload.row, payload.col, payload.note);
       })
       .on('broadcast', { event: 'move_optimistic' }, ({ payload }) => {
@@ -455,7 +457,13 @@ export function useRealtime(roomId: string) {
 
   const broadcastNote = (row: number, col: number, note: number) => {
     if (!channelRef.current || !userId) return;
+
+    // Selalu update note secara lokal pada board pemain yang bersangkutan
     useGameStore.getState().toggleNote(row, col, note);
+
+    // PERBAIKAN: Jika sedang dalam mode Competition, hentikan pengiriman broadcast note ke pemain lain
+    if (useGameStore.getState().room?.mode === 'competition') return;
+
     channelRef.current.send({
       type: 'broadcast',
       event: 'note',
