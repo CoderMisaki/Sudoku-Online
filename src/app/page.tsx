@@ -175,6 +175,7 @@ export default function Home() {
               className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
             >
               <option value="collaborative">Collaborative (Kerjasama)</option>
+              <option value="competition">Competition (Persaingan)</option>
               <option value="classic">Classic (Klasik)</option>
               <option value="race">Race (Balapan Skor)</option>
               <option value="zen">Zen (Santai)</option>
