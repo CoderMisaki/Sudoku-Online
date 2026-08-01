@@ -37,3 +37,8 @@
 - Final server verifications execute asynchronously in the background. Once completed, a `move_verified` event updates the formal game score and error indicators.
 - Adjusted action rate limiting in `rateLimiter.ts` by reducing the `cooldownMs` from 150ms to 40ms and increasing the action count threshold from 3 to 10 to better support fast typing (bursts) and rapid pencil mode entries without ignoring dropped commands.
 - Added a `animate-pulse` visual effect on the `SudokuBoard` for cells while they are `isPending` (optimistically drawn but waiting on server verification), enhancing real-time responsiveness feedback.
+
+2026-08-01 - [Fix Player Stuck in Leave Room Status]
+- Identified an issue where a player (including the host) would get stuck in the `( Leave Room )` or 'offline' status upon reconnecting, because the `sync_state` received back from the host still contained the old 'offline' state.
+- Updated `src/hooks/useRealtime.ts` to implement a centralized `handlePresenceChange` function. This leverages the WebSocket `channel.presenceState()` as the source of truth, updating client local state correctly during `sync`, `join`, and `leave` events.
+- Ensured that both the host sending the `sync_state` and the client receiving it automatically mark themselves and the requesting user as 'online' instantly, avoiding the status freeze.
