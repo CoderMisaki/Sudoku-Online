@@ -217,10 +217,10 @@ export default function RoomPage() {
     let mode: GameMode = 'collaborative';
     let maxPlayers = 4;
 
-    const tempConfigStr = sessionStorage.getItem('temp_room_config');
-    if (tempConfigStr) {
+    const roomConfigStr = sessionStorage.getItem(`sudoku_room_config_${roomId}`);
+    if (roomConfigStr) {
       try {
-        const config = JSON.parse(tempConfigStr);
+        const config = JSON.parse(roomConfigStr);
         isHostFromConfig = Boolean(config.isHost);
         if (isHostFromConfig) {
           difficulty = (config.difficulty as Difficulty) || 'medium';
@@ -228,9 +228,8 @@ export default function RoomPage() {
           maxPlayers = config.maxPlayers || 4;
         }
       } catch (error) {
-        console.error('Failed to parse temp_room_config', error);
+        console.error('Failed to parse room config', error);
       }
-      sessionStorage.removeItem('temp_room_config');
     }
 
     const currentState = useGameStore.getState();

@@ -64,7 +64,7 @@ export default function Home() {
     sessionStorage.setItem(`sudoku_host_room_${roomId}`, '1');
 
     // Store room config in session storage for the room page
-    sessionStorage.setItem('temp_room_config', JSON.stringify({
+    sessionStorage.setItem(`sudoku_room_config_${roomId}`, JSON.stringify({
       isHost: true,
       difficulty,
       mode,
