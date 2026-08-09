@@ -95,6 +95,27 @@ export const useGameStore = create<GameStore>()(
           isPending: true
         };
 
+        // Auto-clear notes
+        const filledVal = value;
+        const boxR = Math.floor(row / 3) * 3;
+        const boxC = Math.floor(col / 3) * 3;
+
+        for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            if (r === row || c === col || (r >= boxR && r < boxR + 3 && c >= boxC && c < boxC + 3)) {
+              if (newGrid[r][c].notes.includes(filledVal)) {
+                if (newGrid[r] === state.grid[r]) {
+                  newGrid[r] = [...newGrid[r]];
+                }
+                newGrid[r][c] = {
+                  ...newGrid[r][c],
+                  notes: newGrid[r][c].notes.filter((n) => n !== filledVal)
+                };
+              }
+            }
+          }
+        }
+
         return { grid: checkConflicts(newGrid) };
       }),
 
@@ -126,6 +147,27 @@ export const useGameStore = create<GameStore>()(
           notes: value !== null ? [] : newGrid[row][col].notes
         };
 
+        if (value !== null && !isWrongMove && !shouldRejectWrongMove) {
+          const filledVal = value;
+          const boxR = Math.floor(row / 3) * 3;
+          const boxC = Math.floor(col / 3) * 3;
+
+          for (let r = 0; r < 9; r++) {
+            for (let c = 0; c < 9; c++) {
+              if (r === row || c === col || (r >= boxR && r < boxR + 3 && c >= boxC && c < boxC + 3)) {
+                if (newGrid[r][c].notes.includes(filledVal)) {
+                  if (newGrid[r] === state.grid[r]) {
+                    newGrid[r] = [...newGrid[r]];
+                  }
+                  newGrid[r][c] = {
+                    ...newGrid[r][c],
+                    notes: newGrid[r][c].notes.filter((n) => n !== filledVal)
+                  };
+                }
+              }
+            }
+          }
+        }
         const validatedGrid = checkConflicts(newGrid);
 
         let newRoom = { ...state.room };
@@ -262,7 +304,12 @@ export const useGameStore = create<GameStore>()(
     }),
     {
       name: "sudoku-game-storage",
-      partialize: (state) => ({ messages: state.messages }),
+      partialize: (state) => ({
+        room: state.room,
+        grid: state.grid,
+        solutionToken: state.solutionToken,
+        messages: state.messages,
+      }),
     }
   )
 );
