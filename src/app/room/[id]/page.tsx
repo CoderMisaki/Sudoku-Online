@@ -131,7 +131,7 @@ export default function RoomPage() {
       useGameStore.getState().setRoom(updatedRoom);
 
       if (gameMode === 'competition') {
-        broadcastNextGame(null, null);
+        broadcastNextGame(null, null, updatedRoom);
         const res = await fetch('/api/game/create-room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -152,7 +152,8 @@ export default function RoomPage() {
         });
         const data = await res.json();
         if (res.ok && data.initialGrid && data.solutionToken) {
-          broadcastNextGame(data.initialGrid, data.solutionToken);
+          useGameStore.getState().startNextGame(data.initialGrid, data.solutionToken);
+          broadcastNextGame(data.initialGrid, data.solutionToken, updatedRoom);
           toast.success('Game baru dimulai!', { id: 'nextGame' });
         } else {
           toast.error('Gagal membuat game baru', { id: 'nextGame' });
