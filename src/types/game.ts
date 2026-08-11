@@ -12,6 +12,7 @@ export interface Player {
   hints: number;
   status: 'online' | 'offline';
   cursor?: { row: number; col: number } | null;
+  isSpectator?: boolean;
 }
 
 export interface CellData {

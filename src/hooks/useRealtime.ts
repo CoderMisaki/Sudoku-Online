@@ -94,6 +94,8 @@ export function useRealtime(roomId: string) {
         }
       });
 
+      const maxPlayers = store.room.maxPlayers || 4;
+
       Object.keys(presenceState).forEach((pId) => {
         const presences = presenceState[pId] as Array<{ username?: string; user_id?: string }>;
         const presObj = presences?.[0];
@@ -101,6 +103,9 @@ export function useRealtime(roomId: string) {
         const uname = presObj?.username || 'Player';
 
         if (!newPlayers[actualId]) {
+          const activeCount = Object.values(newPlayers).filter((p) => !p.isSpectator).length;
+          const isSpectator = activeCount >= maxPlayers && actualId !== store.room?.hostId;
+
           newPlayers[actualId] = {
             id: actualId,
             username: uname,
@@ -109,6 +114,7 @@ export function useRealtime(roomId: string) {
             score: 0,
             hints: 3,
             status: 'online',
+            isSpectator,
           };
           changed = true;
         }

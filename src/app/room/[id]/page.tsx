@@ -9,7 +9,7 @@ import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
-import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle } from 'lucide-react';
+import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle, ArrowLeft, ArrowUp, ArrowDown, ArrowRight } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
@@ -31,6 +31,7 @@ export default function RoomPage() {
   const messages = useGameStore(state => state.messages);
   const player = useGameStore(state => state.room?.players[userId || '']);
   const hintsRemaining = player?.hints ?? 3;
+  const isSpectator = Boolean(player?.isSpectator);
 
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -294,6 +295,7 @@ export default function RoomPage() {
   };
 
   const handleHint = useCallback(async () => {
+    if (isSpectator) return;
     if (!userId || !selectedCell) {
       toast.error('Pilih kotak kosong terlebih dahulu untuk menggunakan hint!');
       return;
@@ -320,10 +322,28 @@ export default function RoomPage() {
         console.error('Gagal mendapatkan hint', e);
       }
     }
-  }, [userId, selectedCell, broadcastMove]);
+  }, [userId, selectedCell, broadcastMove, isSpectator]);
+
+  const handleArrowNavigate = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
+    if (isSpectator) return;
+    const current = selectedCell || { row: 0, col: 0 };
+    let newRow = current.row;
+    let newCol = current.col;
+
+    if (direction === 'up') newRow = Math.max(0, current.row - 1);
+    if (direction === 'down') newRow = Math.min(8, current.row + 1);
+    if (direction === 'left') newCol = Math.max(0, current.col - 1);
+    if (direction === 'right') newCol = Math.min(8, current.col + 1);
+
+    useGameStore.getState().setSelectedCell({ row: newRow, col: newCol });
+    if (room?.mode !== 'competition') {
+      broadcastCursor(newRow, newCol);
+      lockCell(newRow, newCol);
+    }
+  }, [selectedCell, broadcastCursor, lockCell, isSpectator, room?.mode]);
 
   const handleNumpadClick = useCallback((num: number) => {
-    if (!selectedCell || !userId) return;
+    if (isSpectator || !selectedCell || !userId) return;
     const { row, col } = selectedCell;
     const key = `${row}-${col}`;
     const currentLock = locks[key];
@@ -335,14 +355,15 @@ export default function RoomPage() {
 
     if (isEraserMode && currentGrid && currentGrid[row][col].value === null) {
       if (currentGrid[row][col].notes.includes(num)) broadcastNote(row, col, num);
-    } else if (isPencilMode && currentGrid && currentGrid[row][col].value === null) {
+    } else if (!isSpectator && isPencilMode && currentGrid && currentGrid[row][col].value === null) {
       broadcastNote(row, col, num);
-    } else {
+    } else if (!isSpectator) {
       broadcastMove(row, col, num);
     }
-  }, [selectedCell, userId, broadcastMove, broadcastNote, locks, isPencilMode, isEraserMode]);
+  }, [selectedCell, userId, broadcastMove, broadcastNote, locks, isPencilMode, isEraserMode, isSpectator]);
 
   const handleEraserClick = useCallback(() => {
+    if (isSpectator) return;
     setIsEraserMode(!isEraserMode);
     setIsPencilMode(false);
 
@@ -359,7 +380,7 @@ export default function RoomPage() {
     if (currentGrid && currentGrid[row][col].value !== null) {
       broadcastMove(row, col, null);
     }
-  }, [isEraserMode, selectedCell, userId, broadcastMove, locks]);
+  }, [isEraserMode, selectedCell, userId, broadcastMove, locks, isSpectator]);
 
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center bg-background text-foreground">Loading room...</div>;
@@ -571,7 +592,7 @@ export default function RoomPage() {
             {/* Controls */}
             <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={handleHint} disabled={hintsRemaining <= 0}>
+                <Button variant="outline" size="sm" onClick={handleHint} disabled={hintsRemaining <= 0 || isSpectator}>
                   <Lightbulb className="w-4 h-4 mr-2" /> Hint ({hintsRemaining})
                 </Button>
                 <Button variant={isPencilMode ? "primary" : "outline"} size="sm" onClick={() => { setIsPencilMode(!isPencilMode); setIsEraserMode(false); }}>
@@ -581,12 +602,28 @@ export default function RoomPage() {
                   <Eraser className="w-4 h-4 mr-2" /> Eraser
                 </Button>
               </div>
-              <div className="flex flex-wrap justify-center gap-2">
+              <div className="flex items-center gap-2 bg-card p-1.5 rounded-xl border border-border mt-2">
+                <span className="text-xs text-secondary font-medium px-1">Navigasi:</span>
+                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('left')} disabled={isSpectator}>
+                  <ArrowLeft className="w-4 h-4" />
+                </Button>
+                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('up')} disabled={isSpectator}>
+                  <ArrowUp className="w-4 h-4" />
+                </Button>
+                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('down')} disabled={isSpectator}>
+                  <ArrowDown className="w-4 h-4" />
+                </Button>
+                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('right')} disabled={isSpectator}>
+                  <ArrowRight className="w-4 h-4" />
+                </Button>
+              </div>
+              <div className="flex flex-wrap justify-center gap-2 mt-2">
                 {[1,2,3,4,5,6,7,8,9].map(n => (
                   <button
                     key={n}
                     onClick={() => handleNumpadClick(n)}
-                    className="w-10 h-10 rounded-lg border border-border bg-card hover:bg-hover font-semibold text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-foreground"
+                    disabled={isSpectator}
+                    className="w-10 h-10 rounded-lg border border-border bg-card hover:bg-hover font-semibold text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-foreground disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {n}
                   </button>
