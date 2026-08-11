@@ -284,7 +284,7 @@ export const useGameStore = create<GameStore>()(
             startedAt: Date.now(),
             status: 'playing'
           },
-          grid: newGrid,
+          grid: checkConflicts(newGrid),
           solutionToken: newSolutionToken,
           selectedCell: null,
           // PERBAIKAN BUG: Tidak menghapus pesan chat (messages)

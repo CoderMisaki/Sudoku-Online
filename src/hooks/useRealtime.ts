@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
-import { Grid } from "../types/game";
+import { Grid, RoomState } from "../types/game";
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { ChatMessage } from '../types/game';
 import { moveRateLimiter } from '../utils/rateLimiter';
@@ -255,6 +255,12 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'next_game' }, async ({ payload }) => {
         const store = useGameStore.getState();
+
+        // Update room settings jika ada perubahan opsi dari host
+        if (payload?.room) {
+          store.setRoom(payload.room);
+        }
+
         const currentRoom = store.room;
 
         if (currentRoom?.mode === 'competition') {
@@ -482,12 +488,12 @@ export function useRealtime(roomId: string) {
     });
   };
 
-  const broadcastNextGame = (newGrid: Grid | null, newSolutionToken: string | null) => {
+  const broadcastNextGame = (newGrid: Grid | null, newSolutionToken: string | null, updatedRoom?: RoomState) => {
     if (!channelRef.current || !userId) return;
     channelRef.current.send({
       type: 'broadcast',
       event: 'next_game',
-      payload: { grid: newGrid, solutionToken: newSolutionToken },
+      payload: { grid: newGrid, solutionToken: newSolutionToken, room: updatedRoom },
     });
   };
 
