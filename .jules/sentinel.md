@@ -49,3 +49,9 @@
 - Decoupled real-time game board interactions (e.g., cursor, locks, cell modifications) in `useRealtime` and `SudokuBoard.tsx` for the "competition" mode.
 - Fixed a bug where progressing to the next game using `startNextGame` would reset all chat messages, preserving communication history between sessions.
 - Trigger individual server calls in `/api/game/create-room` on `next_game` for players in "competition" mode instead of receiving one shared puzzle broadcast.
+
+2026-08-01 - [Fix Host Migration, Spectator Mode, and Lobby Settings]
+- Resolved an issue with excessive host migrations by refactoring the host demotion logic into `cancelHostMigration` and `scheduleHostMigration` delays within `useRealtime.ts`. A new host is only chosen after a 7000ms grace period or an explicit `leave_room` broadcast.
+- Modified the competition mode wrong-move interaction: incorrect inputs are now removed off the board similar to classic mode while retaining the correct ones, simplifying gameplay readability.
+- Implemented Spectator Mode functionality. When maximum active players are exceeded, users connect seamlessly as spectators. Adjusted event broadcasts to reject inputs, removed interactive UI components, and displayed spectator indicators on the board interface for non-players.
+- Updated Next Game functionality allowing hosts to tweak `nextDifficulty`, `nextMode`, and `nextMaxPlayers` directly via the endgame UI lobby controls before deploying `handleApplyNextGame`. Avoids re-creating a whole new room and connection.
