@@ -296,31 +296,64 @@ export default function RoomPage() {
 
   const handleHint = useCallback(async () => {
     if (isSpectator) return;
-    if (!userId || !selectedCell) {
-      toast.error('Pilih kotak kosong terlebih dahulu untuk menggunakan hint!');
+    if (!userId) return;
+
+    if (!selectedCell) {
+      toast.error('Pilih kotak terlebih dahulu untuk menggunakan hint!');
       return;
     }
+
     const store = useGameStore.getState();
     const player = store.room?.players[userId];
-    if (!player || player.hints <= 0) return;
-    if (store.grid && store.grid[selectedCell.row][selectedCell.col].isLocked) return;
+    if (!player) return;
 
-    if (store.solutionToken) {
-      try {
-        const res = await fetch('/api/game/hint', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ row: selectedCell.row, col: selectedCell.col, solutionToken: store.solutionToken })
-        });
-        const data = await res.json();
-        if (data.value !== undefined) {
-          broadcastMove(selectedCell.row, selectedCell.col, data.value);
-          store.updatePlayer(userId, { hints: player.hints - 1 });
-          toast.success('Hint digunakan untuk 1 kotak!');
+    if (player.hints <= 0) {
+      toast.error('Jatah hint kamu sudah habis!');
+      return;
+    }
+
+    const currentCell = store.grid?.[selectedCell.row]?.[selectedCell.col];
+    if (!currentCell) return;
+
+    // Jika sel merupakan soal awal yang sudah dikunci
+    if (currentCell.isLocked) {
+      toast('Jawaban sudah benar', { icon: '✅' });
+      return;
+    }
+
+    if (!store.solutionToken) {
+      toast.error('Token room tidak ditemukan.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/game/hint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          row: selectedCell.row,
+          col: selectedCell.col,
+          solutionToken: store.solutionToken,
+        }),
+      });
+      const data = await res.json();
+      if (data.value !== undefined) {
+        // Jika sel sudah terisi jawaban yang benar
+        if (currentCell.value !== null && currentCell.value === data.value) {
+          toast('Jawaban sudah benar', { icon: '✅' });
+          return;
         }
-      } catch (e) {
-        console.error('Gagal mendapatkan hint', e);
+
+        // Berfungsi untuk kotak kosong (null) atau angka yang salah
+        broadcastMove(selectedCell.row, selectedCell.col, data.value);
+        store.updatePlayer(userId, { hints: player.hints - 1 });
+        toast.success('Hint digunakan!');
+      } else if (data.error) {
+        toast.error(data.error);
       }
+    } catch (e) {
+      console.error('Gagal mendapatkan hint:', e);
+      toast.error('Gagal mengambil hint');
     }
   }, [userId, selectedCell, broadcastMove, isSpectator]);
 
@@ -602,6 +635,8 @@ export default function RoomPage() {
                   <Eraser className="w-4 h-4 mr-2" /> Eraser
                 </Button>
               </div>
+
+              {/* TOMBOL NAVIGASI PANAH */}
               <div className="flex items-center gap-2 bg-card p-1.5 rounded-xl border border-border mt-2">
                 <span className="text-xs text-secondary font-medium px-1">Navigasi:</span>
                 <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('left')} disabled={isSpectator}>

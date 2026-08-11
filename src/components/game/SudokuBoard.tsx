@@ -47,7 +47,22 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
       return;
     }
 
-    if (!selectedCell || !grid || !userId) return;
+    if (!grid || !userId) return;
+
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      e.preventDefault(); // Prevent page scrolling
+      const current = selectedCell || { row: 0, col: 0 };
+      let newRow = current.row;
+      let newCol = current.col;
+      if (e.key === 'ArrowUp') newRow = Math.max(0, current.row - 1);
+      if (e.key === 'ArrowDown') newRow = Math.min(8, current.row + 1);
+      if (e.key === 'ArrowLeft') newCol = Math.max(0, current.col - 1);
+      if (e.key === 'ArrowRight') newCol = Math.min(8, current.col + 1);
+      handleCellClick(newRow, newCol);
+      return;
+    }
+
+    if (!selectedCell) return;
 
     const { row, col } = selectedCell;
     const cell = grid[row][col];
@@ -77,14 +92,6 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
       if (!cell.isLocked) {
         broadcastMove(row, col, null);
       }
-    } else if (e.key === 'ArrowUp') {
-      handleCellClick(Math.max(0, row - 1), col);
-    } else if (e.key === 'ArrowDown') {
-      handleCellClick(Math.min(8, row + 1), col);
-    } else if (e.key === 'ArrowLeft') {
-      handleCellClick(row, Math.max(0, col - 1));
-    } else if (e.key === 'ArrowRight') {
-      handleCellClick(row, Math.min(8, col + 1));
     }
   }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode, isCompetition]);
 

@@ -423,7 +423,10 @@ export function useRealtime(roomId: string) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ row, col, value, solutionToken: store.solutionToken }),
       })
-        .then((res) => res.json())
+        .then((res) => {
+          if (!res.ok) throw new Error('Failed to verify move');
+          return res.json();
+        })
         .then((data) => {
           const isCorrect = Boolean(data.isCorrect);
 
@@ -457,6 +460,8 @@ export function useRealtime(roomId: string) {
         })
         .catch((e) => {
           console.error('Gagal verifikasi jawaban ke server', e);
+          // Revert optimistic move jika terjadi kesalahan verifikasi
+          store.updateCellWithValidation(row, col, value, userId, false);
         });
     }
   };
