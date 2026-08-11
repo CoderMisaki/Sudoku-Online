@@ -40,6 +40,15 @@ export default function RoomPage() {
   const [isPencilMode, setIsPencilMode] = useState(false);
   const [isEraserMode, setIsEraserMode] = useState(false);
 
+  // Modal Next Game State
+  const [isNextGameModalOpen, setIsNextGameModalOpen] = useState(false);
+  const [nextGameStep, setNextGameStep] = useState<'confirm' | 'settings'>('confirm');
+  const [isApplied, setIsApplied] = useState(false);
+
+  const [nextDifficulty, setNextDifficulty] = useState<Difficulty>('medium');
+  const [nextMode, setNextMode] = useState<GameMode>('collaborative');
+  const [nextMaxPlayers, setNextMaxPlayers] = useState(4);
+
   const applyTheme = useCallback((newTheme: 'light' | 'dark' | 'system') => {
     if (newTheme === 'dark') {
       document.documentElement.classList.add('dark');
@@ -97,16 +106,36 @@ export default function RoomPage() {
     }
   }, [room, grid, loading, setGameData]);
 
-  const handleNextGame = async () => {
+  const handleOpenNextGameModal = () => {
+    if (!room) return;
+    setNextDifficulty(room.difficulty || 'medium');
+    setNextMode(room.mode || 'collaborative');
+    setNextMaxPlayers(room.maxPlayers || 4);
+    setNextGameStep('confirm');
+    setIsApplied(false);
+    setIsNextGameModalOpen(true);
+  };
+
+  const executeStartNextGame = async (diff: Difficulty, gameMode: GameMode, maxP: number) => {
     if (!room) return;
     try {
       toast.loading('Mempersiapkan game baru...', { id: 'nextGame' });
-      if (room.mode === 'competition') {
+
+      // Update room local state
+      const updatedRoom = {
+        ...room,
+        difficulty: diff,
+        mode: gameMode,
+        maxPlayers: maxP
+      };
+      useGameStore.getState().setRoom(updatedRoom);
+
+      if (gameMode === 'competition') {
         broadcastNextGame(null, null);
         const res = await fetch('/api/game/create-room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ difficulty: room.difficulty })
+          body: JSON.stringify({ difficulty: diff })
         });
         const data = await res.json();
         if (res.ok && data.initialGrid && data.solutionToken) {
@@ -119,7 +148,7 @@ export default function RoomPage() {
         const res = await fetch('/api/game/create-room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ difficulty: room.difficulty })
+          body: JSON.stringify({ difficulty: diff })
         });
         const data = await res.json();
         if (res.ok && data.initialGrid && data.solutionToken) {
@@ -129,6 +158,7 @@ export default function RoomPage() {
           toast.error('Gagal membuat game baru', { id: 'nextGame' });
         }
       }
+      setIsNextGameModalOpen(false);
     } catch {
       toast.error('Gagal membuat game baru', { id: 'nextGame' });
     }
@@ -315,7 +345,6 @@ export default function RoomPage() {
     const currentCell = store.grid?.[selectedCell.row]?.[selectedCell.col];
     if (!currentCell) return;
 
-    // Jika sel merupakan soal awal yang sudah dikunci
     if (currentCell.isLocked) {
       toast('Jawaban sudah benar', { icon: '✅' });
       return;
@@ -338,13 +367,11 @@ export default function RoomPage() {
       });
       const data = await res.json();
       if (data.value !== undefined) {
-        // Jika sel sudah terisi jawaban yang benar
         if (currentCell.value !== null && currentCell.value === data.value) {
           toast('Jawaban sudah benar', { icon: '✅' });
           return;
         }
 
-        // Berfungsi untuk kotak kosong (null) atau angka yang salah
         broadcastMove(selectedCell.row, selectedCell.col, data.value);
         store.updatePlayer(userId, { hints: player.hints - 1 });
         toast.success('Hint digunakan!');
@@ -520,7 +547,7 @@ export default function RoomPage() {
                       player.rank && player.rank > 0 ? (
                         player.rank === 1 ? '🥇 1' :
                         player.rank === 2 ? '🥈 2' :
-                        player.rank === 3 ? '🥉 3' : '' // Juara 4+ disembunyikan tanpa medali
+                        player.rank === 3 ? '🥉 3' : ''
                       ) : (
                         `${player.progress ?? 0}%`
                       )
@@ -594,7 +621,7 @@ export default function RoomPage() {
               <div>
                 <h2 className="text-2xl font-bold">{room?.difficulty?.toUpperCase() || 'MEDIUM'}</h2>
                 {isGameCompleted && player?.isHost && (
-                  <Button onClick={handleNextGame} className="mt-2 bg-green-600 hover:bg-green-700 text-white">
+                  <Button onClick={handleOpenNextGameModal} className="mt-2 bg-green-600 hover:bg-green-700 text-white">
                     Next Game
                   </Button>
                 )}
@@ -669,6 +696,7 @@ export default function RoomPage() {
         </div>
       </main>
 
+      {/* Settings Modal */}
       <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Settings">
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -681,6 +709,129 @@ export default function RoomPage() {
             <Button onClick={() => setIsSettingsOpen(false)}>Close</Button>
           </div>
         </div>
+      </Modal>
+
+      {/* Next Game Modal for Host */}
+      <Modal
+        isOpen={isNextGameModalOpen}
+        onClose={() => setIsNextGameModalOpen(false)}
+        title="Game Berikutnya"
+      >
+        {nextGameStep === 'confirm' ? (
+          <div className="space-y-6 text-center">
+            <p className="text-sm text-foreground">
+              Lanjut permainan tanpa ada perubahan?
+            </p>
+            <div className="flex gap-3 justify-center">
+              <Button
+                fullWidth
+                onClick={() => {
+                  if (room) {
+                    executeStartNextGame(room.difficulty, room.mode, room.maxPlayers);
+                  }
+                }}
+              >
+                Yes
+              </Button>
+              <Button
+                variant="outline"
+                fullWidth
+                onClick={() => {
+                  setNextGameStep('settings');
+                  setIsApplied(false);
+                }}
+              >
+                No
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-xs text-secondary mb-2">
+              Pilih opsi pengaturan permainan yang ingin diubah:
+            </p>
+            <div>
+              <label className="text-sm font-medium block mb-1.5">Kesulitan (Difficulty)</label>
+              <select
+                value={nextDifficulty}
+                onChange={(e) => {
+                  setNextDifficulty(e.target.value as Difficulty);
+                  setIsApplied(false);
+                }}
+                className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
+              >
+                <option value="easy">Easy (Mudah)</option>
+                <option value="medium">Medium (Sedang)</option>
+                <option value="hard">Hard (Sulit)</option>
+                <option value="expert">Expert (Pakar)</option>
+                <option value="evil">Evil (Ekstrem)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium block mb-1.5">Mode Permainan</label>
+              <select
+                value={nextMode}
+                onChange={(e) => {
+                  setNextMode(e.target.value as GameMode);
+                  setIsApplied(false);
+                }}
+                className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
+              >
+                <option value="collaborative">Collaborative (Kerjasama)</option>
+                <option value="competition">Competition (Persaingan)</option>
+                <option value="classic">Classic (Klasik)</option>
+                <option value="race">Race (Balapan Skor)</option>
+                <option value="zen">Zen (Santai)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium block mb-1.5">Maksimal Pemain</label>
+              <select
+                value={nextMaxPlayers}
+                onChange={(e) => {
+                  setNextMaxPlayers(Number(e.target.value));
+                  setIsApplied(false);
+                }}
+                className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
+              >
+                <option value={2}>2 Pemain</option>
+                <option value={4}>4 Pemain</option>
+                <option value={6}>6 Pemain</option>
+                <option value={8}>8 Pemain</option>
+              </select>
+            </div>
+
+            <div className="pt-4 flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setNextGameStep('confirm')}
+                className="w-1/3"
+              >
+                Kembali
+              </Button>
+              {!isApplied ? (
+                <Button
+                  className="flex-1"
+                  onClick={() => {
+                    setIsApplied(true);
+                    toast.success('Pengaturan diterapkan! Klik Next Game untuk memulai.');
+                  }}
+                >
+                  Apply
+                </Button>
+              ) : (
+                <Button
+                  className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                  onClick={() => executeStartNextGame(nextDifficulty, nextMode, nextMaxPlayers)}
+                >
+                  Next Game
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
