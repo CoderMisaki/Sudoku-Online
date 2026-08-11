@@ -55,3 +55,7 @@
 - Modified the competition mode wrong-move interaction: incorrect inputs are now removed off the board similar to classic mode while retaining the correct ones, simplifying gameplay readability.
 - Implemented Spectator Mode functionality. When maximum active players are exceeded, users connect seamlessly as spectators. Adjusted event broadcasts to reject inputs, removed interactive UI components, and displayed spectator indicators on the board interface for non-players.
 - Updated Next Game functionality allowing hosts to tweak `nextDifficulty`, `nextMode`, and `nextMaxPlayers` directly via the endgame UI lobby controls before deploying `handleApplyNextGame`. Avoids re-creating a whole new room and connection.
+
+2024-05-30 - [Bugfix and Spectator Mode]
+- Handled edge cases for spectator mode, where multiple events need to be suppressed for spectators.
+- Identified standard validation steps and updated `gameStore` rejecting moves appropriately based on mode ('competition').
