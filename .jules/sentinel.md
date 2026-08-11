@@ -1,3 +1,5 @@
+# Sentinel
+
 2024-07-27 - [Sudoku Realtime Logic and Feedback Improvements]
 - Found that toast notifications during an answer verification check (`broadcastMove`) were missing for the player who actually submitted the answer, preventing immediate feedback on success or failure.
 - Updated `src/hooks/useRealtime.ts` to trigger a local `toast.success` and `toast.error` during `broadcastMove` so the initiating player can receive visual validation of their correctness locally, just before or simultaneously as the move is broadcasted globally.
@@ -14,9 +16,9 @@
 - Introduced `Pencil/Eraser` utilities integrated deeply into `useRealtime.ts` (with a new `note` event type for broadcasting) and `gameStore.ts` (keeping a 5-note limit for cells in memory state).
 
 2024-07-28 - [Sudoku Environment Variables and UX Fixes]
-- Restored \`NEXT_PUBLIC_SUPABASE_URL\` and \`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY\` in \`.env.local\` to allow the application to connect to Supabase. This aligns with standard secure practices as publishable keys are intended for frontend exposure. Added \`NEXT_PUBLIC_SUPABASE_ANON_KEY\` mapped to the publishable key.
-- Fixed the eraser feature functionality by implementing an \`isEraserMode\` toggle. This mode correctly toggles pencil notes in a targeted cell without wiping the entire cell inadvertently when not intended. Tapping the Eraser button when selecting a filled cell clears the cell's main value.
-- Improved the chat UI: replaced the plain text input with an auto-resizing \`textarea\` (max height 120px) preventing layout overflow, and refactored the auto-scrolling logic using \`requestAnimationFrame\` to eliminate abrupt screen shaking when a new message arrives, especially for long messages.
+- Restored `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in `.env.local` to allow the application to connect to Supabase. This aligns with standard secure practices as publishable keys are intended for frontend exposure. Added `NEXT_PUBLIC_SUPABASE_ANON_KEY` mapped to the publishable key.
+- Fixed the eraser feature functionality by implementing an `isEraserMode` toggle. This mode correctly toggles pencil notes in a targeted cell without wiping the entire cell inadvertently when not intended. Tapping the Eraser button when selecting a filled cell clears the cell's main value.
+- Improved the chat UI: replaced the plain text input with an auto-resizing `textarea` (max height 120px) preventing layout overflow, and refactored the auto-scrolling logic using `requestAnimationFrame` to eliminate abrupt screen shaking when a new message arrives, especially for long messages.
 - Added a visual unread message notification (✉️ +1) beside the chat title that momentarily appears for 1.5s when a new message is received from other players.
 2023-10-25 - [Supabase Realtime with Next.js]
 - To prevent Supabase channel subscription errors ('cannot add presence callbacks... after subscribe()'), the `useRealtime` hook must only be called once per room in the component tree. Hoist the hook to a parent component and pass its state and functions down as props to children components.
@@ -59,3 +61,6 @@
 2024-05-30 - [Bugfix and Spectator Mode]
 - Handled edge cases for spectator mode, where multiple events need to be suppressed for spectators.
 - Identified standard validation steps and updated `gameStore` rejecting moves appropriately based on mode ('competition').
+
+2026-08-11 - [Next Game Customization Modal]
+- Added a settings customization modal for the "Next Game" action for the host. The modal replaces a simple direct restart, allowing the host to select the Difficulty, Game Mode, and Max Players before starting the next round. State flows between 'confirm' (continue directly without changes) and 'settings' (adjust configurations), updating `GameStore` and making `broadcastNextGame` calls locally.
