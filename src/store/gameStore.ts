@@ -136,7 +136,8 @@ export const useGameStore = create<GameStore>()(
         const mode = state.room.mode;
 
         const isWrongMove = value !== null && !isCorrect;
-        const shouldRejectWrongMove = isWrongMove && (mode === 'classic' || mode === 'competition');
+        // Mengabaikan input salah di mode competition & classic
+        const shouldRejectWrongMove = isWrongMove && (mode === 'classic' || mode === 'competition' || !mode);
 
         newGrid[row][col] = {
           ...newGrid[row][col],
