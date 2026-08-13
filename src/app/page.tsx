@@ -49,6 +49,27 @@ export default function Home() {
     setUserInfo(userId, name);
   };
 
+  const handleOpenCreateModal = () => {
+    if (!username.trim()) {
+      setError('Masukkan nama kamu dulu ya!');
+      return;
+    }
+    setError('');
+    setIsJoinModalOpen(false);
+    setIsCreateModalOpen(true);
+  };
+
+  const handleOpenJoinModal = () => {
+    if (!username.trim()) {
+      setError('Masukkan nama kamu dulu ya!');
+      return;
+    }
+    setError('');
+    setJoinCode('');
+    setIsCreateModalOpen(false);
+    setIsJoinModalOpen(true);
+  };
+
   const handleCreateRoom = (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim()) {
@@ -116,13 +137,7 @@ export default function Home() {
             <Button
               fullWidth
               size="lg"
-              onClick={() => {
-                if (!username.trim()) {
-                  setError('Masukkan nama kamu dulu ya!');
-                  return;
-                }
-                setIsCreateModalOpen(true);
-              }}
+              onClick={handleOpenCreateModal}
             >
               <Play className="w-4 h-4 mr-2" /> Buat Room Baru
             </Button>
@@ -131,13 +146,7 @@ export default function Home() {
               variant="outline"
               fullWidth
               size="lg"
-              onClick={() => {
-                if (!username.trim()) {
-                  setError('Masukkan nama kamu dulu ya!');
-                  return;
-                }
-                setIsJoinModalOpen(true);
-              }}
+              onClick={handleOpenJoinModal}
             >
               <Users className="w-4 h-4 mr-2" /> Gabung Room
             </Button>
@@ -148,7 +157,10 @@ export default function Home() {
       {/* Create Room Modal */}
       <Modal
         isOpen={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
+        onClose={() => {
+          setIsCreateModalOpen(false);
+          setError('');
+        }}
         title="Pengaturan Room"
       >
         <form onSubmit={handleCreateRoom} className="space-y-4">
@@ -157,7 +169,7 @@ export default function Home() {
             <select
               value={difficulty}
               onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-              className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
+              className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground cursor-pointer"
             >
               <option value="easy">Easy (Mudah)</option>
               <option value="medium">Medium (Sedang)</option>
@@ -172,7 +184,7 @@ export default function Home() {
             <select
               value={mode}
               onChange={(e) => setMode(e.target.value as GameMode)}
-              className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
+              className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground cursor-pointer"
             >
               <option value="collaborative">Collaborative (Kerjasama)</option>
               <option value="competition">Competition (Persaingan)</option>
@@ -187,7 +199,7 @@ export default function Home() {
             <select
               value={maxPlayers}
               onChange={(e) => setMaxPlayers(Number(e.target.value))}
-              className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
+              className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground cursor-pointer"
             >
               <option value={2}>2 Pemain</option>
               <option value={4}>4 Pemain</option>
@@ -207,7 +219,11 @@ export default function Home() {
       {/* Join Room Modal */}
       <Modal
         isOpen={isJoinModalOpen}
-        onClose={() => setIsJoinModalOpen(false)}
+        onClose={() => {
+          setIsJoinModalOpen(false);
+          setJoinCode('');
+          setError('');
+        }}
         title="Gabung Room"
       >
         <form onSubmit={handleJoinRoom} className="space-y-4">
@@ -223,7 +239,7 @@ export default function Home() {
           />
 
           <div className="pt-2">
-            <Button type="submit" formMethod="dialog" fullWidth size="lg">
+            <Button type="submit" fullWidth size="lg">
               Masuk Room
             </Button>
           </div>
