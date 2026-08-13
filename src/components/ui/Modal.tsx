@@ -60,15 +60,15 @@ export const Modal: React.FC<ModalProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+            transition={{ duration: 0.1, ease: 'easeOut' }}
+            className="absolute inset-0 bg-background/80 backdrop-blur-xs"
             onClick={onClose}
           />
           <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            initial={{ opacity: 0, scale: 0.96, y: 6 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 10 }}
-            transition={{ duration: 0.15, type: 'spring', bounce: 0, damping: 20 }}
+            exit={{ opacity: 0, scale: 0.96, y: 6 }}
+            transition={{ duration: 0.1, ease: 'easeOut' }}
             className={cn(
               "relative z-50 w-full max-w-md rounded-[16px] border border-border bg-card p-6 shadow-lg sm:p-8 m-4",
               className
@@ -77,8 +77,9 @@ export const Modal: React.FC<ModalProps> = ({
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-foreground">{title}</h2>
               <button
+                type="button"
                 onClick={onClose}
-                className="rounded-full p-1 hover:bg-hover text-secondary transition-colors"
+                className="rounded-full p-1 hover:bg-hover text-secondary transition-colors duration-75 active:scale-90 cursor-pointer"
                 aria-label="Close"
               >
                 <X className="h-5 w-5" />
