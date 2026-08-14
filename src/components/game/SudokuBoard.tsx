@@ -23,8 +23,31 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
 
   const isCompetition = room?.mode === 'competition';
 
+  const stunEnd = (room?.mode === 'race' && userId && room?.players[userId]?.stunnedUntil) || 0;
+
+  const [isStunned, setIsStunned] = React.useState(false);
+
+  useEffect(() => {
+    const handleCheck = () => {
+      setIsStunned(stunEnd > Date.now());
+    };
+
+    handleCheck();
+
+    if (stunEnd > Date.now()) {
+      const timeout = setTimeout(handleCheck, stunEnd - Date.now());
+      return () => clearTimeout(timeout);
+    }
+  }, [stunEnd]);
+
   const handleCellClick = useCallback((row: number, col: number) => {
     if (!grid) return;
+
+    if (room?.mode === 'race' && userId) {
+      if (isStunned) {
+        return; // prevent click if stunned
+      }
+    }
 
     if (!isCompetition) {
       const key = `${row}-${col}`;
@@ -39,7 +62,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
       broadcastCursor(row, col);
       lockCell(row, col);
     }
-  }, [grid, locks, userId, setSelectedCell, broadcastCursor, lockCell, isCompetition]);
+  }, [grid, locks, userId, setSelectedCell, broadcastCursor, lockCell, isCompetition, room?.mode, isStunned]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const target = e.target as HTMLElement | null;
@@ -63,6 +86,12 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     }
 
     if (!selectedCell) return;
+
+    if (room?.mode === 'race' && userId) {
+      if (isStunned) {
+        return; // prevent keydown if stunned
+      }
+    }
 
     const { row, col } = selectedCell;
     const cell = grid[row][col];
@@ -93,7 +122,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
         broadcastMove(row, col, null);
       }
     }
-  }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode, isCompetition]);
+  }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode, isCompetition, room?.mode, isStunned]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -103,7 +132,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
   if (!grid) return null;
 
   return (
-    <div className="w-full aspect-square max-w-[600px] border-[3px] border-foreground bg-foreground grid grid-cols-9 grid-rows-9 gap-px p-1 mx-auto rounded-md shadow-lg overflow-hidden relative select-none mt-2 mb-2">
+    <div className={cn("w-full aspect-square max-w-[600px] border-[3px] border-foreground bg-foreground grid grid-cols-9 grid-rows-9 gap-px p-1 mx-auto rounded-md shadow-lg overflow-hidden relative select-none mt-2 mb-2 transition-all duration-300", { "opacity-50 grayscale": isStunned })}>
       {grid.map((row, rIndex) => (
         row.map((cell, cIndex) => {
           const isSelected = selectedCell?.row === rIndex && selectedCell?.col === cIndex;
@@ -141,7 +170,8 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "border-b-2 border-foreground": rIndex % 3 === 2 && rIndex !== 8,
                   "border-r-2 border-foreground": cIndex % 3 === 2 && cIndex !== 8,
                   "bg-secondary/40": isSelected && !isError,
-                  "bg-red-500/30": isError && !isSelected,
+                  "bg-red-500/30": isError && !isSelected && room?.mode !== 'zen',
+                  "bg-orange-400/30": isError && !isSelected && room?.mode === 'zen',
                   "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected,
                   "ring-2 ring-white ring-inset": isSameValue && isSelected,
                   "text-foreground font-bold": !isSameValue && (cell.isLocked || isError),

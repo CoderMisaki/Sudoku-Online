@@ -10,7 +10,10 @@ export interface Player {
   progress?: number; // Persentase progress (0 - 100)
   rank?: number | null; // Peringkat juara (1, 2, 3, 4, dst)
   hints: number;
-  status: 'online' | 'offline';
+  streak?: number;
+  lastCorrectMoveAt?: number;
+  stunnedUntil?: number;
+  status: 'online' | 'offline' | 'disconnected' | 'left';
   cursor?: { row: number; col: number } | null;
   isSpectator?: boolean;
 }
