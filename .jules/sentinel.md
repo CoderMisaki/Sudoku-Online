@@ -64,3 +64,13 @@
 
 2026-08-11 - [Next Game Customization Modal]
 - Added a settings customization modal for the "Next Game" action for the host. The modal replaces a simple direct restart, allowing the host to select the Difficulty, Game Mode, and Max Players before starting the next round. State flows between 'confirm' (continue directly without changes) and 'settings' (adjust configurations), updating `GameStore` and making `broadcastNextGame` calls locally.
+
+2024-05-30 - [Update Realtime Connection Status and Host Persistence]
+- Changed player status logic to include 'disconnected' and 'left' states alongside 'online' and 'offline' to represent varying forms of unreachability, specifically when closing tabs or explicitly leaving.
+- Updated `useRealtime.ts` to freeze host assignment when the host disconnects rather than shifting it dynamically.
+- Implemented robust `broadcastLeaveRoom` handling for explicit room departure.
+- Added visual status tags for 'Disconnect' and 'Leave Room' within the player list UI (`RoomPage`).
+
+2024-05-30 - [New Game Modes: Race and Zen]
+- Introduced Race mode. It emphasizes speed with a combo/streak system (progressively multiplying points per correct move under 4s) and punishes wrong moves heavily by imposing a 3-second lockout/stun. Board greyscales during this stun.
+- Introduced Zen mode. It removes scores, penalties for wrong moves, and hint limitations. It alters incorrect input highlights to a relaxing orange instead of aggressive red. Added an Auto-Note helper to inject valid candidate choices into blank cells.

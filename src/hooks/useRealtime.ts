@@ -110,7 +110,7 @@ export function useRealtime(roomId: string) {
             id: actualId,
             username: uname,
             color: PLAYER_COLORS[Object.keys(newPlayers).length % PLAYER_COLORS.length],
-            isHost: false,
+            isHost: actualId === store.room?.hostId,
             score: 0,
             hints: 3,
             status: 'online',
@@ -120,18 +120,8 @@ export function useRealtime(roomId: string) {
         }
       });
 
-      let currentHostId = store.room.hostId;
-      const hostPlayer = newPlayers[currentHostId];
-      if (!hostPlayer || hostPlayer.status !== 'online') {
-        const onlinePlayers = Object.values(newPlayers).filter((p) => p.status === 'online');
-        if (onlinePlayers.length > 0) {
-          currentHostId = onlinePlayers[0].id;
-          changed = true;
-        }
-      }
-
       Object.keys(newPlayers).forEach((pId) => {
-        const shouldBeHost = pId === currentHostId;
+        const shouldBeHost = pId === store.room?.hostId;
         if (newPlayers[pId].isHost !== shouldBeHost) {
           newPlayers[pId] = { ...newPlayers[pId], isHost: shouldBeHost };
           changed = true;
@@ -139,9 +129,9 @@ export function useRealtime(roomId: string) {
       });
 
       if (changed) {
-        const updatedRoom = { ...store.room, players: newPlayers, hostId: currentHostId };
+        const updatedRoom = { ...store.room, players: newPlayers };
         store.setRoom(updatedRoom);
-        if (currentHostId === userId) syncHostState();
+        if (store.room.hostId === userId) syncHostState();
       }
     };
 
@@ -149,6 +139,13 @@ export function useRealtime(roomId: string) {
       .on('presence', { event: 'sync' }, handlePresenceChange)
       .on('presence', { event: 'join' }, handlePresenceChange)
       .on('presence', { event: 'leave' }, handlePresenceChange)
+      .on('broadcast', { event: 'leave_room' }, ({ payload }) => {
+        if (!payload?.userId) return;
+        const store = useGameStore.getState();
+        if (store.room && store.room.players[payload.userId]) {
+          store.updatePlayer(payload.userId, { status: 'left' });
+        }
+      })
       .on('broadcast', { event: 'request_state' }, ({ payload }) => {
         const store = useGameStore.getState();
         if (store.room && store.room.hostId === userId) {
@@ -497,6 +494,19 @@ export function useRealtime(roomId: string) {
     });
   };
 
+  const broadcastLeaveRoom = () => {
+    if (!channelRef.current || !userId) return;
+    channelRef.current.send({
+      type: 'broadcast',
+      event: 'leave_room',
+      payload: { userId },
+    });
+    const store = useGameStore.getState();
+    if (store.room && store.room.players[userId]) {
+      store.updatePlayer(userId, { status: 'left' });
+    }
+  };
+
   const broadcastChat = (text: string) => {
     if (!channelRef.current || !userId || !username) return;
     const msg: ChatMessage = {
@@ -515,5 +525,5 @@ export function useRealtime(roomId: string) {
     });
   };
 
-  return { broadcastCursor, broadcastMove, broadcastNote, lockCell, locks, broadcastChat, broadcastNextGame, realtimeStatus, connectionError };
+  return { broadcastCursor, broadcastMove, broadcastNote, lockCell, locks, broadcastChat, broadcastNextGame, broadcastLeaveRoom, realtimeStatus, connectionError };
 }

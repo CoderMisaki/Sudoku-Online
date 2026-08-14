@@ -74,7 +74,7 @@ export default function RoomPage() {
     applyTheme(newTheme);
   };
 
-  const { broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, broadcastChat, broadcastNextGame, realtimeStatus, connectionError } = useRealtime(roomId);
+  const { broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, broadcastChat, broadcastNextGame, broadcastLeaveRoom, realtimeStatus, connectionError } = useRealtime(roomId);
   const [chatInput, setChatInput] = useState('');
 
   const isGameCompleted = React.useMemo(() => {
@@ -320,10 +320,19 @@ export default function RoomPage() {
   };
 
   const leaveRoom = () => {
+    broadcastLeaveRoom();
     sessionStorage.removeItem(`sudoku_host_room_${roomId}`);
     resetGame();
     router.push('/');
   };
+
+  const handleAutoNote = useCallback(() => {
+    if (isSpectator) return;
+    const store = useGameStore.getState();
+    if (!store.grid) return;
+    store.autoNote();
+    toast.success('Auto Note applied!', { duration: 1500 });
+  }, [isSpectator]);
 
   const handleHint = useCallback(async () => {
     if (isSpectator) return;
@@ -338,7 +347,7 @@ export default function RoomPage() {
     const player = store.room?.players[userId];
     if (!player) return;
 
-    if (player.hints <= 0) {
+    if (store.room?.mode !== 'zen' && player.hints <= 0) {
       toast.error('Jatah hint kamu sudah habis!');
       return;
     }
@@ -529,19 +538,29 @@ export default function RoomPage() {
                 <div key={player.id} className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div
-                      className={`w-2.5 h-2.5 rounded-full ${player.status === 'offline' ? 'opacity-40' : ''}`}
-                      style={{ backgroundColor: player.color }}
+                      className={`w-2.5 h-2.5 rounded-full ${player.status !== 'online' ? 'opacity-40' : ''}`}
+                      style={{ backgroundColor: player.status === 'online' ? player.color : '#9ca3af' }}
                     />
-                    <span className={`font-medium ${player.status === 'offline' ? 'line-through text-secondary/60' : ''}`}>
+                    <span className={`font-medium ${player.status !== 'online' ? 'line-through text-secondary/60' : ''}`}>
                       {player.username}
                     </span>
-                    {player.status === 'offline' ? (
+                    {player.isHost && (
+                      <span className="text-secondary text-xs">(Host)</span>
+                    )}
+                    {player.status === 'left' ? (
                       <span className="text-red-500 font-semibold text-[11px] bg-red-500/10 px-1.5 py-0.5 rounded">
                         ( Leave Room )
                       </span>
-                    ) : player.isHost ? (
-                      <span className="text-secondary text-xs">(Host)</span>
+                    ) : player.status === 'disconnected' || player.status === 'offline' ? (
+                      <span className="text-amber-500 font-semibold text-[11px] bg-amber-500/10 px-1.5 py-0.5 rounded">
+                        ( Disconnect )
+                      </span>
                     ) : null}
+                    {room?.mode === 'race' && (player.streak ?? 0) > 1 && (
+                      <span className="text-orange-500 font-bold text-[11px] bg-orange-500/10 px-1.5 py-0.5 rounded flex items-center gap-1">
+                        🔥 x{player.streak}
+                      </span>
+                    )}
                   </div>
                   <span className="font-mono font-bold">
                     {room?.mode === 'competition' ? (
@@ -653,12 +672,17 @@ export default function RoomPage() {
             {/* Controls */}
             <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={handleHint} disabled={hintsRemaining <= 0 || isSpectator}>
-                  <Lightbulb className="w-4 h-4 mr-2" /> Hint ({hintsRemaining})
+                <Button variant="outline" size="sm" onClick={handleHint} disabled={(room?.mode !== 'zen' && hintsRemaining <= 0) || isSpectator}>
+                  <Lightbulb className="w-4 h-4 mr-2" /> Hint {room?.mode === 'zen' ? '(∞)' : `(${hintsRemaining})`}
                 </Button>
                 <Button variant={isPencilMode ? "primary" : "outline"} size="sm" onClick={() => { setIsPencilMode(!isPencilMode); setIsEraserMode(false); }}>
                   <Edit2 className="w-4 h-4 mr-2" /> Note
                 </Button>
+                {room?.mode === 'zen' && (
+                  <Button variant="outline" size="sm" onClick={handleAutoNote} disabled={isSpectator}>
+                    <Lightbulb className="w-4 h-4 mr-2" /> Auto Note
+                  </Button>
+                )}
                 <Button variant={isEraserMode ? "primary" : "outline"} size="sm" onClick={handleEraserClick}>
                   <Eraser className="w-4 h-4 mr-2" /> Eraser
                 </Button>

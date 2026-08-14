@@ -23,6 +23,7 @@ interface GameStore {
   setOptimisticMove: (row: number, col: number, value: number) => void;
   updateCellWithValidation: (row: number, col: number, value: number | null, playerId: string, isCorrect: boolean) => void;
   toggleNote: (row: number, col: number, note: number) => void;
+  autoNote: () => void;
 
   // UI State
   messages: ChatMessage[];
@@ -143,7 +144,7 @@ export const useGameStore = create<GameStore>()(
           ...newGrid[row][col],
           value: shouldRejectWrongMove ? null : value,
           filledBy: shouldRejectWrongMove ? undefined : playerId,
-          isWrong: shouldRejectWrongMove ? false : isWrongMove,
+          isWrong: shouldRejectWrongMove || mode === 'zen' ? false : isWrongMove,
           isPending: false,
           notes: value !== null ? [] : newGrid[row][col].notes
         };
@@ -217,18 +218,81 @@ export const useGameStore = create<GameStore>()(
             };
           }
         } else if (value !== null && mode !== 'zen') {
-          const currentScore = state.room.players[playerId]?.score || 0;
-          const scoreDiff = isCorrect ? 10 : -5;
-          const newScore = currentScore + scoreDiff;
+          const currentPlayer = newRoom.players[playerId];
+          const currentScore = currentPlayer?.score || 0;
 
-          if (newRoom.players[playerId]) {
-            newRoom = {
-              ...newRoom,
-              players: {
-                ...newRoom.players,
-                [playerId]: { ...newRoom.players[playerId], score: newScore }
+          if (mode === 'race') {
+            const now = Date.now();
+            if (isCorrect) {
+              const lastCorrect = currentPlayer?.lastCorrectMoveAt || 0;
+              let streak = currentPlayer?.streak || 0;
+
+              if (now - lastCorrect < 4000) {
+                streak += 1;
+              } else {
+                streak = 1;
               }
-            };
+
+              // Cap streak at some reasonable visual like 5 or let it go
+              const multiplier = streak;
+              let newScore = currentScore + (10 * multiplier);
+
+              // Check if completed a block, row, or col
+              let blockCompleted = true;
+              let rowCompleted = true;
+              let colCompleted = true;
+
+              for (let i = 0; i < 9; i++) {
+                if (validatedGrid[row][i].value === null || validatedGrid[row][i].isWrong || validatedGrid[row][i].isConflicting) rowCompleted = false;
+                if (validatedGrid[i][col].value === null || validatedGrid[i][col].isWrong || validatedGrid[i][col].isConflicting) colCompleted = false;
+              }
+              const boxR = Math.floor(row / 3) * 3;
+              const boxC = Math.floor(col / 3) * 3;
+              for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                  if (validatedGrid[boxR + i][boxC + j].value === null || validatedGrid[boxR + i][boxC + j].isWrong || validatedGrid[boxR + i][boxC + j].isConflicting) blockCompleted = false;
+                }
+              }
+
+              if (rowCompleted || colCompleted || blockCompleted) {
+                newScore += 50;
+              }
+
+              if (newRoom.players[playerId]) {
+                newRoom = {
+                  ...newRoom,
+                  players: {
+                    ...newRoom.players,
+                    [playerId]: { ...newRoom.players[playerId], score: newScore, streak, lastCorrectMoveAt: now }
+                  }
+                };
+              }
+            } else {
+              // Wrong move in race: reset streak, stun for 3s
+              if (newRoom.players[playerId]) {
+                newRoom = {
+                  ...newRoom,
+                  players: {
+                    ...newRoom.players,
+                    [playerId]: { ...newRoom.players[playerId], streak: 0, stunnedUntil: now + 3000 }
+                  }
+                };
+              }
+            }
+          } else {
+            // normal scoring
+            const scoreDiff = isCorrect ? 10 : -5;
+            const newScore = currentScore + scoreDiff;
+
+            if (newRoom.players[playerId]) {
+              newRoom = {
+                ...newRoom,
+                players: {
+                  ...newRoom.players,
+                  [playerId]: { ...newRoom.players[playerId], score: newScore }
+                }
+              };
+            }
           }
         }
 
@@ -236,6 +300,37 @@ export const useGameStore = create<GameStore>()(
           grid: validatedGrid,
           room: newRoom
         };
+      }),
+
+      autoNote: () => set((state) => {
+        if (!state.grid) return state;
+        const newGrid = state.grid.map(row => row.map(cell => ({ ...cell, notes: [...cell.notes] })));
+
+        for (let r = 0; r < 9; r++) {
+          for (let c = 0; c < 9; c++) {
+            if (newGrid[r][c].value === null) {
+              const possible = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+              // check row
+              for (let i = 0; i < 9; i++) {
+                if (newGrid[r][i].value !== null && !newGrid[r][i].isWrong && !newGrid[r][i].isConflicting) possible.delete(newGrid[r][i].value as number);
+              }
+              // check col
+              for (let i = 0; i < 9; i++) {
+                if (newGrid[i][c].value !== null && !newGrid[i][c].isWrong && !newGrid[i][c].isConflicting) possible.delete(newGrid[i][c].value as number);
+              }
+              // check box
+              const boxR = Math.floor(r / 3) * 3;
+              const boxC = Math.floor(c / 3) * 3;
+              for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                  if (newGrid[boxR + i][boxC + j].value !== null && !newGrid[boxR + i][boxC + j].isWrong && !newGrid[boxR + i][boxC + j].isConflicting) possible.delete(newGrid[boxR + i][boxC + j].value as number);
+                }
+              }
+              newGrid[r][c].notes = Array.from(possible).sort();
+            }
+          }
+        }
+        return { grid: newGrid };
       }),
 
       toggleNote: (row, col, note) => set((state) => {
@@ -273,7 +368,10 @@ export const useGameStore = create<GameStore>()(
             score: 0,
             progress: 0,
             rank: null,
-            hints: 3
+            hints: 3,
+            streak: 0,
+            lastCorrectMoveAt: 0,
+            stunnedUntil: 0
           };
         });
 
