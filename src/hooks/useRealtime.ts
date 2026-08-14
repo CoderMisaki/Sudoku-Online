@@ -87,10 +87,16 @@ export function useRealtime(roomId: string) {
 
       Object.keys(newPlayers).forEach((pId) => {
         const isOnline = onlineUserIds.has(pId);
-        const targetStatus = isOnline ? 'online' : 'offline';
-        if (newPlayers[pId].status !== targetStatus) {
-          newPlayers[pId] = { ...newPlayers[pId], status: targetStatus };
-          changed = true;
+        if (isOnline) {
+          if (newPlayers[pId].status !== 'online') {
+            newPlayers[pId] = { ...newPlayers[pId], status: 'online' };
+            changed = true;
+          }
+        } else {
+          if (newPlayers[pId].status !== 'left' && newPlayers[pId].status !== 'offline') {
+            newPlayers[pId] = { ...newPlayers[pId], status: 'offline' };
+            changed = true;
+          }
         }
       });
 
