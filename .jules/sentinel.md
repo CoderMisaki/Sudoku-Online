@@ -89,3 +89,9 @@
 - Removed \`ROOM_SECRET_KEY\` fallback entirely to "fail closed" rather than exposing the application with an insecure default token.
 - Moved \`decryptSolution\` logic out of the route handler (\`src/app/api/game/verify/route.ts\`) into \`src/utils/security.ts\` for cleaner architectural separation and testability.
 - Updated \`src/store/gameStore.ts\` partialize config to stop persisting \`solutionToken\` to browser storage.
+2024-10-25 - [Fixed Realtime Bugs]
+
+- Resolved issue where disconnect status wouldn't update instantly by bypassing intentional disconnect overwrites.
+- Resolved flickering room offline notifications by improving connection error states and debounce logic.
+- Resolved stuck chat notification by adding message count ref tracking.
+- Resolved broken 'Leave Room' functionality and status sync by ensuring non-blocking async network sends.
