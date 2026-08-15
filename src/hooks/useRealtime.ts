@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
 import { Grid, RoomState } from "../types/game";
@@ -10,6 +10,9 @@ import toast from 'react-hot-toast';
 export function useRealtime(roomId: string) {
   const channelRef = useRef<RealtimeChannel | null>(null);
   const retryRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMountedRef = useRef(true);
+
   const userId = useGameStore((state) => state.userId);
   const username = useGameStore((state) => state.username);
   const grid = useGameStore((state) => state.grid);
@@ -18,6 +21,7 @@ export function useRealtime(roomId: string) {
   const [locks, setLocks] = useState<Record<string, { userId: string, expiresAt: number }>>({});
   const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED'>('CONNECTING');
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const connectRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (grid && !prevGridRef.current && channelRef.current && userId) {
@@ -39,8 +43,21 @@ export function useRealtime(roomId: string) {
     prevGridRef.current = grid;
   }, [grid, userId]);
 
-  useEffect(() => {
-    if (!roomId || !userId || !username) return;
+  const connectChannel = useCallback(() => {
+    if (!roomId || !userId || !username || !isMountedRef.current) return;
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    // Bersihkan channel lama jika ada
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
+
+    setRealtimeStatus('CONNECTING');
 
     const channel = supabase.channel(`room:${roomId}`, {
       config: {
@@ -201,7 +218,6 @@ export function useRealtime(roomId: string) {
           store.setRoom(incomingRoom);
         }
 
-        // Jangan menimpa papan lokal jika dalam mode competition
         if (payload.room?.mode !== 'competition' && payload.grid && payload.solutionToken) {
           store.setGameData(payload.grid, payload.solutionToken);
         }
@@ -229,7 +245,6 @@ export function useRealtime(roomId: string) {
         }));
       })
       .on('broadcast', { event: 'note' }, ({ payload }) => {
-        // PERBAIKAN: Abaikan event note masuk jika berada di mode competition
         if (useGameStore.getState().room?.mode === 'competition') return;
         if (typeof payload.row !== "number" || typeof payload.col !== "number" || typeof payload.note !== "number") return;
         useGameStore.getState().toggleNote(payload.row, payload.col, payload.note);
@@ -258,14 +273,11 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'next_game' }, async ({ payload }) => {
         const store = useGameStore.getState();
-
-        // Update room settings jika ada perubahan opsi dari host
         if (payload?.room) {
           store.setRoom(payload.room);
         }
 
         const currentRoom = store.room;
-
         if (currentRoom?.mode === 'competition') {
           try {
             const res = await fetch('/api/game/create-room', {
@@ -288,10 +300,11 @@ export function useRealtime(roomId: string) {
         useGameStore.getState().addMessage(payload);
       })
       .subscribe(async (status, err) => {
+        if (!isMountedRef.current) return;
         setRealtimeStatus(status as 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED');
-        if (err) setConnectionError(err.message || 'Gagal terhubung ke WebSocket channel.');
 
         if (status === 'SUBSCRIBED') {
+          // Reset error banner
           setConnectionError(null);
           await channel.track({
             user_id: userId,
@@ -322,12 +335,44 @@ export function useRealtime(roomId: string) {
             }
             sendRequest();
           }, 1000);
-        } else if (status === 'CHANNEL_ERROR') {
-          setConnectionError('CHANNEL_ERROR: Koneksi WebSocket ditolak atau channel error.');
-        } else if (status === 'TIMED_OUT') {
-          setConnectionError('TIMED_OUT: Server Supabase tidak merespons (Timeout).');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          const errorMsg = err?.message || (status === 'TIMED_OUT' ? 'Server Supabase tidak merespons (Timeout).' : 'Koneksi WebSocket terputus.');
+          setConnectionError(errorMsg);
+
+          // Auto-reconnect terjadwal setelah 3 detik jika terputus
+          if (!reconnectTimeoutRef.current && isMountedRef.current) {
+            reconnectTimeoutRef.current = setTimeout(() => {
+              reconnectTimeoutRef.current = null;
+              if (isMountedRef.current) {
+                if (connectRef.current) connectRef.current();
+              }
+            }, 3000);
+          }
         }
       });
+  }, [roomId, userId, username]);
+
+  useEffect(() => {
+    connectRef.current = connectChannel;
+  }, [connectChannel]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    connectChannel();
+
+    // Event listener saat kembali online atau saat tab kembali fokus/terbuka
+    const handleOnline = () => {
+      connectChannel();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        connectChannel();
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     const interval = setInterval(() => {
       setLocks(prev => {
@@ -345,14 +390,25 @@ export function useRealtime(roomId: string) {
     }, 1000);
 
     return () => {
+      isMountedRef.current = false;
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       if (retryRef.current) {
         clearInterval(retryRef.current);
         retryRef.current = null;
       }
       clearInterval(interval);
-      supabase.removeChannel(channel);
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
     };
-  }, [roomId, userId, username]);
+  }, [connectChannel]);
 
   const broadcastCursor = (row: number, col: number) => {
     if (!channelRef.current || !userId) return;
@@ -469,7 +525,6 @@ export function useRealtime(roomId: string) {
         })
         .catch((e) => {
           console.error('Gagal verifikasi jawaban ke server', e);
-          // Revert optimistic move jika terjadi kesalahan verifikasi
           store.updateCellWithValidation(row, col, value, userId, false);
         });
     }
@@ -478,10 +533,8 @@ export function useRealtime(roomId: string) {
   const broadcastNote = (row: number, col: number, note: number) => {
     if (!channelRef.current || !userId) return;
 
-    // Selalu update note secara lokal pada board pemain yang bersangkutan
     useGameStore.getState().toggleNote(row, col, note);
 
-    // PERBAIKAN: Jika sedang dalam mode Competition, hentikan pengiriman broadcast note ke pemain lain
     if (useGameStore.getState().room?.mode === 'competition') return;
 
     channelRef.current.send({
@@ -531,5 +584,17 @@ export function useRealtime(roomId: string) {
     });
   };
 
-  return { broadcastCursor, broadcastMove, broadcastNote, lockCell, locks, broadcastChat, broadcastNextGame, broadcastLeaveRoom, realtimeStatus, connectionError };
+  return {
+    broadcastCursor,
+    broadcastMove,
+    broadcastNote,
+    lockCell,
+    locks,
+    broadcastChat,
+    broadcastNextGame,
+    broadcastLeaveRoom,
+    realtimeStatus,
+    connectionError,
+    reconnect: connectChannel,
+  };
 }

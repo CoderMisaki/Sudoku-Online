@@ -74,7 +74,19 @@ export default function RoomPage() {
     applyTheme(newTheme);
   };
 
-  const { broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, broadcastChat, broadcastNextGame, broadcastLeaveRoom, realtimeStatus, connectionError } = useRealtime(roomId);
+  const {
+  broadcastMove,
+  broadcastNote,
+  broadcastCursor,
+  lockCell,
+  locks,
+  broadcastChat,
+  broadcastNextGame,
+  broadcastLeaveRoom,
+  realtimeStatus,
+  connectionError,
+  reconnect
+} = useRealtime(roomId);
   const [chatInput, setChatInput] = useState('');
 
   const isGameCompleted = React.useMemo(() => {
@@ -515,8 +527,16 @@ export default function RoomPage() {
         <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center">
           <WifiOff className="w-4 h-4 flex-shrink-0" />
           <span>
-            <strong>ROOM OFFLINE:</strong> {connectionError || `Koneksi WebSocket gagal (${realtimeStatus})`}.
+            <strong>ROOM OFFLINE:</strong> {connectionError || `Koneksi WebSocket terputus (${realtimeStatus})`}.
           </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => reconnect()}
+            className="h-7 px-2.5 text-xs border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 ml-2"
+          >
+            Hubungkan Ulang
+          </Button>
         </div>
       )}
 
