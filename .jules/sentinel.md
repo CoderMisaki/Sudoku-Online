@@ -74,3 +74,9 @@
 2024-05-30 - [New Game Modes: Race and Zen]
 - Introduced Race mode. It emphasizes speed with a combo/streak system (progressively multiplying points per correct move under 4s) and punishes wrong moves heavily by imposing a 3-second lockout/stun. Board greyscales during this stun.
 - Introduced Zen mode. It removes scores, penalties for wrong moves, and hint limitations. It alters incorrect input highlights to a relaxing orange instead of aggressive red. Added an Auto-Note helper to inject valid candidate choices into blank cells.
+
+2026-08-15 - [Smarter Auto-Reconnect for Realtime WebSocket]
+- Replaced static 3-second delay on disconnection with a smart, adaptive exponential backoff (starting at 800ms up to 4s) in `useRealtime.ts`.
+- Subscribed to `online`, `focus`, and `visibilitychange` events on the window to instantly attempt reconnection (0ms delay) when the browser regains connection or the user switches back to the tab.
+- Deferred the initial `connectChannel` call inside the `useEffect` using `setTimeout(..., 0)` to prevent the React warning regarding synchronous state updates (cascading renders) during effect execution.
+- Added a responsive connection banner to `src/app/room/[id]/page.tsx` that optimistically clears the connection error and displays "MENYAMBUNGKAN KEMBALI..." while attempting reconnection, preventing the error banner from getting stuck on screen.
