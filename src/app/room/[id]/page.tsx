@@ -331,8 +331,8 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const leaveRoom = () => {
-    broadcastLeaveRoom();
+  const leaveRoom = async () => {
+    await broadcastLeaveRoom();
     sessionStorage.removeItem(`sudoku_host_room_${roomId}`);
     resetGame();
     router.push('/');
