@@ -86,7 +86,8 @@ export const useGameStore = create<GameStore>()(
       setOptimisticMove: (row, col, value) => set((state) => {
         if (!state.grid) return state;
         const currentCell = state.grid[row][col];
-        if (currentCell.isLocked) return state;
+        // Jangan izinkan edit jika sel bawaan atau sudah dijawab dengan benar
+        if (currentCell.isLocked || currentCell.isCorrect) return state;
 
         const newGrid = [...state.grid];
         newGrid[row] = [...newGrid[row]];
@@ -129,15 +130,14 @@ export const useGameStore = create<GameStore>()(
         if (!state.grid || !state.room) return state;
 
         const currentCell = state.grid[row][col];
-        if (currentCell.isLocked) return state;
+        // Jika sel sudah terkunci / sudah benar, abaikan perubahan
+        if (currentCell.isLocked || currentCell.isCorrect) return state;
 
         const newGrid = [...state.grid];
         newGrid[row] = [...newGrid[row]];
 
         const mode = state.room.mode;
-
         const isWrongMove = value !== null && !isCorrect;
-        // Mengabaikan input salah di mode competition & classic
         const shouldRejectWrongMove = isWrongMove && (mode === 'classic' || mode === 'competition' || !mode);
 
         newGrid[row][col] = {
@@ -145,6 +145,7 @@ export const useGameStore = create<GameStore>()(
           value: shouldRejectWrongMove ? null : value,
           filledBy: shouldRejectWrongMove ? undefined : playerId,
           isWrong: shouldRejectWrongMove || mode === 'zen' ? false : isWrongMove,
+          isCorrect: Boolean(isCorrect && value !== null),
           isPending: false,
           notes: value !== null ? [] : newGrid[row][col].notes
         };
@@ -183,7 +184,7 @@ export const useGameStore = create<GameStore>()(
               const cell = validatedGrid[r][c];
               if (!cell.isLocked) {
                 totalNonLocked++;
-                if (cell.value !== null && !cell.isWrong && !cell.isConflicting) {
+                if (cell.value !== null && (cell.isCorrect || (!cell.isWrong && !cell.isConflicting))) {
                   correctCount++;
                 }
               }
@@ -335,6 +336,9 @@ export const useGameStore = create<GameStore>()(
 
       toggleNote: (row, col, note) => set((state) => {
         if (!state.grid) return state;
+        const targetCell = state.grid[row][col];
+        if (targetCell.isLocked || targetCell.isCorrect || targetCell.value !== null) return state;
+
         const newGrid = [...state.grid];
         newGrid[row] = [...newGrid[row]];
 

@@ -26,6 +26,7 @@ export interface CellData {
   isConflicting?: boolean;
   isWrong?: boolean;
   isPending?: boolean;
+  isCorrect?: boolean; // Menandai sel yang sudah diisi dengan benar
 }
 
 export type Grid = CellData[][];
