@@ -189,6 +189,31 @@ export function useRealtime(roomId: string) {
         const store = useGameStore.getState();
         if (store.room && store.room.players[payload.userId]) {
           store.updatePlayer(payload.userId, { status: 'left' });
+
+          // Jika yang menerima adalah host, bantu sync state ke room
+          if (store.room.hostId === currentUserId) {
+            const updatedRoom = {
+              ...store.room,
+              players: {
+                ...store.room.players,
+                [payload.userId]: {
+                  ...store.room.players[payload.userId],
+                  status: 'left' as const,
+                },
+              },
+            };
+            channel.send({
+              type: 'broadcast',
+              event: 'sync_state',
+              payload: {
+                room: updatedRoom,
+                grid: store.grid,
+                solutionToken: store.solutionToken,
+                messages: store.messages,
+                senderId: currentUserId,
+              },
+            });
+          }
         }
       })
       .on('broadcast', { event: 'request_state' }, ({ payload }) => {
@@ -593,13 +618,24 @@ export function useRealtime(roomId: string) {
     });
   };
 
-  const broadcastLeaveRoom = () => {
+  const broadcastLeaveRoom = async () => {
     if (!channelRef.current || !userId) return;
-    channelRef.current.send({
-      type: 'broadcast',
-      event: 'leave_room',
-      payload: { userId },
-    });
+
+    try {
+      // 1. Kirim event broadcast leave_room ke seluruh room
+      await channelRef.current.send({
+        type: 'broadcast',
+        event: 'leave_room',
+        payload: { userId },
+      });
+
+      // Beri jeda sangat singkat agar paket data ter-flush ke jaringan sebelum channel ditutup
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    } catch (err) {
+      console.error('Gagal broadcast leave_room:', err);
+    }
+
+    // 2. Update state lokal sendiri
     const store = useGameStore.getState();
     if (store.room && store.room.players[userId]) {
       store.updatePlayer(userId, { status: 'left' });
