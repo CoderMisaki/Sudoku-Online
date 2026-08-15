@@ -132,6 +132,7 @@ export function useRealtime(roomId: string) {
             changed = true;
           }
         } else {
+          // JANGAN UBAH JIKA STATUS SUDAH 'left'
           if (newPlayers[pId].status !== 'left' && newPlayers[pId].status !== 'offline') {
             newPlayers[pId] = { ...newPlayers[pId], status: 'offline' };
             changed = true;
@@ -188,9 +189,10 @@ export function useRealtime(roomId: string) {
         if (!payload?.userId) return;
         const store = useGameStore.getState();
         if (store.room && store.room.players[payload.userId]) {
+          // Kunci status sebagai 'left'
           store.updatePlayer(payload.userId, { status: 'left' });
 
-          // Jika yang menerima adalah host, bantu sync state ke room
+          // Jika yang menerima adalah host, sebarkan sync_state dengan status 'left'
           if (store.room.hostId === currentUserId) {
             const updatedRoom = {
               ...store.room,
@@ -634,26 +636,27 @@ export function useRealtime(roomId: string) {
     if (!channelRef.current || !userId) return;
 
     try {
-      // Untrack presence terlebih dahulu agar server segera membersihkan tracking
-      await channelRef.current.untrack();
+      // Update status lokal diri sendiri terlebih dahulu
+      const store = useGameStore.getState();
+      if (store.room && store.room.players[userId]) {
+        store.updatePlayer(userId, { status: 'left' });
+      }
 
-      // Kirim event broadcast leave_room ke semua pemain
+      // KIRIM EVENT BROADCAST LEAVE_ROOM TERLEBIH DAHULU
       await channelRef.current.send({
         type: 'broadcast',
         event: 'leave_room',
         payload: { userId },
       });
 
-      // Berikan jeda waktu agar paket WebSocket tuntas terkirim ke server Supabase
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      // Beri jeda singkat agar paket WebSocket tuntas didistribusikan ke room
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // BARU UNTRACK PRESENCE SETELAH BROADCAST TERKIRIM
+      await channelRef.current.untrack();
+      await new Promise((resolve) => setTimeout(resolve, 100));
     } catch (err) {
       console.error('Gagal broadcast leave_room:', err);
-    }
-
-    // Update state lokal
-    const store = useGameStore.getState();
-    if (store.room && store.room.players[userId]) {
-      store.updatePlayer(userId, { status: 'left' });
     }
   };
 
