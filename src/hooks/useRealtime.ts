@@ -34,7 +34,7 @@ export function useRealtime(roomId: string) {
   const leftUntilRef = useRef<Map<string, number>>(new Map());
 
   const markLeft = useCallback((playerId: string) => {
-    leftUntilRef.current.set(playerId, Date.now() + 20000);
+    leftUntilRef.current.set(playerId, Date.now() + 60000); // Kunci status left 60 detik
   }, []);
 
   const hasLeftMark = useCallback((playerId: string) => {
@@ -52,6 +52,7 @@ export function useRealtime(roomId: string) {
 
   const connectRef = useRef<((immediate?: boolean) => void) | null>(null);
 
+  // Sync state dari Host ketika grid sudah siap
   useEffect(() => {
     if (grid && !prevGridRef.current && channelRef.current && userId) {
       const store = useGameStore.getState();
@@ -76,7 +77,7 @@ export function useRealtime(roomId: string) {
     const currentUserId = userIdRef.current;
     const currentUsername = usernameRef.current;
 
-    if (!roomId || !currentUserId || !currentUsername || !isMountedRef.current) return;
+    if (!roomId || !currentUserId || !currentUsername || !isMountedRef.current || intentionalLeaveRef.current) return;
 
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
@@ -84,7 +85,9 @@ export function useRealtime(roomId: string) {
     }
 
     if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
+      try {
+        supabase.removeChannel(channelRef.current);
+      } catch (_) {}
       channelRef.current = null;
     }
 
@@ -95,7 +98,7 @@ export function useRealtime(roomId: string) {
 
     const channel = supabase.channel(`room:${roomId}`, {
       config: {
-        broadcast: { self: false, ack: true },
+        broadcast: { self: false, ack: false }, // Ubah ack ke false agar pengiriman tidak macet saat jaringan tidak stabil
         presence: { key: currentUserId },
       },
     });
@@ -124,7 +127,6 @@ export function useRealtime(roomId: string) {
       if (!store.room) return;
 
       const presenceState = channel.presenceState();
-
       const onlineUserIds = new Set<string>();
       const leftUserIds = new Set<string>();
 
@@ -136,7 +138,6 @@ export function useRealtime(roomId: string) {
 
         presences?.forEach((p) => {
           const pid = p.user_id || key;
-
           if (p.status === 'left') {
             leftUserIds.add(pid);
           } else {
@@ -145,7 +146,6 @@ export function useRealtime(roomId: string) {
         });
       });
 
-      // Jangan paksa diri sendiri online kalau memang sedang leave
       if (currentUserId && !intentionalLeaveRef.current) {
         onlineUserIds.add(currentUserId);
       }
@@ -159,33 +159,26 @@ export function useRealtime(roomId: string) {
       Object.keys(newPlayers).forEach((pId) => {
         const currentStatus = newPlayers[pId].status;
 
-        // Kalau presence bilang online, left mark harus dibersihkan
-        if (onlineUserIds.has(pId)) {
-          clearLeftMark(pId);
-
-          if (currentStatus !== 'online') {
-            newPlayers[pId] = { ...newPlayers[pId], status: 'online' };
-            changed = true;
-          }
-
-          return;
-        }
-
-        // Kalau ada tanda left eksplisit, jangan turunkan ke disconnected
-        if (
-          currentStatus === 'left' ||
-          leftUserIds.has(pId) ||
-          hasLeftMark(pId)
-        ) {
+        // Player eksplisit leave
+        if (currentStatus === 'left' || leftUserIds.has(pId) || hasLeftMark(pId)) {
           if (currentStatus !== 'left') {
             newPlayers[pId] = { ...newPlayers[pId], status: 'left' };
             changed = true;
           }
-
           return;
         }
 
-        // Jika tidak online dan tidak ada tanda left, berarti disconnected
+        // Player online
+        if (onlineUserIds.has(pId)) {
+          clearLeftMark(pId);
+          if (currentStatus !== 'online') {
+            newPlayers[pId] = { ...newPlayers[pId], status: 'online' };
+            changed = true;
+          }
+          return;
+        }
+
+        // Player terputus koneksi
         if (currentStatus !== 'disconnected') {
           newPlayers[pId] = { ...newPlayers[pId], status: 'disconnected' };
           changed = true;
@@ -205,16 +198,11 @@ export function useRealtime(roomId: string) {
         const actualId = presObj?.user_id || pId;
         const uname = presObj?.username || 'Player';
 
-        // Jangan tambah user baru jika presence-nya sudah left
-        if (presObj?.status === 'left') return;
+        if (presObj?.status === 'left' || hasLeftMark(actualId)) return;
 
         if (!newPlayers[actualId]) {
-          const activeCount = Object.values(newPlayers).filter(
-            (p) => !p.isSpectator
-          ).length;
-
-          const isSpectator =
-            activeCount >= maxPlayers && actualId !== store.room?.hostId;
+          const activeCount = Object.values(newPlayers).filter((p) => !p.isSpectator).length;
+          const isSpectator = activeCount >= maxPlayers && actualId !== store.room?.hostId;
 
           newPlayers[actualId] = {
             id: actualId,
@@ -226,16 +214,6 @@ export function useRealtime(roomId: string) {
             status: 'online',
             isSpectator,
           };
-
-          changed = true;
-        }
-      });
-
-      Object.keys(newPlayers).forEach((pId) => {
-        const shouldBeHost = pId === store.room?.hostId;
-
-        if (newPlayers[pId].isHost !== shouldBeHost) {
-          newPlayers[pId] = { ...newPlayers[pId], isHost: shouldBeHost };
           changed = true;
         }
       });
@@ -253,47 +231,33 @@ export function useRealtime(roomId: string) {
     channel
       .on('presence', { event: 'sync' }, handlePresenceChange)
       .on('presence', { event: 'join' }, handlePresenceChange)
-      .on('presence', { event: 'leave' }, (payload: {
-        leftPresences?: Array<{ user_id?: string; status?: string }>;
-      }) => {
+      .on('presence', { event: 'leave' }, (payload: { leftPresences?: Array<{ user_id?: string; status?: string }> }) => {
         payload?.leftPresences?.forEach((p) => {
           if (p?.user_id && p?.status === 'left') {
             markLeft(p.user_id);
           }
         });
-
         handlePresenceChange();
       })
       .on('broadcast', { event: 'player_disconnected' }, ({ payload }) => {
         if (!payload?.userId) return;
-
-        // Jika sudah ada tanda left, jangan downgrade ke disconnected
         if (hasLeftMark(payload.userId)) return;
 
         const store = useGameStore.getState();
-
-        if (store.room?.players[payload.userId]) {
-          if (store.room.players[payload.userId].status !== 'left') {
-            store.updatePlayer(payload.userId, { status: 'disconnected' });
-          }
+        if (store.room?.players[payload.userId] && store.room.players[payload.userId].status !== 'left') {
+          store.updatePlayer(payload.userId, { status: 'disconnected' });
         }
       })
       .on('broadcast', { event: 'leave_room' }, ({ payload }) => {
         if (!payload?.userId) return;
-
         markLeft(payload.userId);
 
         const store = useGameStore.getState();
+        if (store.room?.players[payload.userId]) {
+          store.updatePlayer(payload.userId, { status: 'left' });
+        }
 
-        if (!store.room?.players[payload.userId]) return;
-
-        // Kunci status sebagai left
-        store.updatePlayer(payload.userId, { status: 'left' });
-
-        // Ambil state terbaru setelah update
         const latest = useGameStore.getState();
-
-        // Jika kita host, sebarkan state terbaru supaya semua client sinkron
         if (latest.room?.hostId === currentUserId) {
           channel.send({
             type: 'broadcast',
@@ -310,14 +274,11 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'request_state' }, ({ payload }) => {
         const store = useGameStore.getState();
-
         if (store.room && store.room.hostId === currentUserId) {
           let updatedRoom = store.room;
 
-          // Pemain yang meminta state dianggap online kembali
           if (payload?.userId && store.room.players[payload.userId]) {
             clearLeftMark(payload.userId);
-
             const newPlayers = {
               ...store.room.players,
               [payload.userId]: {
@@ -325,7 +286,6 @@ export function useRealtime(roomId: string) {
                 status: 'online' as const,
               },
             };
-
             updatedRoom = { ...store.room, players: newPlayers };
             store.setRoom(updatedRoom);
           }
@@ -345,7 +305,6 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
         const store = useGameStore.getState();
-
         if (!payload?.room || payload.senderId !== payload.room.hostId) return;
 
         if (payload.room) {
@@ -359,41 +318,18 @@ export function useRealtime(roomId: string) {
             if (incomingStatus === 'online') {
               clearLeftMark(pId);
             }
-
-            if (incomingStatus === 'left') {
+            if (incomingStatus === 'left' || currentStatus === 'left' || hasLeftMark(pId)) {
               markLeft(pId);
-            }
-
-            const mustStayLeft =
-              (currentStatus === 'left' && incomingStatus !== 'online') ||
-              incomingStatus === 'left' ||
-              (hasLeftMark(pId) && incomingStatus !== 'online');
-
-            if (mustStayLeft) {
-              mergedPlayers[pId] = {
-                ...mergedPlayers[pId],
-                status: 'left',
-              };
+              mergedPlayers[pId] = { ...mergedPlayers[pId], status: 'left' };
             }
           });
 
           incomingRoom = { ...incomingRoom, players: mergedPlayers };
 
-          // Jangan paksa diri sendiri online jika memang sedang leave
-          if (
-            currentUserId &&
-            incomingRoom.players[currentUserId] &&
-            !intentionalLeaveRef.current
-          ) {
-            incomingRoom = {
-              ...incomingRoom,
-              players: {
-                ...incomingRoom.players,
-                [currentUserId]: {
-                  ...incomingRoom.players[currentUserId],
-                  status: 'online',
-                },
-              },
+          if (currentUserId && incomingRoom.players[currentUserId] && !intentionalLeaveRef.current) {
+            incomingRoom.players[currentUserId] = {
+              ...incomingRoom.players[currentUserId],
+              status: 'online',
             };
           }
 
@@ -498,11 +434,7 @@ export function useRealtime(roomId: string) {
 
           handlePresenceChange();
 
-          const sendRequest = () => {
-            channel.send({ type: 'broadcast', event: 'request_state', payload: { userId: currentUserId } });
-          };
-
-          sendRequest();
+          channel.send({ type: 'broadcast', event: 'request_state', payload: { userId: currentUserId } });
 
           if (retryRef.current) clearInterval(retryRef.current);
           let attempts = 0;
@@ -510,21 +442,21 @@ export function useRealtime(roomId: string) {
           retryRef.current = setInterval(() => {
             const currentGrid = useGameStore.getState().grid;
             attempts += 1;
-            if (currentGrid || attempts >= 25) {
+            if (currentGrid || attempts >= 20) {
               if (retryRef.current) {
                 clearInterval(retryRef.current);
                 retryRef.current = null;
               }
               return;
             }
-            sendRequest();
-          }, 1000);
+            channel.send({ type: 'broadcast', event: 'request_state', payload: { userId: currentUserId } });
+          }, 1500);
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
           const errorMsg = err?.message || (status === 'TIMED_OUT' ? 'Server Supabase tidak merespons (Timeout).' : 'Koneksi WebSocket terputus.');
           setConnectionError(errorMsg);
 
-          if (!reconnectTimeoutRef.current && isMountedRef.current) {
-            const delay = Math.min(1500 * Math.pow(1.5, retryCountRef.current), 5000);
+          if (!reconnectTimeoutRef.current && isMountedRef.current && !intentionalLeaveRef.current) {
+            const delay = Math.min(1000 * Math.pow(1.5, retryCountRef.current), 4000);
             retryCountRef.current += 1;
 
             reconnectTimeoutRef.current = setTimeout(() => {
@@ -544,6 +476,7 @@ export function useRealtime(roomId: string) {
 
   useEffect(() => {
     isMountedRef.current = true;
+    intentionalLeaveRef.current = false;
 
     const initialConnectTimeout = setTimeout(() => {
       if (isMountedRef.current && connectRef.current) {
@@ -552,9 +485,7 @@ export function useRealtime(roomId: string) {
     }, 0);
 
     const handleInstantReconnect = () => {
-      if (realtimeStatusRef.current === 'SUBSCRIBED') {
-        return;
-      }
+      if (realtimeStatusRef.current === 'SUBSCRIBED' || intentionalLeaveRef.current) return;
       retryCountRef.current = 0;
       if (connectRef.current) {
         connectRef.current(true);
@@ -567,42 +498,26 @@ export function useRealtime(roomId: string) {
       }
     };
 
-    // Deteksi saat tab/browser ditutup untuk instan Disconnect
     const handleBeforeUnload = () => {
       const channel = channelRef.current;
       const uid = userIdRef.current;
-
       if (!channel || !uid) return;
 
-      // Jika memang leave room, jangan kirim disconnected
       if (intentionalLeaveRef.current) {
-        try {
-          channel.send({
-            type: 'broadcast',
-            event: 'leave_room',
-            payload: {
-              userId: uid,
-              at: Date.now(),
-            },
-          });
-        } catch (e) {
-          console.warn('Gagal kirim leave_room saat beforeunload:', e);
-        }
-
+        channel.send({
+          type: 'broadcast',
+          event: 'leave_room',
+          payload: { userId: uid, at: Date.now() },
+        });
         return;
       }
 
-      try {
-        channel.send({
-          type: 'broadcast',
-          event: 'player_disconnected',
-          payload: { userId: uid },
-        });
-
-        channel.untrack();
-      } catch (e) {
-        console.warn('Gagal kirim player_disconnected:', e);
-      }
+      channel.send({
+        type: 'broadcast',
+        event: 'player_disconnected',
+        payload: { userId: uid },
+      });
+      channel.untrack();
     };
 
     window.addEventListener('online', handleInstantReconnect);
@@ -626,15 +541,6 @@ export function useRealtime(roomId: string) {
       });
     }, 1000);
 
-    const leftCleanupInterval = setInterval(() => {
-      const now = Date.now();
-      for (const [playerId, expiresAt] of leftUntilRef.current.entries()) {
-        if (expiresAt < now) {
-          leftUntilRef.current.delete(playerId);
-        }
-      }
-    }, 5000);
-
     return () => {
       isMountedRef.current = false;
       clearTimeout(initialConnectTimeout);
@@ -643,23 +549,6 @@ export function useRealtime(roomId: string) {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handleBeforeUnload);
-
-      clearInterval(leftCleanupInterval);
-
-      if (intentionalLeaveRef.current && channelRef.current && userIdRef.current) {
-        try {
-          channelRef.current.send({
-            type: 'broadcast',
-            event: 'leave_room',
-            payload: {
-              userId: userIdRef.current,
-              at: Date.now(),
-            },
-          });
-        } catch (e) {
-          console.warn('Gagal kirim leave_room terakhir saat cleanup:', e);
-        }
-      }
 
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
@@ -761,7 +650,6 @@ export function useRealtime(roomId: string) {
         })
         .then((data) => {
           const isCorrect = Boolean(data.isCorrect);
-
           store.updateCellWithValidation(row, col, value, userId, isCorrect);
 
           if (isCorrect) {
@@ -771,7 +659,6 @@ export function useRealtime(roomId: string) {
           }
 
           const latestPlayer = useGameStore.getState().room?.players[userId];
-
           if (isCompetition) {
             channelRef.current?.send({
               type: 'broadcast',
@@ -799,9 +686,7 @@ export function useRealtime(roomId: string) {
 
   const broadcastNote = (row: number, col: number, note: number) => {
     if (!channelRef.current || !userId) return;
-
     useGameStore.getState().toggleNote(row, col, note);
-
     if (useGameStore.getState().room?.mode === 'competition') return;
 
     channelRef.current.send({
@@ -820,52 +705,27 @@ export function useRealtime(roomId: string) {
     });
   };
 
+  // BROADCAST LEAVE ROOM: Cepat, reliable, dan anti-hang
   const broadcastLeaveRoom = async () => {
-    const channel = channelRef.current;
-    if (!channel || !userId) return;
-
     intentionalLeaveRef.current = true;
-    markLeft(userId);
-
-    const store = useGameStore.getState();
-
-    if (store.room?.players[userId]) {
-      store.updatePlayer(userId, { status: 'left' });
+    const uid = userIdRef.current;
+    if (uid) {
+      markLeft(uid);
+      useGameStore.getState().updatePlayer(uid, { status: 'left' });
     }
 
-    const payload = {
-      userId,
-      at: Date.now(),
-    };
+    const channel = channelRef.current;
+    if (!channel || !uid) return;
 
     try {
-      // Tandai presence sebagai left juga, supaya presence leave membawa hint left
-      try {
-        await channel.track({
-          user_id: userId,
-          username: usernameRef.current,
-          status: 'left',
-          left_at: new Date().toISOString(),
-        });
-      } catch (e) {
-        console.warn('Gagal track presence left:', e);
-      }
-
-      // Kirim berulang untuk mengurangi risiko event hilang / race
-      for (let i = 0; i < 3; i++) {
-        await channel.send({
-          type: 'broadcast',
-          event: 'leave_room',
-          payload,
-        });
-
-        await new Promise((resolve) => setTimeout(resolve, 80));
-      }
-
+      await channel.send({
+        type: 'broadcast',
+        event: 'leave_room',
+        payload: { userId: uid, at: Date.now() },
+      });
       await channel.untrack();
-      await new Promise((resolve) => setTimeout(resolve, 250));
     } catch (err) {
-      console.error('Gagal broadcast leave_room:', err);
+      console.warn('broadcastLeaveRoom non-blocking error:', err);
     }
   };
 

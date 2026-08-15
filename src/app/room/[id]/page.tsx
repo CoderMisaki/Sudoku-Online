@@ -77,18 +77,19 @@ export default function RoomPage() {
   };
 
   const {
-  broadcastMove,
-  broadcastNote,
-  broadcastCursor,
-  lockCell,
-  locks,
-  broadcastChat,
-  broadcastNextGame,
-  broadcastLeaveRoom,
-  realtimeStatus,
-  connectionError,
-  reconnect
-} = useRealtime(roomId);
+    broadcastMove,
+    broadcastNote,
+    broadcastCursor,
+    lockCell,
+    locks,
+    broadcastChat,
+    broadcastNextGame,
+    broadcastLeaveRoom,
+    realtimeStatus,
+    connectionError,
+    reconnect
+  } = useRealtime(roomId);
+
   const [chatInput, setChatInput] = useState('');
 
   const isGameCompleted = React.useMemo(() => {
@@ -135,7 +136,6 @@ export default function RoomPage() {
     try {
       toast.loading('Mempersiapkan game baru...', { id: 'nextGame' });
 
-      // Update room local state
       const updatedRoom = {
         ...room,
         difficulty: diff,
@@ -183,6 +183,10 @@ export default function RoomPage() {
   const [elapsedTime, setElapsedTime] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // FIX BUG 3: Tracking panjang pesan sebelumnya agar tidak muncul saat reconnect / reload
+  const prevMsgCountRef = useRef<number>(messages.length);
+  const isFirstLoadRef = useRef(true);
+
   useEffect(() => {
     const chatContainer = chatEndRef.current?.parentElement;
     if (chatContainer) {
@@ -192,20 +196,26 @@ export default function RoomPage() {
           chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
         });
       }
-    } else {
-      requestAnimationFrame(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      });
     }
 
-    if (messages.length > 0) {
+    if (isFirstLoadRef.current) {
+      isFirstLoadRef.current = false;
+      prevMsgCountRef.current = messages.length;
+      return;
+    }
+
+    // Hanya tampilkan notif +1 jika ada pesan baru yang bertambah dan bukan dari diri sendiri
+    if (messages.length > prevMsgCountRef.current) {
       const lastMsg = messages[messages.length - 1];
-      if (lastMsg.userId !== userId) {
+      if (lastMsg && lastMsg.userId !== userId) {
+        // Use setTimeout to avoid synchronous setState in effect
         setTimeout(() => setNewMsgNotif(true), 0);
         const timer = setTimeout(() => setNewMsgNotif(false), 1500);
+        prevMsgCountRef.current = messages.length;
         return () => clearTimeout(timer);
       }
     }
+    prevMsgCountRef.current = messages.length;
   }, [messages, userId]);
 
   useEffect(() => {
@@ -336,22 +346,28 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // FIX BUG 4 & REQUIREMENT: Pastikan tombol leave selalu keluar dan status jadi 'left'
   const leaveRoom = async () => {
     if (isLeaving) return;
-
     setIsLeaving(true);
 
     try {
-      await broadcastLeaveRoom();
-
-      // Beri sedikit waktu agar event benar-benar keluar sebelum reset/navigate
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // Jalankan broadcast leave room dengan batas waktu aman (maksimal 300ms) agar UI tidak macet
+      await Promise.race([
+        broadcastLeaveRoom(),
+        new Promise((resolve) => setTimeout(resolve, 300))
+      ]);
     } catch (err) {
-      console.error('Gagal leave room:', err);
+      console.warn('Leave room non-blocking error:', err);
     } finally {
       sessionStorage.removeItem(`sudoku_host_room_${roomId}`);
+      sessionStorage.removeItem(`sudoku_room_config_${roomId}`);
       resetGame();
-      router.push('/');
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (useGameStore as any).persist?.clearStorage?.();
+      } catch (_) {}
+      router.replace('/');
     }
   };
 
@@ -507,7 +523,7 @@ export default function RoomPage() {
           <div className="flex items-center gap-1.5 text-xs text-secondary bg-background px-2.5 py-1 rounded-full border border-border">
             <span className="hidden sm:inline">Code:</span>
             <span className="font-mono font-medium text-foreground tracking-wider">{roomId}</span>
-            <button onClick={copyRoomCode} className="hover:text-foreground transition-colors p-0.5">
+            <button onClick={copyRoomCode} className="hover:text-foreground transition-colors p-0.5 cursor-pointer">
               {copied ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
           </div>
@@ -528,7 +544,7 @@ export default function RoomPage() {
             size="sm"
             onClick={leaveRoom}
             disabled={isLeaving}
-            className="h-8 px-2.5 text-xs"
+            className="h-8 px-2.5 text-xs text-red-500 border-red-500/30 hover:bg-red-500/10"
           >
             <LogOut className="w-3.5 h-3.5 sm:mr-1.5" />
             <span className="hidden sm:inline">
@@ -548,18 +564,12 @@ export default function RoomPage() {
         </div>
       )}
 
-      {/* BANNER STATUS KONEKSI CERDAS */}
-      {isSupabaseEnvValid && (realtimeStatus === 'CHANNEL_ERROR' || realtimeStatus === 'TIMED_OUT' || (connectionError && realtimeStatus === 'CONNECTING')) && (
-        <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center transition-all duration-300">
+      {/* BANNER STATUS KONEKSI ANTI-FLICKER */}
+      {isSupabaseEnvValid && realtimeStatus !== 'SUBSCRIBED' && connectionError && (
+        <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center">
           <WifiOff className="w-4 h-4 flex-shrink-0 animate-pulse" />
           <span>
-            {realtimeStatus === 'CONNECTING' ? (
-              <strong>MENYAMBUNGKAN KEMBALI...</strong>
-            ) : (
-              <>
-                <strong>ROOM OFFLINE:</strong> {connectionError || `Koneksi WebSocket terputus (${realtimeStatus})`}.
-              </>
-            )}
+            <strong>ROOM OFFLINE:</strong> {connectionError}
           </span>
           <Button
             variant="outline"
@@ -639,7 +649,7 @@ export default function RoomPage() {
                   <MessageCircle className="w-4 h-4" /> Chat
                 </div>
                 {newMsgNotif && (
-                  <span className="text-xs bg-primary text-primary-foreground px-2 py-0.5 rounded-full animate-pulse transition-opacity duration-300 flex items-center gap-1 shadow-sm">
+                  <span className="text-xs bg-foreground text-background font-semibold px-2 py-0.5 rounded-full animate-pulse transition-opacity duration-300 flex items-center gap-1 shadow-sm">
                     ✉️ +1
                   </span>
                 )}
@@ -762,7 +772,7 @@ export default function RoomPage() {
                     key={n}
                     onClick={() => handleNumpadClick(n)}
                     disabled={isSpectator}
-                    className="w-10 h-10 rounded-lg border border-border bg-card hover:bg-hover font-semibold text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-10 h-10 rounded-lg border border-border bg-card hover:bg-hover font-semibold text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-foreground disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                   >
                     {n}
                   </button>
