@@ -251,6 +251,18 @@ export function useRealtime(roomId: string) {
 
         if (payload.room) {
           let incomingRoom = payload.room;
+
+          // Pertahankan status 'left' jika pemain lokal sudah mencatat pemain tersebut keluar
+          if (store.room?.players) {
+            const mergedPlayers = { ...incomingRoom.players };
+            Object.keys(store.room.players).forEach((pId) => {
+              if (store.room!.players[pId].status === 'left' && mergedPlayers[pId]) {
+                mergedPlayers[pId] = { ...mergedPlayers[pId], status: 'left' };
+              }
+            });
+            incomingRoom = { ...incomingRoom, players: mergedPlayers };
+          }
+
           if (currentUserId && incomingRoom.players && incomingRoom.players[currentUserId]) {
             if (incomingRoom.players[currentUserId].status !== 'online') {
               incomingRoom = {
@@ -622,20 +634,23 @@ export function useRealtime(roomId: string) {
     if (!channelRef.current || !userId) return;
 
     try {
-      // 1. Kirim event broadcast leave_room ke seluruh room
+      // Untrack presence terlebih dahulu agar server segera membersihkan tracking
+      await channelRef.current.untrack();
+
+      // Kirim event broadcast leave_room ke semua pemain
       await channelRef.current.send({
         type: 'broadcast',
         event: 'leave_room',
         payload: { userId },
       });
 
-      // Beri jeda sangat singkat agar paket data ter-flush ke jaringan sebelum channel ditutup
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      // Berikan jeda waktu agar paket WebSocket tuntas terkirim ke server Supabase
+      await new Promise((resolve) => setTimeout(resolve, 250));
     } catch (err) {
       console.error('Gagal broadcast leave_room:', err);
     }
 
-    // 2. Update state lokal sendiri
+    // Update state lokal
     const store = useGameStore.getState();
     if (store.room && store.room.players[userId]) {
       store.updatePlayer(userId, { status: 'left' });
