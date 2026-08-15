@@ -181,41 +181,39 @@ export default function RoomPage() {
 
   const [newMsgNotif, setNewMsgNotif] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  // FIX BUG 3: Tracking panjang pesan sebelumnya agar tidak muncul saat reconnect / reload
-  const prevMsgCountRef = useRef<number>(messages.length);
-  const isFirstLoadRef = useRef(true);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const prevMsgCountRef = useRef<number>(0);
+  const joinTimestampRef = useRef<number>(0);
 
   useEffect(() => {
-    const chatContainer = chatEndRef.current?.parentElement;
-    if (chatContainer) {
-      const isNearBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 150;
+    if (joinTimestampRef.current === 0) {
+      joinTimestampRef.current = Date.now();
+    }
+  }, []);
+
+  useEffect(() => {
+    // Scroll kontainer chat saja tanpa mengacaukan viewport window utama
+    if (chatContainerRef.current) {
+      const el = chatContainerRef.current;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
       if (isNearBottom) {
-        requestAnimationFrame(() => {
-          chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        });
+        el.scrollTop = el.scrollHeight;
       }
     }
 
-    if (isFirstLoadRef.current) {
-      isFirstLoadRef.current = false;
-      prevMsgCountRef.current = messages.length;
-      return;
-    }
-
-    // Hanya tampilkan notif +1 jika ada pesan baru yang bertambah dan bukan dari diri sendiri
+    // Hanya tampilkan notif +1 untuk pesan baru yang masuk setelah user join
     if (messages.length > prevMsgCountRef.current) {
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg && lastMsg.userId !== userId) {
-        // Use setTimeout to avoid synchronous setState in effect
-        setTimeout(() => setNewMsgNotif(true), 0);
-        const timer = setTimeout(() => setNewMsgNotif(false), 1500);
-        prevMsgCountRef.current = messages.length;
-        return () => clearTimeout(timer);
+      if (prevMsgCountRef.current > 0) {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg && lastMsg.userId !== userId && lastMsg.timestamp >= joinTimestampRef.current) {
+          setTimeout(() => setNewMsgNotif(true), 0);
+          const timer = setTimeout(() => setNewMsgNotif(false), 2000);
+          prevMsgCountRef.current = messages.length;
+          return () => clearTimeout(timer);
+        }
       }
+      prevMsgCountRef.current = messages.length;
     }
-    prevMsgCountRef.current = messages.length;
   }, [messages, userId]);
 
   useEffect(() => {
@@ -245,9 +243,9 @@ export default function RoomPage() {
       const textarea = document.getElementById('chat-textarea');
       if (textarea) textarea.style.height = '40px';
 
-      requestAnimationFrame(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      });
+      if (chatContainerRef.current) {
+        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+      }
     }
   };
 
@@ -655,7 +653,8 @@ export default function RoomPage() {
                 )}
               </h2>
             </div>
-            <div className="flex-1 p-3 flex flex-col overflow-y-auto space-y-2 text-xs sm:text-sm min-h-0">
+            <div ref={chatContainerRef}
+              className="flex-1 p-3 flex flex-col overflow-y-auto space-y-2 text-xs sm:text-sm min-h-0">
               {messages.length === 0 ? (
                 <div className="text-secondary italic text-center my-auto">No messages yet.</div>
               ) : (
@@ -666,7 +665,7 @@ export default function RoomPage() {
                   </div>
                 ))
               )}
-              <div ref={chatEndRef} />
+
             </div>
             <div className="p-2.5 border-t border-border flex-shrink-0">
               <form onSubmit={handleChatSubmit} className="flex items-center gap-2">

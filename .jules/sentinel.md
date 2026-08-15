@@ -95,3 +95,8 @@
 - Resolved flickering room offline notifications by improving connection error states and debounce logic.
 - Resolved stuck chat notification by adding message count ref tracking.
 - Resolved broken 'Leave Room' functionality and status sync by ensuring non-blocking async network sends.
+2024-11-06 - [Chat Scroll and Sudoku Input Fixes]
+
+- Fixed an issue where `chatEndRef.current?.scrollIntoView()` caused the entire browser window to scroll automatically every time a new message arrived. The solution changes the behavior to explicitly update the `scrollTop` property of the specific chat container `div`.
+- Addressed the persistent "+1 unread message" notification during a room reconnection. By tracking a `joinTimestampRef`, the logic now ensures notifications only trigger for messages originating after the user joins the room.
+- Solved a bug in the Sudoku board where previously correct answers (marked by `isCorrect: true`) could be overwritten if a user accidentally typed on that cell again. The `CellData` type in `gameStore` was extended to include `isCorrect`, and input logic in `SudokuBoard.tsx` was modified to block changes to these cells and emit a toast confirmation.

@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store/gameStore';
 import { cn } from '../../utils/cn';
+import toast from 'react-hot-toast';
 
 interface SudokuBoardProps {
   broadcastMove: (row: number, col: number, value: number | null) => void;
@@ -104,23 +105,29 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
       }
     }
 
+    const isCellFixed = Boolean(cell.isLocked || cell.isCorrect);
+
     if (e.key >= '1' && e.key <= '9') {
       const val = parseInt(e.key);
-      if (!cell.isLocked) {
-        if (isEraserMode && cell.value === null) {
-          if (cell.notes.includes(val)) {
-            broadcastNote(row, col, val);
-          }
-        } else if (isPencilMode && cell.value === null) {
+      if (isCellFixed) {
+        toast('Jawaban sudah benar', { icon: '✅', id: 'cell-correct' });
+        return;
+      }
+      if (isEraserMode && cell.value === null) {
+        if (cell.notes.includes(val)) {
           broadcastNote(row, col, val);
-        } else {
-          broadcastMove(row, col, val);
         }
+      } else if (isPencilMode && cell.value === null) {
+        broadcastNote(row, col, val);
+      } else {
+        broadcastMove(row, col, val);
       }
     } else if (e.key === 'Backspace' || e.key === 'Delete') {
-      if (!cell.isLocked) {
-        broadcastMove(row, col, null);
+      if (isCellFixed) {
+        toast('Jawaban sudah benar', { icon: '✅', id: 'cell-correct' });
+        return;
       }
+      broadcastMove(row, col, null);
     }
   }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode, isCompetition, room?.mode, isStunned]);
 
@@ -159,6 +166,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
           }
 
           const isError = cell.isConflicting || cell.isWrong;
+          const isFixed = Boolean(cell.isLocked || cell.isCorrect);
 
           return (
             <div
@@ -174,10 +182,10 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "bg-orange-400/30": isError && !isSelected && room?.mode === 'zen',
                   "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected,
                   "ring-2 ring-white ring-inset": isSameValue && isSelected,
-                  "text-foreground font-bold": !isSameValue && (cell.isLocked || isError),
-                  "text-foreground font-medium": !isSameValue && !cell.isLocked && !isError,
-                  "text-pink-500 font-bold": isSameValue && (cell.isLocked || isError),
-                  "text-pink-500 font-medium": isSameValue && !cell.isLocked && !isError,
+                  "text-foreground font-bold": !isSameValue && (isFixed || isError),
+                  "text-foreground font-medium": !isSameValue && !isFixed && !isError,
+                  "text-pink-500 font-bold": isSameValue && (isFixed || isError),
+                  "text-pink-500 font-medium": isSameValue && !isFixed && !isError,
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }
               )}
