@@ -35,6 +35,8 @@ export default function RoomPage() {
 
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isLeaving, setIsLeaving] = useState(false);
+  const initHostRef = useRef(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [isPencilMode, setIsPencilMode] = useState(false);
@@ -284,6 +286,9 @@ export default function RoomPage() {
     const isHost = isHostFromConfig || isHostFromStorage || isHostFromSession;
 
     if (!existingRoom && isHost) {
+      if (initHostRef.current) return;
+      initHostRef.current = true;
+
       currentState.setRoom({
         id: roomId,
         code: roomId,
@@ -332,10 +337,22 @@ export default function RoomPage() {
   };
 
   const leaveRoom = async () => {
-    await broadcastLeaveRoom();
-    sessionStorage.removeItem(`sudoku_host_room_${roomId}`);
-    resetGame();
-    router.push('/');
+    if (isLeaving) return;
+
+    setIsLeaving(true);
+
+    try {
+      await broadcastLeaveRoom();
+
+      // Beri sedikit waktu agar event benar-benar keluar sebelum reset/navigate
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    } catch (err) {
+      console.error('Gagal leave room:', err);
+    } finally {
+      sessionStorage.removeItem(`sudoku_host_room_${roomId}`);
+      resetGame();
+      router.push('/');
+    }
   };
 
   const handleAutoNote = useCallback(() => {
@@ -506,9 +523,17 @@ export default function RoomPage() {
           <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(true)} className="p-1.5 h-8 w-8">
             <Settings className="w-4 h-4" />
           </Button>
-          <Button variant="outline" size="sm" onClick={leaveRoom} className="h-8 px-2.5 text-xs">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={leaveRoom}
+            disabled={isLeaving}
+            className="h-8 px-2.5 text-xs"
+          >
             <LogOut className="w-3.5 h-3.5 sm:mr-1.5" />
-            <span className="hidden sm:inline">Leave</span>
+            <span className="hidden sm:inline">
+              {isLeaving ? 'Leaving...' : 'Leave'}
+            </span>
           </Button>
         </div>
       </header>

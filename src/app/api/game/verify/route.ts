@@ -1,22 +1,5 @@
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
-
-const SECRET_KEY = process.env.ROOM_SECRET_KEY || 'sudoku-together-secret-key-2026';
-
-// Dekripsi token jawaban secara aman di Node.js runtime
-export function decryptSolution(token: string): number[][] | null {
-  try {
-    const textParts = token.split(':');
-    const iv = Buffer.from(textParts.shift()!, 'hex');
-    const encryptedText = Buffer.from(textParts.join(':'), 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(SECRET_KEY.padEnd(32, '0').slice(0, 32)), iv);
-    let decrypted = decipher.update(encryptedText);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
-    return JSON.parse(decrypted.toString());
-  } catch {
-    return null;
-  }
-}
+import { decryptSolution } from '../../../../utils/security';
 
 export async function POST(request: Request) {
   try {

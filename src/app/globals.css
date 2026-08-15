@@ -3,11 +3,21 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --card: #ffffff;
+  --border: #e5e5e5;
+  --secondary: #6b7280;
+  --hover: #f3f4f6;
+  --destructive: #ef4444;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-secondary: var(--secondary);
+  --color-hover: var(--hover);
+  --color-destructive: var(--destructive);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -16,12 +26,22 @@
 .dark {
   --background: #0a0a0a;
   --foreground: #ededed;
+  --card: #171717;
+  --border: #262626;
+  --secondary: #a3a3a3;
+  --hover: #262626;
+  --destructive: #ef4444;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --card: #171717;
+    --border: #262626;
+    --secondary: #a3a3a3;
+    --hover: #262626;
+    --destructive: #ef4444;
   }
 }
 
