@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { decryptSolution } from '../verify/route';
+import { decryptSolution } from '../../../../utils/security';
 
 export async function POST(request: Request) {
   try {

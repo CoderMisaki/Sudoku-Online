@@ -30,6 +30,21 @@ export function useRealtime(roomId: string) {
   const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED'>('CONNECTING');
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
+  const intentionalLeaveRef = useRef(false);
+  const leftUntilRef = useRef<Map<string, number>>(new Map());
+
+  const markLeft = useCallback((playerId: string) => {
+    leftUntilRef.current.set(playerId, Date.now() + 20000);
+  }, []);
+
+  const hasLeftMark = useCallback((playerId: string) => {
+    return (leftUntilRef.current.get(playerId) ?? 0) > Date.now();
+  }, []);
+
+  const clearLeftMark = useCallback((playerId: string) => {
+    leftUntilRef.current.delete(playerId);
+  }, []);
+
   const realtimeStatusRef = useRef(realtimeStatus);
   useEffect(() => {
     realtimeStatusRef.current = realtimeStatus;
@@ -80,7 +95,7 @@ export function useRealtime(roomId: string) {
 
     const channel = supabase.channel(`room:${roomId}`, {
       config: {
-        broadcast: { self: false, ack: false },
+        broadcast: { self: false, ack: true },
         presence: { key: currentUserId },
       },
     });
@@ -109,17 +124,31 @@ export function useRealtime(roomId: string) {
       if (!store.room) return;
 
       const presenceState = channel.presenceState();
+
       const onlineUserIds = new Set<string>();
+      const leftUserIds = new Set<string>();
 
       Object.keys(presenceState).forEach((key) => {
-        onlineUserIds.add(key);
-        const presences = presenceState[key] as Array<{ user_id?: string }>;
+        const presences = presenceState[key] as Array<{
+          user_id?: string;
+          status?: string;
+        }>;
+
         presences?.forEach((p) => {
-          if (p.user_id) onlineUserIds.add(p.user_id);
+          const pid = p.user_id || key;
+
+          if (p.status === 'left') {
+            leftUserIds.add(pid);
+          } else {
+            onlineUserIds.add(pid);
+          }
         });
       });
 
-      if (currentUserId) onlineUserIds.add(currentUserId);
+      // Jangan paksa diri sendiri online kalau memang sedang leave
+      if (currentUserId && !intentionalLeaveRef.current) {
+        onlineUserIds.add(currentUserId);
+      }
 
       const currentPlayers = store.room.players;
       const newPlayers = { ...currentPlayers };
@@ -128,35 +157,64 @@ export function useRealtime(roomId: string) {
       const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
 
       Object.keys(newPlayers).forEach((pId) => {
-        const isOnline = onlineUserIds.has(pId);
-        if (isOnline) {
-          // Jika pemain kembali aktif di room, status kembali online
-          if (newPlayers[pId].status !== 'online') {
+        const currentStatus = newPlayers[pId].status;
+
+        // Kalau presence bilang online, left mark harus dibersihkan
+        if (onlineUserIds.has(pId)) {
+          clearLeftMark(pId);
+
+          if (currentStatus !== 'online') {
             newPlayers[pId] = { ...newPlayers[pId], status: 'online' };
             changed = true;
           }
-        } else {
-          // ATURAN MUTLAK:
-          // Jika status sudah 'left' (Keluar Room), JANGAN PERNAH ubah ke disconnected.
-          // Jika bukan 'left', ubah ke 'disconnected' (Keluar Web/Putus Koneksi).
-          if (newPlayers[pId].status !== 'left' && newPlayers[pId].status !== 'disconnected') {
-            newPlayers[pId] = { ...newPlayers[pId], status: 'disconnected' };
+
+          return;
+        }
+
+        // Kalau ada tanda left eksplisit, jangan turunkan ke disconnected
+        if (
+          currentStatus === 'left' ||
+          leftUserIds.has(pId) ||
+          hasLeftMark(pId)
+        ) {
+          if (currentStatus !== 'left') {
+            newPlayers[pId] = { ...newPlayers[pId], status: 'left' };
             changed = true;
           }
+
+          return;
+        }
+
+        // Jika tidak online dan tidak ada tanda left, berarti disconnected
+        if (currentStatus !== 'disconnected') {
+          newPlayers[pId] = { ...newPlayers[pId], status: 'disconnected' };
+          changed = true;
         }
       });
 
       const maxPlayers = store.room.maxPlayers || 4;
 
       Object.keys(presenceState).forEach((pId) => {
-        const presences = presenceState[pId] as Array<{ username?: string; user_id?: string }>;
+        const presences = presenceState[pId] as Array<{
+          username?: string;
+          user_id?: string;
+          status?: string;
+        }>;
+
         const presObj = presences?.[0];
         const actualId = presObj?.user_id || pId;
         const uname = presObj?.username || 'Player';
 
+        // Jangan tambah user baru jika presence-nya sudah left
+        if (presObj?.status === 'left') return;
+
         if (!newPlayers[actualId]) {
-          const activeCount = Object.values(newPlayers).filter((p) => !p.isSpectator).length;
-          const isSpectator = activeCount >= maxPlayers && actualId !== store.room?.hostId;
+          const activeCount = Object.values(newPlayers).filter(
+            (p) => !p.isSpectator
+          ).length;
+
+          const isSpectator =
+            activeCount >= maxPlayers && actualId !== store.room?.hostId;
 
           newPlayers[actualId] = {
             id: actualId,
@@ -168,12 +226,14 @@ export function useRealtime(roomId: string) {
             status: 'online',
             isSpectator,
           };
+
           changed = true;
         }
       });
 
       Object.keys(newPlayers).forEach((pId) => {
         const shouldBeHost = pId === store.room?.hostId;
+
         if (newPlayers[pId].isHost !== shouldBeHost) {
           newPlayers[pId] = { ...newPlayers[pId], isHost: shouldBeHost };
           changed = true;
@@ -183,19 +243,36 @@ export function useRealtime(roomId: string) {
       if (changed) {
         const updatedRoom = { ...store.room, players: newPlayers };
         store.setRoom(updatedRoom);
-        if (store.room.hostId === currentUserId) syncHostState();
+
+        if (store.room.hostId === currentUserId) {
+          syncHostState();
+        }
       }
     };
 
     channel
       .on('presence', { event: 'sync' }, handlePresenceChange)
       .on('presence', { event: 'join' }, handlePresenceChange)
-      .on('presence', { event: 'leave' }, handlePresenceChange)
+      .on('presence', { event: 'leave' }, (payload: {
+        leftPresences?: Array<{ user_id?: string; status?: string }>;
+      }) => {
+        payload?.leftPresences?.forEach((p) => {
+          if (p?.user_id && p?.status === 'left') {
+            markLeft(p.user_id);
+          }
+        });
+
+        handlePresenceChange();
+      })
       .on('broadcast', { event: 'player_disconnected' }, ({ payload }) => {
         if (!payload?.userId) return;
+
+        // Jika sudah ada tanda left, jangan downgrade ke disconnected
+        if (hasLeftMark(payload.userId)) return;
+
         const store = useGameStore.getState();
-        if (store.room && store.room.players[payload.userId]) {
-          // Hanya ubah ke disconnected jika pemain tersebut belum 'left'
+
+        if (store.room?.players[payload.userId]) {
           if (store.room.players[payload.userId].status !== 'left') {
             store.updatePlayer(payload.userId, { status: 'disconnected' });
           }
@@ -203,48 +280,52 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'leave_room' }, ({ payload }) => {
         if (!payload?.userId) return;
-        const store = useGameStore.getState();
-        if (store.room && store.room.players[payload.userId]) {
-          // Kunci status mutlak sebagai 'left'
-          store.updatePlayer(payload.userId, { status: 'left' });
 
-          if (store.room.hostId === currentUserId) {
-            const updatedRoom = {
-              ...store.room,
-              players: {
-                ...store.room.players,
-                [payload.userId]: {
-                  ...store.room.players[payload.userId],
-                  status: 'left' as const,
-                },
-              },
-            };
-            store.setRoom(updatedRoom);
-            channel.send({
-              type: 'broadcast',
-              event: 'sync_state',
-              payload: {
-                room: updatedRoom,
-                grid: store.grid,
-                solutionToken: store.solutionToken,
-                messages: store.messages,
-                senderId: currentUserId,
-              },
-            });
-          }
+        markLeft(payload.userId);
+
+        const store = useGameStore.getState();
+
+        if (!store.room?.players[payload.userId]) return;
+
+        // Kunci status sebagai left
+        store.updatePlayer(payload.userId, { status: 'left' });
+
+        // Ambil state terbaru setelah update
+        const latest = useGameStore.getState();
+
+        // Jika kita host, sebarkan state terbaru supaya semua client sinkron
+        if (latest.room?.hostId === currentUserId) {
+          channel.send({
+            type: 'broadcast',
+            event: 'sync_state',
+            payload: {
+              room: latest.room,
+              grid: latest.grid,
+              solutionToken: latest.solutionToken,
+              messages: latest.messages,
+              senderId: currentUserId,
+            },
+          });
         }
       })
       .on('broadcast', { event: 'request_state' }, ({ payload }) => {
         const store = useGameStore.getState();
+
         if (store.room && store.room.hostId === currentUserId) {
           let updatedRoom = store.room;
 
-          // Pemain yang meminta state ditandai online
+          // Pemain yang meminta state dianggap online kembali
           if (payload?.userId && store.room.players[payload.userId]) {
+            clearLeftMark(payload.userId);
+
             const newPlayers = {
               ...store.room.players,
-              [payload.userId]: { ...store.room.players[payload.userId], status: 'online' as const },
+              [payload.userId]: {
+                ...store.room.players[payload.userId],
+                status: 'online' as const,
+              },
             };
+
             updatedRoom = { ...store.room, players: newPlayers };
             store.setRoom(updatedRoom);
           }
@@ -264,31 +345,58 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
         const store = useGameStore.getState();
+
         if (!payload?.room || payload.senderId !== payload.room.hostId) return;
 
         if (payload.room) {
           let incomingRoom = payload.room;
+          const mergedPlayers = { ...incomingRoom.players };
 
-          // Lindungi status 'left' agar tidak hilang saat menerima sync_state
-          if (store.room?.players) {
-            const mergedPlayers = { ...incomingRoom.players };
-            Object.keys(store.room.players).forEach((pId) => {
-              if (store.room!.players[pId].status === 'left' && mergedPlayers[pId]) {
-                mergedPlayers[pId] = { ...mergedPlayers[pId], status: 'left' };
-              }
-            });
-            incomingRoom = { ...incomingRoom, players: mergedPlayers };
-          }
+          Object.keys(mergedPlayers).forEach((pId) => {
+            const currentStatus = store.room?.players?.[pId]?.status;
+            const incomingStatus = mergedPlayers[pId]?.status;
 
-          if (currentUserId && incomingRoom.players && incomingRoom.players[currentUserId]) {
+            if (incomingStatus === 'online') {
+              clearLeftMark(pId);
+            }
+
+            if (incomingStatus === 'left') {
+              markLeft(pId);
+            }
+
+            const mustStayLeft =
+              (currentStatus === 'left' && incomingStatus !== 'online') ||
+              incomingStatus === 'left' ||
+              (hasLeftMark(pId) && incomingStatus !== 'online');
+
+            if (mustStayLeft) {
+              mergedPlayers[pId] = {
+                ...mergedPlayers[pId],
+                status: 'left',
+              };
+            }
+          });
+
+          incomingRoom = { ...incomingRoom, players: mergedPlayers };
+
+          // Jangan paksa diri sendiri online jika memang sedang leave
+          if (
+            currentUserId &&
+            incomingRoom.players[currentUserId] &&
+            !intentionalLeaveRef.current
+          ) {
             incomingRoom = {
               ...incomingRoom,
               players: {
                 ...incomingRoom.players,
-                [currentUserId]: { ...incomingRoom.players[currentUserId], status: 'online' },
+                [currentUserId]: {
+                  ...incomingRoom.players[currentUserId],
+                  status: 'online',
+                },
               },
             };
           }
+
           store.setRoom(incomingRoom);
         }
 
@@ -384,6 +492,7 @@ export function useRealtime(roomId: string) {
           await channel.track({
             user_id: currentUserId,
             username: currentUsername,
+            status: intentionalLeaveRef.current ? 'left' : 'online',
             online_at: new Date().toISOString(),
           });
 
@@ -427,7 +536,7 @@ export function useRealtime(roomId: string) {
           }
         }
       });
-  }, [roomId]);
+  }, [roomId, clearLeftMark, hasLeftMark, markLeft]);
 
   useEffect(() => {
     connectRef.current = connectChannel;
@@ -460,13 +569,39 @@ export function useRealtime(roomId: string) {
 
     // Deteksi saat tab/browser ditutup untuk instan Disconnect
     const handleBeforeUnload = () => {
-      if (channelRef.current && userIdRef.current) {
-        channelRef.current.send({
+      const channel = channelRef.current;
+      const uid = userIdRef.current;
+
+      if (!channel || !uid) return;
+
+      // Jika memang leave room, jangan kirim disconnected
+      if (intentionalLeaveRef.current) {
+        try {
+          channel.send({
+            type: 'broadcast',
+            event: 'leave_room',
+            payload: {
+              userId: uid,
+              at: Date.now(),
+            },
+          });
+        } catch (e) {
+          console.warn('Gagal kirim leave_room saat beforeunload:', e);
+        }
+
+        return;
+      }
+
+      try {
+        channel.send({
           type: 'broadcast',
           event: 'player_disconnected',
-          payload: { userId: userIdRef.current },
+          payload: { userId: uid },
         });
-        channelRef.current.untrack();
+
+        channel.untrack();
+      } catch (e) {
+        console.warn('Gagal kirim player_disconnected:', e);
       }
     };
 
@@ -491,6 +626,15 @@ export function useRealtime(roomId: string) {
       });
     }, 1000);
 
+    const leftCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [playerId, expiresAt] of leftUntilRef.current.entries()) {
+        if (expiresAt < now) {
+          leftUntilRef.current.delete(playerId);
+        }
+      }
+    }, 5000);
+
     return () => {
       isMountedRef.current = false;
       clearTimeout(initialConnectTimeout);
@@ -499,6 +643,23 @@ export function useRealtime(roomId: string) {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handleBeforeUnload);
+
+      clearInterval(leftCleanupInterval);
+
+      if (intentionalLeaveRef.current && channelRef.current && userIdRef.current) {
+        try {
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'leave_room',
+            payload: {
+              userId: userIdRef.current,
+              at: Date.now(),
+            },
+          });
+        } catch (e) {
+          console.warn('Gagal kirim leave_room terakhir saat cleanup:', e);
+        }
+      }
 
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
@@ -660,26 +821,49 @@ export function useRealtime(roomId: string) {
   };
 
   const broadcastLeaveRoom = async () => {
-    if (!channelRef.current || !userId) return;
+    const channel = channelRef.current;
+    if (!channel || !userId) return;
+
+    intentionalLeaveRef.current = true;
+    markLeft(userId);
+
+    const store = useGameStore.getState();
+
+    if (store.room?.players[userId]) {
+      store.updatePlayer(userId, { status: 'left' });
+    }
+
+    const payload = {
+      userId,
+      at: Date.now(),
+    };
 
     try {
-      const store = useGameStore.getState();
-      if (store.room && store.room.players[userId]) {
-        store.updatePlayer(userId, { status: 'left' });
+      // Tandai presence sebagai left juga, supaya presence leave membawa hint left
+      try {
+        await channel.track({
+          user_id: userId,
+          username: usernameRef.current,
+          status: 'left',
+          left_at: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.warn('Gagal track presence left:', e);
       }
 
-      // Kirim event broadcast leave_room terlebih dahulu ke room
-      await channelRef.current.send({
-        type: 'broadcast',
-        event: 'leave_room',
-        payload: { userId },
-      });
+      // Kirim berulang untuk mengurangi risiko event hilang / race
+      for (let i = 0; i < 3; i++) {
+        await channel.send({
+          type: 'broadcast',
+          event: 'leave_room',
+          payload,
+        });
 
-      await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      }
 
-      // Untrack presence
-      await channelRef.current.untrack();
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await channel.untrack();
+      await new Promise((resolve) => setTimeout(resolve, 250));
     } catch (err) {
       console.error('Gagal broadcast leave_room:', err);
     }

@@ -80,3 +80,12 @@
 - Subscribed to `online`, `focus`, and `visibilitychange` events on the window to instantly attempt reconnection (0ms delay) when the browser regains connection or the user switches back to the tab.
 - Deferred the initial `connectChannel` call inside the `useEffect` using `setTimeout(..., 0)` to prevent the React warning regarding synchronous state updates (cascading renders) during effect execution.
 - Added a responsive connection banner to `src/app/room/[id]/page.tsx` that optimistically clears the connection error and displays "MENYAMBUNGKAN KEMBALI..." while attempting reconnection, preventing the error banner from getting stuck on screen.
+
+2026-08-15 - [Realtime Sync & Crypto Vulnerabilities Patched]
+- Fixed race condition + event ordering bug in Supabase Realtime during \`leave_room\` by properly handling intentional leaves, using an \`intentionalLeaveRef\` and locking states before broadcasting \`leave_room\`.
+- Enforced strict \`ack: true\` for broadcast channels where reliable messaging is critical.
+- Critical Security Enhancement: Upgraded \`solutionToken\` encryption in \`src/utils/security.ts\` from AES-CBC to AES-256-GCM to ensure data integrity and prevent padding oracle attacks.
+- Adopted proper key derivation with \`scryptSync\` using a salt rather than unsafe string padding.
+- Removed \`ROOM_SECRET_KEY\` fallback entirely to "fail closed" rather than exposing the application with an insecure default token.
+- Moved \`decryptSolution\` logic out of the route handler (\`src/app/api/game/verify/route.ts\`) into \`src/utils/security.ts\` for cleaner architectural separation and testability.
+- Updated \`src/store/gameStore.ts\` partialize config to stop persisting \`solutionToken\` to browser storage.
