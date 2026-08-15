@@ -523,11 +523,18 @@ export default function RoomPage() {
         </div>
       )}
 
-      {isSupabaseEnvValid && (realtimeStatus === 'CHANNEL_ERROR' || realtimeStatus === 'TIMED_OUT' || connectionError) && (
-        <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center">
-          <WifiOff className="w-4 h-4 flex-shrink-0" />
+      {/* BANNER STATUS KONEKSI CERDAS */}
+      {isSupabaseEnvValid && (realtimeStatus === 'CHANNEL_ERROR' || realtimeStatus === 'TIMED_OUT' || (connectionError && realtimeStatus !== 'SUBSCRIBED')) && (
+        <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center transition-all duration-300">
+          <WifiOff className="w-4 h-4 flex-shrink-0 animate-pulse" />
           <span>
-            <strong>ROOM OFFLINE:</strong> {connectionError || `Koneksi WebSocket terputus (${realtimeStatus})`}.
+            {realtimeStatus === 'CONNECTING' ? (
+              <strong>MENYAMBUNGKAN KEMBALI...</strong>
+            ) : (
+              <>
+                <strong>ROOM OFFLINE:</strong> {connectionError || `Koneksi WebSocket terputus (${realtimeStatus})`}.
+              </>
+            )}
           </span>
           <Button
             variant="outline"

@@ -11,6 +11,7 @@ export function useRealtime(roomId: string) {
   const channelRef = useRef<RealtimeChannel | null>(null);
   const retryRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCountRef = useRef<number>(0);
   const isMountedRef = useRef(true);
 
   const userId = useGameStore((state) => state.userId);
@@ -21,7 +22,7 @@ export function useRealtime(roomId: string) {
   const [locks, setLocks] = useState<Record<string, { userId: string, expiresAt: number }>>({});
   const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED'>('CONNECTING');
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const connectRef = useRef<(() => void) | null>(null);
+  const connectRef = useRef<((immediate?: boolean) => void) | null>(null);
 
   useEffect(() => {
     if (grid && !prevGridRef.current && channelRef.current && userId) {
@@ -43,7 +44,7 @@ export function useRealtime(roomId: string) {
     prevGridRef.current = grid;
   }, [grid, userId]);
 
-  const connectChannel = useCallback(() => {
+  const connectChannel = useCallback((immediate: boolean = false) => {
     if (!roomId || !userId || !username || !isMountedRef.current) return;
 
     if (reconnectTimeoutRef.current) {
@@ -58,6 +59,10 @@ export function useRealtime(roomId: string) {
     }
 
     setRealtimeStatus('CONNECTING');
+    if (immediate) {
+      // Hapus error secara optimis agar notifikasi langsung hilang saat kembali ke web
+      setConnectionError(null);
+    }
 
     const channel = supabase.channel(`room:${roomId}`, {
       config: {
@@ -304,8 +309,10 @@ export function useRealtime(roomId: string) {
         setRealtimeStatus(status as 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED');
 
         if (status === 'SUBSCRIBED') {
-          // Reset error banner
+          // Reset error banner & counter retry
           setConnectionError(null);
+          retryCountRef.current = 0;
+
           await channel.track({
             user_id: userId,
             username: username,
@@ -339,14 +346,17 @@ export function useRealtime(roomId: string) {
           const errorMsg = err?.message || (status === 'TIMED_OUT' ? 'Server Supabase tidak merespons (Timeout).' : 'Koneksi WebSocket terputus.');
           setConnectionError(errorMsg);
 
-          // Auto-reconnect terjadwal setelah 3 detik jika terputus
+          // Fast adaptive auto-reconnect (800ms -> 1.5s -> max 4s)
           if (!reconnectTimeoutRef.current && isMountedRef.current) {
+            const delay = Math.min(800 * Math.pow(1.5, retryCountRef.current), 4000);
+            retryCountRef.current += 1;
+
             reconnectTimeoutRef.current = setTimeout(() => {
               reconnectTimeoutRef.current = null;
-              if (isMountedRef.current) {
-                if (connectRef.current) connectRef.current();
+              if (isMountedRef.current && connectRef.current) {
+                connectRef.current(false);
               }
-            }, 3000);
+            }, delay);
           }
         }
       });
@@ -358,20 +368,30 @@ export function useRealtime(roomId: string) {
 
   useEffect(() => {
     isMountedRef.current = true;
-    connectChannel();
 
-    // Event listener saat kembali online atau saat tab kembali fokus/terbuka
-    const handleOnline = () => {
-      connectChannel();
+    // Defer the initial connection to avoid synchronous setState warning
+    const initialConnectTimeout = setTimeout(() => {
+      if (isMountedRef.current && connectRef.current) {
+        connectRef.current(true);
+      }
+    }, 0);
+
+    // Reconnect super cepat saat tab fokus kembali atau browser online
+    const handleInstantReconnect = () => {
+      retryCountRef.current = 0;
+      if (connectRef.current) {
+        connectRef.current(true);
+      }
     };
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        connectChannel();
+        handleInstantReconnect();
       }
     };
 
-    window.addEventListener('online', handleOnline);
+    window.addEventListener('online', handleInstantReconnect);
+    window.addEventListener('focus', handleInstantReconnect);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     const interval = setInterval(() => {
@@ -391,7 +411,9 @@ export function useRealtime(roomId: string) {
 
     return () => {
       isMountedRef.current = false;
-      window.removeEventListener('online', handleOnline);
+      clearTimeout(initialConnectTimeout);
+      window.removeEventListener('online', handleInstantReconnect);
+      window.removeEventListener('focus', handleInstantReconnect);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
 
       if (reconnectTimeoutRef.current) {
@@ -595,6 +617,6 @@ export function useRealtime(roomId: string) {
     broadcastLeaveRoom,
     realtimeStatus,
     connectionError,
-    reconnect: connectChannel,
+    reconnect: () => connectChannel(true),
   };
 }
