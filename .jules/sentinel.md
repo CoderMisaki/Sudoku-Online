@@ -123,3 +123,9 @@
 - Updated API routes (`create-room`, `verify`, `hint`) to use Zod for strict schema validation, rejecting malformed requests immediately.
 - Integrated rate limiting into API routes to prevent brute-force attacks and spam.
 2024-03-22 - Smart Background Retry & Architecture Upgrades\n- Implementasi Smart Background Retry dengan Grace Period untuk mengatasi kedap-kedip (flickering) notifikasi Room Offline saat koneksi WebSocket jitter.\n- Upgrade enkripsi solusi Sudoku menjadi AES-256-GCM + Anti-Replay + Dynamic Scrypt KDF.\n- Implementasi server-side security: Sliding Window Rate Limiting (in-memory) dan validasi Same-Origin/CSRF di rute API.\n- Penambahan HTTP Security Headers (CSP, HSTS, X-Frame-Options, dll) di konfigurasi Next.js (next.config.ts).
+
+2024-05-31 - [3D Sudoku Board Implementation]
+- Integrated a new \`SudokuBoard3D.tsx\` component utilizing \`three.js\` and \`@types/three\` to render an interactive, isometric 3D Sudoku board.
+- Supported seamless switching between 2D and 3D views in \`RoomPage\` via a UI toggle.
+- Ensured playability with interactive visual feedback (elevation lerps, hover states, shake effects on errors).
+- Maintained component isolation by hooking into the exact same \`gameStore\` and \`useRealtime\` event signatures as the 2D board.
