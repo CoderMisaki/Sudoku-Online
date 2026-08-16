@@ -16,5 +16,6 @@ export const supabase = createClient(
     params: {
       eventsPerSecond: 50,
     },
+    heartbeatIntervalMs: 2500,
   },
 });
