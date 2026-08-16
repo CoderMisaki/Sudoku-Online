@@ -36,8 +36,7 @@ export function useRealtime(roomId: string) {
 
   const intentionalLeaveRef = useRef(false);
   const disconnectedIdsRef = useRef<Set<string>>(new Set());
-  const unloadHandledRef = useRef(false);
-  const leftUntilRef = useRef<Map<string, number>>(new Map());
+    const leftUntilRef = useRef<Map<string, number>>(new Map());
 
   const markLeft = useCallback((playerId: string) => {
     leftUntilRef.current.set(playerId, Date.now() + 60000);
@@ -259,18 +258,41 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'player_disconnected' }, ({ payload }) => {
         if (!payload?.userId || hasLeftMark(payload.userId)) return;
+        const pId = payload.userId;
+
+        // 1. Catat langsung ke set disconnected agar tidak tertimpa sync_state
+        disconnectedIdsRef.current.add(pId);
+
         const store = useGameStore.getState();
-        if (store.room?.players[payload.userId] && store.room.players[payload.userId].status !== 'left') {
-          store.updatePlayer(payload.userId, { status: 'disconnected' });
+        if (store.room?.players[pId] && store.room.players[pId].status !== 'left') {
+          store.updatePlayer(pId, { status: 'disconnected' });
+        }
+
+        // 2. Jika user saat ini adalah Host, siarkan state terbaru ke player lain
+        const latest = useGameStore.getState();
+        if (latest.room?.hostId === currentUserId && latest.room.players[pId]) {
+          channel.send({
+            type: 'broadcast',
+            event: 'sync_state',
+            payload: {
+              room: latest.room,
+              grid: latest.grid,
+              solutionToken: latest.solutionToken,
+              messages: latest.messages,
+              senderId: currentUserId,
+            },
+          });
         }
       })
       .on('broadcast', { event: 'leave_room' }, ({ payload }) => {
         if (!payload?.userId) return;
-        markLeft(payload.userId);
+        const pId = payload.userId;
+        markLeft(pId);
+        disconnectedIdsRef.current.delete(pId);
 
         const store = useGameStore.getState();
-        if (store.room?.players[payload.userId]) {
-          store.updatePlayer(payload.userId, { status: 'left' });
+        if (store.room?.players[pId]) {
+          store.updatePlayer(pId, { status: 'left' });
         }
 
         const latest = useGameStore.getState();
@@ -566,10 +588,18 @@ export function useRealtime(roomId: string) {
       }
     };
 
-    const handleBeforeUnload = () => {
-      if (unloadHandledRef.current) return;
-      unloadHandledRef.current = true;
+    // Deteksi saat koneksi internet lokal drop secara instan
+    const handleOffline = () => {
+      setRealtimeStatus('CHANNEL_ERROR');
+      setConnectionError('Koneksi internet terputus.');
+      const uid = userIdRef.current;
+      if (uid) {
+        useGameStore.getState().updatePlayer(uid, { status: 'disconnected' });
+      }
+    };
 
+    // Broadcast seketika saat user menutup tab / browser / reload
+    const handleBeforeUnload = () => {
       const channel = channelRef.current;
       const uid = userIdRef.current;
       if (!channel || !uid) return;
@@ -580,10 +610,25 @@ export function useRealtime(roomId: string) {
           event: 'leave_room',
           payload: { userId: uid, at: Date.now() },
         });
+      } else {
+        // Tab / browser ditutup mendadak -> kirim status player_disconnected instan
+        channel.send({
+          type: 'broadcast',
+          event: 'player_disconnected',
+          payload: { userId: uid, at: Date.now() },
+        });
+      }
+
+      // Lepaskan presence seketika
+      try {
+        channel.untrack();
+      } catch {
+        /* ignore error */
       }
     };
 
     window.addEventListener('online', handleInstantReconnect);
+    window.addEventListener('offline', handleOffline);
     window.addEventListener('focus', handleInstantReconnect);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -608,6 +653,7 @@ export function useRealtime(roomId: string) {
       isMountedRef.current = false;
       clearTimeout(initialConnectTimeout);
       window.removeEventListener('online', handleInstantReconnect);
+      window.removeEventListener('offline', handleOffline);
       window.removeEventListener('focus', handleInstantReconnect);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', handleBeforeUnload);

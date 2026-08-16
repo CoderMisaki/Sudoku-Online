@@ -111,3 +111,7 @@
 - Changed presence `leave` handler to directly update player status to `disconnected` (or `left`) based on `leftPresences`, avoiding reliance on slower `presenceState()` synchronization.
 - Removed `syncHostState()` from presence changes to prevent host from broadcasting state on every presence update, maintaining separation between connection state and game state.
 - Simplified `handleBeforeUnload` to prevent duplicate events and stopped using `channel.untrack()` immediately after broadcasting `player_disconnected`, relying primarily on Supabase Presence.
+2024-05-31 - [Optimize Supabase Realtime Disconnection Detection]
+- Updated realtime connection configuration in src/services/supabase.ts to set heartbeatIntervalMs to 2500ms, accelerating TCP disconnect detection for dropped networks.
+- In src/hooks/useRealtime.ts, modified handleBeforeUnload and player_disconnected logic to track and prioritize explicit disconnect statuses (via disconnectedIdsRef) without waiting for default Supabase heartbeats, while preventing state clobbering from sync_state broadcasts.
+- Added handleOffline event listener on window 'offline' events to instantly catch network drops and force a disconnected state locally.
