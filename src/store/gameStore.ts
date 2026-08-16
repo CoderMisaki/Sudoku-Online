@@ -52,12 +52,24 @@ export const useGameStore = create<GameStore>()(
       setRoom: (room) => set({ room }),
       updatePlayer: (playerId, data) => set((state) => {
         if (!state.room) return state;
+        const existingPlayer = state.room.players[playerId];
         return {
           room: {
             ...state.room,
             players: {
               ...state.room.players,
-              [playerId]: { ...state.room.players[playerId], ...data }
+              [playerId]: {
+                ...(existingPlayer || {
+                  id: playerId,
+                  username: 'Player',
+                  color: '#3b82f6',
+                  isHost: false,
+                  score: 0,
+                  hints: 3,
+                  status: 'online'
+                }),
+                ...data
+              }
             }
           }
         };

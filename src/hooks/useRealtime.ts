@@ -5,7 +5,10 @@ import { Grid, RoomState } from "../types/game";
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { ChatMessage } from '../types/game';
 import { moveRateLimiter } from '../utils/rateLimiter';
+import { getOrCreateUserId } from '../utils/uuid';
 import toast from 'react-hot-toast';
+
+const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
 export function useRealtime(roomId: string) {
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -21,6 +24,7 @@ export function useRealtime(roomId: string) {
 
   const userIdRef = useRef(userId);
   const usernameRef = useRef(username);
+
   useEffect(() => {
     userIdRef.current = userId;
     usernameRef.current = username;
@@ -56,9 +60,10 @@ export function useRealtime(roomId: string) {
 
   // Sync state dari Host ketika grid & solutionToken sudah siap
   useEffect(() => {
-    if (grid && !prevGridRef.current && channelRef.current && userId) {
+    if (grid && !prevGridRef.current && channelRef.current) {
       const store = useGameStore.getState();
-      if (store.room && store.room.hostId === userId && store.solutionToken) {
+      const currentUid = userIdRef.current || store.userId;
+      if (store.room && store.room.hostId === currentUid && store.solutionToken) {
         channelRef.current.send({
           type: 'broadcast',
           event: 'sync_state',
@@ -67,19 +72,19 @@ export function useRealtime(roomId: string) {
             grid: store.grid,
             solutionToken: store.solutionToken,
             messages: store.messages,
-            senderId: userId
+            senderId: currentUid
           }
         });
       }
     }
     prevGridRef.current = grid;
-  }, [grid, userId]);
+  }, [grid]);
 
   const connectChannel = useCallback((immediate: boolean = false) => {
-    const currentUserId = userIdRef.current;
-    const currentUsername = usernameRef.current;
+    const currentUserId = userIdRef.current || (typeof window !== 'undefined' ? getOrCreateUserId() : '');
+    const currentUsername = usernameRef.current || (typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') || 'Player' : 'Player');
 
-    if (!roomId || !currentUserId || !currentUsername || !isMountedRef.current || intentionalLeaveRef.current) return;
+    if (!roomId || !currentUserId || !isMountedRef.current || intentionalLeaveRef.current) return;
 
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
@@ -87,10 +92,11 @@ export function useRealtime(roomId: string) {
     }
 
     if (channelRef.current) {
-      try {
-        supabase.removeChannel(channelRef.current);
-      } catch (_) {}
+      const oldChannel = channelRef.current;
       channelRef.current = null;
+      try {
+        supabase.removeChannel(oldChannel);
+      } catch { /* ignore error */ }
     }
 
     setRealtimeStatus('CONNECTING');
@@ -107,8 +113,6 @@ export function useRealtime(roomId: string) {
 
     channelRef.current = channel;
 
-
-    // Handler presence change dengan dukungan pengecualian instan untuk departed IDs
     const handlePresenceChange = (departedIds: Set<string> = new Set()) => {
       const store = useGameStore.getState();
       if (!store.room) return;
@@ -122,6 +126,7 @@ export function useRealtime(roomId: string) {
 
         const presences = presenceState[key] as Array<{
           user_id?: string;
+          username?: string;
           status?: string;
         }>;
 
@@ -145,12 +150,9 @@ export function useRealtime(roomId: string) {
       const newPlayers = { ...currentPlayers };
       let changed = false;
 
-      const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
-
       Object.keys(newPlayers).forEach((pId) => {
         const currentStatus = newPlayers[pId].status;
 
-        // Player meninggalkan room secara eksplisit
         if (currentStatus === 'left' || leftUserIds.has(pId) || hasLeftMark(pId)) {
           if (currentStatus !== 'left') {
             newPlayers[pId] = { ...newPlayers[pId], status: 'left' };
@@ -159,7 +161,6 @@ export function useRealtime(roomId: string) {
           return;
         }
 
-        // Player online
         if (onlineUserIds.has(pId)) {
           clearLeftMark(pId);
           if (currentStatus !== 'online') {
@@ -169,7 +170,6 @@ export function useRealtime(roomId: string) {
           return;
         }
 
-        // Player terputus koneksi (disconnect langsung aktif seketika)
         if (currentStatus !== 'disconnected') {
           newPlayers[pId] = { ...newPlayers[pId], status: 'disconnected' };
           changed = true;
@@ -208,26 +208,29 @@ export function useRealtime(roomId: string) {
             isSpectator,
           };
           changed = true;
+        } else if (newPlayers[actualId].username !== uname && uname !== 'Player') {
+          newPlayers[actualId] = { ...newPlayers[actualId], username: uname };
+          changed = true;
         }
       });
 
       if (changed) {
-        const updatedRoom = { ...store.room, players: newPlayers };
-        store.setRoom(updatedRoom);
-
-        // Removed syncHostState on presence change to avoid overwriting real-time connection status with stale game state
+        store.setRoom({ ...store.room, players: newPlayers });
       }
     };
 
     channel
       .on('presence', { event: 'sync' }, () => handlePresenceChange())
-      .on('presence', { event: 'join' }, (payload: { newPresences?: Array<{ user_id?: string; status?: string }> }) => {
+      .on('presence', { event: 'join' }, (payload: { newPresences?: Array<{ user_id?: string; username?: string; status?: string }> }) => {
         const presences = payload.newPresences || [];
         presences.forEach((p) => {
           const pId = p.user_id;
           if (pId) {
             disconnectedIdsRef.current.delete(pId);
-            useGameStore.getState().updatePlayer(pId, { status: 'online' });
+            useGameStore.getState().updatePlayer(pId, {
+              status: 'online',
+              ...(p.username ? { username: p.username } : {})
+            });
           }
         });
         handlePresenceChange();
@@ -238,31 +241,24 @@ export function useRealtime(roomId: string) {
 
         for (const presence of payload?.leftPresences ?? []) {
           const playerId = presence?.user_id;
-
-          if (!playerId) continue;
-          if (playerId === currentUserId) continue;
+          if (!playerId || playerId === currentUserId) continue;
 
           departedIds.add(playerId);
 
-          // Explicit leave
           if (presence.status === 'left') {
             markLeft(playerId);
             store.updatePlayer(playerId, { status: 'left' });
             continue;
           }
 
-          // Disconnect benar-benar realtime
           disconnectedIdsRef.current.add(playerId);
           store.updatePlayer(playerId, { status: 'disconnected' });
         }
 
-        // Langsung eksekusi perubahan status disconnect tanpa menunggu sinkronisasi berkala
         handlePresenceChange(departedIds);
       })
       .on('broadcast', { event: 'player_disconnected' }, ({ payload }) => {
-        if (!payload?.userId) return;
-        if (hasLeftMark(payload.userId)) return;
-
+        if (!payload?.userId || hasLeftMark(payload.userId)) return;
         const store = useGameStore.getState();
         if (store.room?.players[payload.userId] && store.room.players[payload.userId].status !== 'left') {
           store.updatePlayer(payload.userId, { status: 'disconnected' });
@@ -297,12 +293,24 @@ export function useRealtime(roomId: string) {
         if (store.room && store.room.hostId === currentUserId) {
           let updatedRoom = store.room;
 
-          if (payload?.userId && store.room.players[payload.userId]) {
+          if (payload?.userId) {
             clearLeftMark(payload.userId);
+            const pName = payload.username || store.room.players[payload.userId]?.username || 'Player';
+            const existingPlayer = store.room.players[payload.userId];
+            const activeCount = Object.values(store.room.players).filter(p => !p.isSpectator && p.id !== payload.userId).length;
+            const isSpectator = activeCount >= (store.room.maxPlayers || 4) && payload.userId !== store.room.hostId;
+
             const newPlayers = {
               ...store.room.players,
               [payload.userId]: {
-                ...store.room.players[payload.userId],
+                ...existingPlayer,
+                id: payload.userId,
+                color: existingPlayer?.color || PLAYER_COLORS[Object.keys(store.room.players).length % PLAYER_COLORS.length],
+                isHost: payload.userId === store.room.hostId,
+                score: existingPlayer?.score || 0,
+                hints: existingPlayer?.hints ?? 3,
+                isSpectator: existingPlayer?.isSpectator ?? isSpectator,
+                username: pName,
                 status: 'online' as const,
               },
             };
@@ -349,19 +357,33 @@ export function useRealtime(roomId: string) {
             }
           });
 
-          incomingRoom = { ...incomingRoom, players: mergedPlayers };
-
-          if (currentUserId && incomingRoom.players[currentUserId] && !intentionalLeaveRef.current) {
-            incomingRoom.players[currentUserId] = {
-              ...incomingRoom.players[currentUserId],
+          // Pastikan data player lokal tidak terhapus jika belum sempat terdaftar di host
+          if (currentUserId && !mergedPlayers[currentUserId] && !intentionalLeaveRef.current) {
+            const activeCount = Object.values(mergedPlayers).filter((p) => !(p as { isSpectator?: boolean }).isSpectator).length;
+            const isSpectator = activeCount >= (incomingRoom.maxPlayers || 4) && currentUserId !== incomingRoom.hostId;
+            mergedPlayers[currentUserId] = {
+              id: currentUserId,
+              username: currentUsername,
+              color: PLAYER_COLORS[Object.keys(mergedPlayers).length % PLAYER_COLORS.length],
+              isHost: currentUserId === incomingRoom.hostId,
+              score: 0,
+              hints: 3,
               status: 'online',
+              isSpectator,
+            };
+          } else if (currentUserId && mergedPlayers[currentUserId]) {
+            mergedPlayers[currentUserId] = {
+              ...mergedPlayers[currentUserId],
+              username: currentUsername || mergedPlayers[currentUserId].username,
+              status: intentionalLeaveRef.current ? 'left' : 'online',
             };
           }
 
+          incomingRoom = { ...incomingRoom, players: mergedPlayers };
           store.setRoom(incomingRoom);
         }
 
-        // Sinkronkan grid dan solutionToken ke player yang baru bergabung/reconnect
+        // Sinkronisasi board dan token
         if (payload.room?.mode !== 'competition' && payload.grid && payload.solutionToken) {
           store.setGameData(payload.grid, payload.solutionToken);
         }
@@ -444,7 +466,8 @@ export function useRealtime(roomId: string) {
         useGameStore.getState().addMessage(payload);
       })
       .subscribe(async (status, err) => {
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current || channelRef.current !== channel) return;
+
         setRealtimeStatus(status as 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED');
 
         if (status === 'SUBSCRIBED') {
@@ -453,7 +476,7 @@ export function useRealtime(roomId: string) {
 
           disconnectedIdsRef.current.delete(currentUserId);
           if (!intentionalLeaveRef.current) {
-            useGameStore.getState().updatePlayer(currentUserId, { status: 'online' });
+            useGameStore.getState().updatePlayer(currentUserId, { status: 'online', username: currentUsername });
           }
 
           await channel.track({
@@ -465,26 +488,38 @@ export function useRealtime(roomId: string) {
 
           handlePresenceChange();
 
-          // Minta sinkronisasi token dan state game saat reconnect
-          channel.send({ type: 'broadcast', event: 'request_state', payload: { userId: currentUserId } });
+          // Kirim request_state lengkap dengan nama
+          channel.send({
+            type: 'broadcast',
+            event: 'request_state',
+            payload: { userId: currentUserId, username: currentUsername }
+          });
 
           if (retryRef.current) clearInterval(retryRef.current);
           let attempts = 0;
 
           retryRef.current = setInterval(() => {
+            if (channelRef.current !== channel) {
+              if (retryRef.current) clearInterval(retryRef.current);
+              return;
+            }
             const currentGrid = useGameStore.getState().grid;
             const currentToken = useGameStore.getState().solutionToken;
             attempts += 1;
-            if ((currentGrid && currentToken) || attempts >= 10) {
+            if ((currentGrid && currentToken) || attempts >= 8) {
               if (retryRef.current) {
                 clearInterval(retryRef.current);
                 retryRef.current = null;
               }
               return;
             }
-            channel.send({ type: 'broadcast', event: 'request_state', payload: { userId: currentUserId } });
+            channel.send({
+              type: 'broadcast',
+              event: 'request_state',
+              payload: { userId: currentUserId, username: currentUsername }
+            });
           }, 1500);
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           const errorMsg = err?.message || (status === 'TIMED_OUT' ? 'Server Supabase tidak merespons (Timeout).' : 'Koneksi WebSocket terputus.');
           setConnectionError(errorMsg);
 
@@ -545,11 +580,7 @@ export function useRealtime(roomId: string) {
           event: 'leave_room',
           payload: { userId: uid, at: Date.now() },
         });
-        return;
       }
-
-      // We rely on Supabase Presence to handle unexpected disconnects
-      // No untrack() or player_disconnected broadcast here
     };
 
     window.addEventListener('online', handleInstantReconnect);
@@ -592,8 +623,9 @@ export function useRealtime(roomId: string) {
       }
       clearInterval(interval);
       if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
+        const chan = channelRef.current;
         channelRef.current = null;
+        supabase.removeChannel(chan);
       }
     };
   }, [connectChannel]);
@@ -670,12 +702,11 @@ export function useRealtime(roomId: string) {
       });
     }
 
-    // Pemulihan otomatis jika solutionToken belum tersinkron
     if (!store.solutionToken) {
       channelRef.current.send({
         type: 'broadcast',
         event: 'request_state',
-        payload: { userId }
+        payload: { userId, username }
       });
       toast.error('Menyinkronkan data room... Coba input kembali sebentar lagi.');
       return;
