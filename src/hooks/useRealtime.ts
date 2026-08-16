@@ -31,6 +31,8 @@ export function useRealtime(roomId: string) {
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const intentionalLeaveRef = useRef(false);
+  const disconnectedIdsRef = useRef<Set<string>>(new Set());
+  const unloadHandledRef = useRef(false);
   const leftUntilRef = useRef<Map<string, number>>(new Map());
 
   const markLeft = useCallback((playerId: string) => {
@@ -105,22 +107,6 @@ export function useRealtime(roomId: string) {
 
     channelRef.current = channel;
 
-    const syncHostState = () => {
-      const store = useGameStore.getState();
-      if (store.room && store.grid && store.solutionToken) {
-        channel.send({
-          type: 'broadcast',
-          event: 'sync_state',
-          payload: {
-            room: store.room,
-            grid: store.grid,
-            solutionToken: store.solutionToken,
-            messages: store.messages,
-            senderId: currentUserId
-          }
-        });
-      }
-    };
 
     // Handler presence change dengan dukungan pengecualian instan untuk departed IDs
     const handlePresenceChange = (departedIds: Set<string> = new Set()) => {
@@ -229,26 +215,47 @@ export function useRealtime(roomId: string) {
         const updatedRoom = { ...store.room, players: newPlayers };
         store.setRoom(updatedRoom);
 
-        if (store.room.hostId === currentUserId) {
-          syncHostState();
-        }
+        // Removed syncHostState on presence change to avoid overwriting real-time connection status with stale game state
       }
     };
 
     channel
       .on('presence', { event: 'sync' }, () => handlePresenceChange())
-      .on('presence', { event: 'join' }, () => handlePresenceChange())
-      .on('presence', { event: 'leave' }, (payload: { leftPresences?: Array<{ user_id?: string; status?: string }> }) => {
-        const departedIds = new Set<string>();
-        payload?.leftPresences?.forEach((p) => {
-          const pid = p?.user_id;
-          if (pid) {
-            departedIds.add(pid);
-            if (p?.status === 'left') {
-              markLeft(pid);
-            }
+      .on('presence', { event: 'join' }, (payload: { newPresences?: Array<{ user_id?: string; status?: string }> }) => {
+        const presences = payload.newPresences || [];
+        presences.forEach((p) => {
+          const pId = p.user_id;
+          if (pId) {
+            disconnectedIdsRef.current.delete(pId);
+            useGameStore.getState().updatePlayer(pId, { status: 'online' });
           }
         });
+        handlePresenceChange();
+      })
+      .on('presence', { event: 'leave' }, (payload: { leftPresences?: Array<{ user_id?: string; username?: string; status?: string }> }) => {
+        const store = useGameStore.getState();
+        const departedIds = new Set<string>();
+
+        for (const presence of payload?.leftPresences ?? []) {
+          const playerId = presence?.user_id;
+
+          if (!playerId) continue;
+          if (playerId === currentUserId) continue;
+
+          departedIds.add(playerId);
+
+          // Explicit leave
+          if (presence.status === 'left') {
+            markLeft(playerId);
+            store.updatePlayer(playerId, { status: 'left' });
+            continue;
+          }
+
+          // Disconnect benar-benar realtime
+          disconnectedIdsRef.current.add(playerId);
+          store.updatePlayer(playerId, { status: 'disconnected' });
+        }
+
         // Langsung eksekusi perubahan status disconnect tanpa menunggu sinkronisasi berkala
         handlePresenceChange(departedIds);
       })
@@ -327,6 +334,11 @@ export function useRealtime(roomId: string) {
           Object.keys(mergedPlayers).forEach((pId) => {
             const currentStatus = store.room?.players?.[pId]?.status;
             const incomingStatus = mergedPlayers[pId]?.status;
+
+            if (disconnectedIdsRef.current.has(pId)) {
+              mergedPlayers[pId] = { ...mergedPlayers[pId], status: 'disconnected' };
+              return;
+            }
 
             if (incomingStatus === 'online') {
               clearLeftMark(pId);
@@ -439,6 +451,11 @@ export function useRealtime(roomId: string) {
           setConnectionError(null);
           retryCountRef.current = 0;
 
+          disconnectedIdsRef.current.delete(currentUserId);
+          if (!intentionalLeaveRef.current) {
+            useGameStore.getState().updatePlayer(currentUserId, { status: 'online' });
+          }
+
           await channel.track({
             user_id: currentUserId,
             username: currentUsername,
@@ -515,6 +532,9 @@ export function useRealtime(roomId: string) {
     };
 
     const handleBeforeUnload = () => {
+      if (unloadHandledRef.current) return;
+      unloadHandledRef.current = true;
+
       const channel = channelRef.current;
       const uid = userIdRef.current;
       if (!channel || !uid) return;
@@ -528,12 +548,8 @@ export function useRealtime(roomId: string) {
         return;
       }
 
-      channel.send({
-        type: 'broadcast',
-        event: 'player_disconnected',
-        payload: { userId: uid },
-      });
-      channel.untrack();
+      // We rely on Supabase Presence to handle unexpected disconnects
+      // No untrack() or player_disconnected broadcast here
     };
 
     window.addEventListener('online', handleInstantReconnect);

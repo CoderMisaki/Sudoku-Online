@@ -105,3 +105,9 @@
 
 - Resolved issue where players getting disconnected wouldn't update to "disconnected" state instantly by utilizing the `leftPresences` array provided by Supabase in the `presence` `leave` event, and pushing those identifiers into a `departedIds` set to aggressively filter them out of the `channel.presenceState()` which may lag.
 - Resolved issue where players who disconnected and reconnected, or refreshed their browser, would be unable to make moves or play because the `solutionToken` was not being persisted locally, and the `/api/game/create-room` fallback was only checking for `!grid`. Re-added `solutionToken` to the `partialize` array in `useGameStore` and updated the conditional logic in `RoomPage` to also check for `!solutionToken`.
+
+2026-08-16 - [Fix Realtime Disconnect and Presence Sync Issues]
+- Fixed race condition where disconnected players were being revived by stale `sync_state` broadcasts. Introduced `disconnectedIdsRef` in `useRealtime.ts` to maintain local disconnect status and override stale incoming statuses.
+- Changed presence `leave` handler to directly update player status to `disconnected` (or `left`) based on `leftPresences`, avoiding reliance on slower `presenceState()` synchronization.
+- Removed `syncHostState()` from presence changes to prevent host from broadcasting state on every presence update, maintaining separation between connection state and game state.
+- Simplified `handleBeforeUnload` to prevent duplicate events and stopped using `channel.untrack()` immediately after broadcasting `player_disconnected`, relying primarily on Supabase Presence.
