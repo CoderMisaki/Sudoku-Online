@@ -115,3 +115,10 @@
 - Updated realtime connection configuration in src/services/supabase.ts to set heartbeatIntervalMs to 2500ms, accelerating TCP disconnect detection for dropped networks.
 - In src/hooks/useRealtime.ts, modified handleBeforeUnload and player_disconnected logic to track and prioritize explicit disconnect statuses (via disconnectedIdsRef) without waiting for default Supabase heartbeats, while preventing state clobbering from sync_state broadcasts.
 - Added handleOffline event listener on window 'offline' events to instantly catch network drops and force a disconnected state locally.
+2026-08-16 - [Layered Security Architecture / Defense-in-Depth]
+- Added HTTP Security Headers (CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy) in `next.config.ts`.
+- Sanitized client credentials in `src/services/supabase.ts` by removing string manipulation and securely using process.env variables.
+- Upgraded cryptography and implemented anti-replay in `src/utils/security.ts`. Encrypted tokens now include a timestamp, and use AES-256-GCM with Scrypt Key Derivation. Tokens expire after 6 hours.
+- Created `src/utils/serverSecurity.ts` for server-side rate limiting (sliding window per IP address) and origin/host verification (Anti-CSRF).
+- Updated API routes (`create-room`, `verify`, `hint`) to use Zod for strict schema validation, rejecting malformed requests immediately.
+- Integrated rate limiting into API routes to prevent brute-force attacks and spam.

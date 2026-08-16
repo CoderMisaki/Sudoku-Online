@@ -1,61 +1,71 @@
 import crypto from 'crypto';
 
-function getSecretKey(): Buffer {
-  const SECRET_KEY = process.env.ROOM_SECRET_KEY;
+const ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 12;
+const SALT = 'sudoku-secret-salt-secure-hash';
+const TOKEN_MAX_AGE_MS = 1000 * 60 * 60 * 6; // Token berlaku maksimal 6 jam
 
-  if (!SECRET_KEY || SECRET_KEY.length < 32) {
-    throw new Error('ROOM_SECRET_KEY wajib diisi dan minimal 32 karakter');
+function getDerivedKey(): Buffer {
+  const secret = process.env.ROOM_SECRET_KEY;
+  if (!secret || secret.length < 16) {
+    throw new Error('ROOM_SECRET_KEY wajib disetel di environment variable (min 16 karakter).');
   }
-
-  // Derive a proper 32-byte key
-  const salt = crypto.createHash('sha256').update(SECRET_KEY).digest().slice(0, 16);
-  return crypto.scryptSync(SECRET_KEY, salt, 32);
+  return crypto.scryptSync(secret, SALT, 32);
 }
 
-// Evaluated lazily to prevent Next.js build errors when ROOM_SECRET_KEY is not set in CI
-let cachedKey: Buffer | null = null;
-function getKey(): Buffer {
-  if (!cachedKey) {
-    cachedKey = getSecretKey();
-  }
-  return cachedKey;
+interface EncryptedPayload {
+  solution: number[][];
+  createdAt: number;
 }
 
-export function encryptSolution(solution: number[][]): string {
-  const key = getKey();
-  const iv = crypto.randomBytes(12); // GCM standard IV size is 12 bytes
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+export function encryptSolution(solutionGrid: number[][]): string {
+  const key = getDerivedKey();
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
 
-  let encrypted = cipher.update(JSON.stringify(solution), 'utf8', 'hex');
-  encrypted += cipher.final('hex');
+  const payload: EncryptedPayload = {
+    solution: solutionGrid,
+    createdAt: Date.now(),
+  };
 
-  const authTag = cipher.getAuthTag().toString('hex');
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(payload), 'utf8'),
+    cipher.final(),
+  ]);
 
-  // Format: iv:authTag:ciphertext
-  return `${iv.toString('hex')}:${authTag}:${encrypted}`;
+  const authTag = cipher.getAuthTag();
+
+  // Format: iv:authTag:encryptedData (Hex)
+  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
 export function decryptSolution(token: string): number[][] | null {
   try {
-    const key = getKey();
     const parts = token.split(':');
-    if (parts.length === 2) {
-      return null;
-    }
-
     if (parts.length !== 3) return null;
 
     const [ivHex, authTagHex, encryptedHex] = parts;
+    const key = getDerivedKey();
     const iv = Buffer.from(ivHex, 'hex');
     const authTag = Buffer.from(authTagHex, 'hex');
+    const encryptedText = Buffer.from(encryptedHex, 'hex');
 
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
     decipher.setAuthTag(authTag);
 
-    let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
+    const decrypted = Buffer.concat([
+      decipher.update(encryptedText),
+      decipher.final(),
+    ]);
 
-    return JSON.parse(decrypted);
+    const payload: EncryptedPayload = JSON.parse(decrypted.toString('utf8'));
+
+    // Anti-Replay: Validasi umur token
+    if (Date.now() - payload.createdAt > TOKEN_MAX_AGE_MS) {
+      return null;
+    }
+
+    return payload.solution;
   } catch {
     return null;
   }
