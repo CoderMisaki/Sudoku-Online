@@ -410,6 +410,7 @@ export const useGameStore = create<GameStore>()(
       partialize: (state) => ({
         room: state.room,
         grid: state.grid,
+        solutionToken: state.solutionToken,
         messages: state.messages,
       }),
     }

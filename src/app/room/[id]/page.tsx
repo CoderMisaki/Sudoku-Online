@@ -103,9 +103,12 @@ export default function RoomPage() {
     return true;
   }, [grid]);
 
-  // Otomatis minta soal unik jika mode Competition dan papan pemain masih kosong
+
+    const solutionToken = useGameStore(state => state.solutionToken);
+
+  // Otomatis minta soal unik jika mode Competition dan papan pemain atau token masih kosong
   useEffect(() => {
-    if (room && room.mode === 'competition' && !grid && !loading) {
+    if (room && room.mode === 'competition' && (!grid || !solutionToken) && !loading) {
       fetch('/api/game/create-room', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -119,7 +122,7 @@ export default function RoomPage() {
       })
       .catch(err => console.error('Failed to fetch competition puzzle:', err));
     }
-  }, [room, grid, loading, setGameData]);
+  }, [room, grid, solutionToken, loading, setGameData]);
 
   const handleOpenNextGameModal = () => {
     if (!room) return;
