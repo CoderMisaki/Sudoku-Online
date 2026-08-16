@@ -9,7 +9,8 @@ import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
-import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle, ArrowLeft, ArrowUp, ArrowDown, ArrowRight, RotateCw } from 'lucide-react';
+import { SudokuBoard3D } from '../../../components/game/SudokuBoard3D';
+import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle, ArrowLeft, ArrowUp, ArrowDown, ArrowRight, RotateCw, Box, Grid as GridIcon } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
@@ -46,6 +47,7 @@ export default function RoomPage() {
   const [isNextGameModalOpen, setIsNextGameModalOpen] = useState(false);
   const [nextGameStep, setNextGameStep] = useState<'confirm' | 'settings'>('confirm');
   const [isApplied, setIsApplied] = useState(false);
+  const [viewMode, setViewMode] = useState<'2D' | '3D'>('3D');
 
   const [nextDifficulty, setNextDifficulty] = useState<Difficulty>('medium');
   const [nextMode, setNextMode] = useState<GameMode>('collaborative');
@@ -727,17 +729,54 @@ export default function RoomPage() {
                 )}
                 <p className="text-secondary text-sm">Mode: {room?.mode || 'collaborative'}</p>
               </div>
+
+              {/* Toggle Switch 2D / 3D */}
+              <div className="flex items-center bg-card border border-border p-1 rounded-xl gap-1 shadow-sm">
+                <button
+                  onClick={() => setViewMode('2D')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    viewMode === '2D'
+                      ? 'bg-foreground text-background shadow-xs'
+                      : 'text-secondary hover:text-foreground'
+                  }`}
+                >
+                  <GridIcon className="w-3.5 h-3.5" /> 2D
+                </button>
+                <button
+                  onClick={() => setViewMode('3D')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    viewMode === '3D'
+                      ? 'bg-foreground text-background shadow-xs'
+                      : 'text-secondary hover:text-foreground'
+                  }`}
+                >
+                  <Box className="w-3.5 h-3.5" /> 3D
+                </button>
+              </div>
             </div>
 
-            <SudokuBoard
-              broadcastMove={broadcastMove}
-              broadcastNote={broadcastNote}
-              broadcastCursor={broadcastCursor}
-              lockCell={lockCell}
-              locks={locks}
-              isPencilMode={isPencilMode}
-              isEraserMode={isEraserMode}
-            />
+            {/* Render Sesuai Mode Pilihan */}
+            {viewMode === '3D' ? (
+              <SudokuBoard3D
+                broadcastMove={broadcastMove}
+                broadcastNote={broadcastNote}
+                broadcastCursor={broadcastCursor}
+                lockCell={lockCell}
+                locks={locks}
+                isPencilMode={isPencilMode}
+                isEraserMode={isEraserMode}
+              />
+            ) : (
+              <SudokuBoard
+                broadcastMove={broadcastMove}
+                broadcastNote={broadcastNote}
+                broadcastCursor={broadcastCursor}
+                lockCell={lockCell}
+                locks={locks}
+                isPencilMode={isPencilMode}
+                isEraserMode={isEraserMode}
+              />
+            )}
 
             <div className="flex flex-col items-center">
               <div className="text-2xl font-mono">{formatTime(elapsedTime)}</div>
