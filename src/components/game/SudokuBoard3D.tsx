@@ -26,7 +26,8 @@ interface TileMeta {
   shakeTime: number;
   canvas: HTMLCanvasElement;
   texture: THREE.CanvasTexture;
-  material: THREE.MeshStandardMaterial;
+  materials: THREE.Material[];
+  lastRenderKey: string;
 }
 
 export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
@@ -48,22 +49,24 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
 
   const isCompetition = room?.mode === 'competition';
   const [now, setNow] = React.useState(0);
+
   useEffect(() => {
     const timeout = setTimeout(() => setNow(Date.now()), 0);
-    const interval = setInterval(() => setNow(Date.now()), 100);
+    const interval = setInterval(() => setNow(Date.now()), 200);
     return () => {
       clearTimeout(timeout);
       clearInterval(interval);
     };
   }, []);
+
   const isStunned = (room?.mode === 'race' && userId && (room?.players[userId]?.stunnedUntil ?? 0) > now);
 
   const tilesRef = useRef<TileMeta[]>([]);
   const hoveredCellRef = useRef<{ row: number; col: number } | null>(null);
-  const pointerLightRef = useRef<THREE.PointLight | null>(null);
+  const prevGridRef = useRef(grid);
 
-  // Helper untuk menggambar tekstur atas kotak (Angka, Notes, Warna, Highlight)
-  const updateTileTexture = useCallback((tile: TileMeta) => {
+  // Helper render tekstur canvas dengan caching state agar tidak boros CPU/GPU
+  const updateTileTexture = useCallback((tile: TileMeta, force = false) => {
     const { row, col, canvas, texture } = tile;
     if (!grid) return;
 
@@ -72,71 +75,91 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
 
     let isSameValue = false;
     if (selectedCell) {
-      const selectedVal = grid[selectedCell.row][selectedCell.col].value;
-      isSameValue = selectedVal !== null && cell.value === selectedVal;
+      const selectedVal = grid[selectedCell.row][selectedCell.col]?.value;
+      isSameValue = selectedVal !== null && selectedVal !== undefined && cell.value === selectedVal;
     }
 
-    const isError = cell.isConflicting || cell.isWrong;
+    const isError = Boolean(cell.isConflicting || cell.isWrong);
     const isFixed = Boolean(cell.isLocked || cell.isCorrect);
+    const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+    const isPending = Boolean(cell.isPending);
 
-    const isDark = document.documentElement.classList.contains('dark');
-    const ctx = canvas.getContext('2d');
+    // Kunci unik untuk memvalidasi apakah perlu redraw canvas
+    const renderKey = `${cell.value}_${cell.notes.join('-')}_${isSelected}_${isSameValue}_${isError}_${isFixed}_${isDark}_${isPending}_${room?.mode}`;
+
+    if (!force && tile.lastRenderKey === renderKey) {
+      return; // Skip redraw jika state tidak ada yang berubah
+    }
+    tile.lastRenderKey = renderKey;
+
+    const ctx = canvas.getContext('2d', { willReadFrequently: false });
     if (!ctx) return;
 
-    // Background Canvas
+    const w = canvas.width;
+    const h = canvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Palet Warna Minimalis & Mewah
     let bgColor = isDark ? '#18181b' : '#ffffff';
+    let borderColor = isDark ? '#27272a' : '#e4e4e7';
+    let textColor = isDark ? '#f4f4f5' : '#09090b';
+
     if (isSelected && !isError) {
-      bgColor = isDark ? '#3b82f6' : '#2563eb';
+      bgColor = isDark ? '#2563eb' : '#3b82f6';
+      borderColor = '#60a5fa';
+      textColor = '#ffffff';
     } else if (isError) {
-      bgColor = room?.mode === 'zen' ? '#fb923c' : '#ef4444';
+      bgColor = room?.mode === 'zen' ? '#ea580c' : '#dc2626';
+      borderColor = '#fca5a5';
+      textColor = '#ffffff';
     } else if (isSameValue) {
-      bgColor = isDark ? '#3f3f46' : '#f4f4f5';
+      bgColor = isDark ? '#27272a' : '#f1f5f9';
+      borderColor = '#f43f5e';
+      textColor = '#f43f5e';
     }
 
+    // Gambar Base Balok Kotak (Chamfered Corner)
     ctx.fillStyle = bgColor;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.beginPath();
+    ctx.roundRect(8, 8, w - 16, h - 16, 20);
+    ctx.fill();
 
-    // Border Frame
-    ctx.lineWidth = isSelected ? 12 : 4;
-    ctx.strokeStyle = isSelected
-      ? '#ffffff'
-      : isSameValue
-        ? '#f43f5e'
-        : (isDark ? '#27272a' : '#e4e4e7');
-    ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
+    // Border Kotak
+    ctx.lineWidth = isSelected ? 8 : (isSameValue ? 6 : 3);
+    ctx.strokeStyle = borderColor;
+    ctx.stroke();
 
-    // Render Nilai Utama
+    // Render Angka Utama
     if (cell.value !== null) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.font = `bold ${isFixed ? '110px' : '95px'} system-ui, -apple-system, sans-serif`;
+      ctx.font = `700 ${isFixed ? '118px' : '108px'} -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
 
-      if (isSelected) {
-        ctx.fillStyle = '#ffffff';
-      } else if (isSameValue) {
-        ctx.fillStyle = '#f43f5e';
-      } else if (isError) {
-        ctx.fillStyle = '#ffffff';
-      } else if (isFixed) {
-        ctx.fillStyle = isDark ? '#f4f4f5' : '#18181b';
-      } else {
-        ctx.fillStyle = isDark ? '#60a5fa' : '#2563eb';
+      if (isPending) {
+        ctx.globalAlpha = 0.5;
       }
 
-      ctx.fillText(cell.value.toString(), canvas.width / 2, canvas.height / 2 + 4);
+      if (!isSelected && !isSameValue && !isError) {
+        textColor = isFixed ? (isDark ? '#fafafa' : '#18181b') : (isDark ? '#60a5fa' : '#2563eb');
+      }
+
+      ctx.fillStyle = textColor;
+      ctx.fillText(cell.value.toString(), w / 2, h / 2 + 4);
+      ctx.globalAlpha = 1.0;
     } else if (cell.notes.length > 0) {
-      // Render Mode Pensil / Notes
+      // Render Pensil / Notes Grid 3x3
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.font = 'bold 32px system-ui, -apple-system, sans-serif';
-      ctx.fillStyle = isSelected ? '#ffffff' : (isDark ? '#a1a1aa' : '#52525b');
+      ctx.font = '700 32px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillStyle = isSelected ? '#ffffff' : (isDark ? '#a1a1aa' : '#64748b');
 
       for (let n = 1; n <= 9; n++) {
         if (cell.notes.includes(n)) {
           const subRow = Math.floor((n - 1) / 3);
           const subCol = (n - 1) % 3;
-          const x = 45 + subCol * 83;
-          const y = 45 + subRow * 83;
+          const x = 46 + subCol * 82;
+          const y = 48 + subRow * 82;
           ctx.fillText(n.toString(), x, y);
         }
       }
@@ -145,7 +168,32 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
     texture.needsUpdate = true;
   }, [grid, selectedCell, room?.mode]);
 
-  // Update seluruh tekstur saat state grid / selectedCell berubah
+  // Pantau kesalahan input untuk memicu animasi goyang (micro-shake)
+  useEffect(() => {
+    if (!grid || !prevGridRef.current) {
+      prevGridRef.current = grid;
+      return;
+    }
+
+    grid.forEach((row, r) => {
+      row.forEach((cell, c) => {
+        const prevCell = prevGridRef.current?.[r]?.[c];
+        const isNowError = cell.isConflicting || cell.isWrong;
+        const wasError = prevCell?.isConflicting || prevCell?.isWrong;
+
+        if (isNowError && !wasError) {
+          const targetTile = tilesRef.current.find(t => t.row === r && t.col === c);
+          if (targetTile) {
+            targetTile.shakeTime = 0.35; // Goyang selama 350ms
+          }
+        }
+      });
+    });
+
+    prevGridRef.current = grid;
+  }, [grid]);
+
+  // Update tekstur balok saat terjadi perubahan data
   useEffect(() => {
     tilesRef.current.forEach(tile => updateTileTexture(tile));
   }, [grid, selectedCell, updateTileTexture]);
@@ -168,7 +216,7 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
     }
   }, [grid, isStunned, isCompetition, locks, userId, setSelectedCell, broadcastCursor, lockCell]);
 
-  // Keyboard Handler (Arrows, Numpad, Delete, Eraser, Notes)
+  // Handle Keyboard Navigasi & Input
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const target = e.target as HTMLElement | null;
     if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
@@ -226,84 +274,89 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
-  // Setup Three.js Scene, Camera, Renderer, dan Meshes
+  // Setup Three.js Scene, Near-2D Perspective Camera, & Meshes
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const scene = new THREE.Scene();
 
-    // Camera dengan Isometric Tilt
-    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
-    camera.position.set(0, 11, 9.5);
-    camera.lookAt(0, 0, 0);
+    // Sudut Pandang 3D Mirip 2D (FOV sempit 30 derajat, kamera tinggi dengan kemiringan tipis)
+    const camera = new THREE.PerspectiveCamera(30, container.clientWidth / container.clientHeight, 0.1, 100);
+    camera.position.set(0, 15.2, 3.2);
+    camera.lookAt(0, 0, -0.1);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance'
+    });
     renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
     container.appendChild(renderer.domElement);
 
-    // Pencahayaan
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.75);
+    // Pencahayaan Lembut Modern (Tanpa Dynamic Shadow Overhead)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.95);
     scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    dirLight.position.set(8, 16, 10);
-    dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 1024;
-    dirLight.shadow.mapSize.height = 1024;
-    dirLight.shadow.camera.near = 0.5;
-    dirLight.shadow.camera.far = 30;
-    scene.add(dirLight);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 0.85);
+    keyLight.position.set(5, 12, 6);
+    scene.add(keyLight);
 
-    const pointLight = new THREE.PointLight(0x38bdf8, 2, 8);
-    pointLight.position.set(0, 2, 0);
-    scene.add(pointLight);
-    pointerLightRef.current = pointLight;
+    const fillLight = new THREE.DirectionalLight(0x93c5fd, 0.35);
+    fillLight.position.set(-5, 8, -4);
+    scene.add(fillLight);
 
-    // Base Pedestal / Alas Papan 3D
-    const boardGeo = new THREE.BoxGeometry(8.2, 0.4, 8.2);
+    // Base Frame Sudoku (Alas Mewah dengan Sudut Membulat)
+    const isDark = document.documentElement.classList.contains('dark');
+    const boardGeo = new THREE.BoxGeometry(8.15, 0.22, 8.15);
     const boardMat = new THREE.MeshStandardMaterial({
-      color: 0x18181b,
-      roughness: 0.35,
-      metalness: 0.6,
+      color: isDark ? 0x09090b : 0xe2e8f0,
+      roughness: 0.4,
+      metalness: 0.15,
     });
     const boardMesh = new THREE.Mesh(boardGeo, boardMat);
-    boardMesh.position.y = -0.22;
-    boardMesh.receiveShadow = true;
+    boardMesh.position.y = -0.15;
     scene.add(boardMesh);
 
-    // Grid 9x9 Balok Sudoku
+    // Single Shared Geometry untuk seluruh 81 Balok (Sangat Menghemat Memory GPU)
+    const tileSize = 0.74;
+    const tileHeight = 0.16;
+    const sharedTileGeo = new THREE.BoxGeometry(tileSize, tileHeight, tileSize);
+
+    const sideMat = new THREE.MeshStandardMaterial({
+      color: isDark ? 0x27272a : 0xcbd5e1,
+      roughness: 0.5,
+      metalness: 0.1
+    });
+
     const tiles: TileMeta[] = [];
-    const tileSize = 0.72;
-    const tileHeight = 0.25;
-    const tileGeo = new THREE.BoxGeometry(tileSize, tileHeight, tileSize);
 
     for (let r = 0; r < 9; r++) {
       for (let c = 0; c < 9; c++) {
-        // Gap ekstra untuk membedakan blok 3x3
-        const xOffset = (c - 4) * (tileSize + 0.08) + (Math.floor(c / 3) - 1) * 0.12;
-        const zOffset = (r - 4) * (tileSize + 0.08) + (Math.floor(r / 3) - 1) * 0.12;
+        // Pembagian jarak balok dan garis sub-grid 3x3
+        const xOffset = (c - 4) * (tileSize + 0.05) + (Math.floor(c / 3) - 1) * 0.12;
+        const zOffset = (r - 4) * (tileSize + 0.05) + (Math.floor(r / 3) - 1) * 0.12;
 
         const canvas = document.createElement('canvas');
         canvas.width = 256;
         canvas.height = 256;
 
         const texture = new THREE.CanvasTexture(canvas);
-        texture.anisotropy = 4;
+        texture.minFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
 
-        const sideMat = new THREE.MeshStandardMaterial({ color: 0x27272a, roughness: 0.5, metalness: 0.2 });
-        const topMat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.2, metalness: 0.1 });
+        const topMat = new THREE.MeshStandardMaterial({
+          map: texture,
+          roughness: 0.25,
+          metalness: 0.05
+        });
 
-        // Urutan Face Material: right, left, top, bottom, front, back
+        // Face Materials: right, left, top, bottom, front, back
         const materials = [sideMat, sideMat, topMat, sideMat, sideMat, sideMat];
-        const mesh = new THREE.Mesh(tileGeo, materials);
+        const mesh = new THREE.Mesh(sharedTileGeo, materials);
         mesh.position.set(xOffset, 0, zOffset);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        mesh.userData = { row: r, col: c };
+        mesh.userData = { row: r, col: c, baseX: xOffset };
 
         scene.add(mesh);
 
@@ -316,47 +369,41 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
           shakeTime: 0,
           canvas,
           texture,
-          material: topMat
+          materials,
+          lastRenderKey: ''
         };
 
         tiles.push(tileMeta);
-        updateTileTexture(tileMeta);
+        updateTileTexture(tileMeta, true);
       }
     }
     tilesRef.current = tiles;
 
-    // Raycaster untuk Interaksi Mouse
+    // Raycaster untuk Klik Mouse & Pointer Touch
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
-    const onPointerMove = (e: MouseEvent) => {
+    const getRaycastIntersect = (clientX: number, clientY: number) => {
       const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
+      mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
-      const intersects = raycaster.intersectObjects(tiles.map(t => t.mesh));
+      return raycaster.intersectObjects(tiles.map(t => t.mesh));
+    };
 
+    const onPointerMove = (e: MouseEvent) => {
+      const intersects = getRaycastIntersect(e.clientX, e.clientY);
       if (intersects.length > 0) {
         const hitMesh = intersects[0].object as THREE.Mesh;
         const { row, col } = hitMesh.userData;
         hoveredCellRef.current = { row, col };
-        if (pointerLightRef.current) {
-          pointerLightRef.current.position.set(hitMesh.position.x, 1.2, hitMesh.position.z);
-        }
       } else {
         hoveredCellRef.current = null;
       }
     };
 
     const onPointerDown = (e: MouseEvent) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-      raycaster.setFromCamera(mouse, camera);
-      const intersects = raycaster.intersectObjects(tiles.map(t => t.mesh));
-
+      const intersects = getRaycastIntersect(e.clientX, e.clientY);
       if (intersects.length > 0) {
         const hitMesh = intersects[0].object as THREE.Mesh;
         const { row, col } = hitMesh.userData;
@@ -365,38 +412,42 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
     };
 
     const domElement = renderer.domElement;
-    domElement.addEventListener('mousemove', onPointerMove);
+    domElement.addEventListener('mousemove', onPointerMove, { passive: true });
     domElement.addEventListener('pointerdown', onPointerDown);
 
-    // Animasi & Render Loop
+    // Render & Animation Loop (Smooth Lerp + Micro Shake)
     let animationFrameId: number;
     const clock = new THREE.Clock();
 
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
-      const delta = clock.getDelta();
+      const delta = Math.min(clock.getDelta(), 0.1);
 
       tiles.forEach(tile => {
         const isSelected = selectedCell?.row === tile.row && selectedCell?.col === tile.col;
         const isHovered = hoveredCellRef.current?.row === tile.row && hoveredCellRef.current?.col === tile.col;
 
-        // Elevasi dinamis
+        // Elevasi 3D Ringan & Mewah
         if (isSelected) {
-          tile.targetY = 0.28;
+          tile.targetY = 0.16; // Timbul ke atas
         } else if (isHovered) {
-          tile.targetY = 0.12;
+          tile.targetY = 0.06; // Sedikit naik saat kursor mendekat
         } else {
           tile.targetY = 0;
         }
 
-        // Interpolasi perpindahan Y (Lerp)
-        tile.currentY += (tile.targetY - tile.currentY) * (delta * 14);
+        // Interpolasi perpindahan halus (Damping Lerp)
+        tile.currentY += (tile.targetY - tile.currentY) * (delta * 18);
         tile.mesh.position.y = tile.currentY;
 
-        // Animasi Shake jika ada kesalahan
+        // Micro-Shake Animation saat salah input
         if (tile.shakeTime > 0) {
           tile.shakeTime -= delta;
-          tile.mesh.position.x += Math.sin(clock.getElapsedTime() * 40) * 0.03;
+          const shakeOffset = Math.sin(tile.shakeTime * 45) * 0.025;
+          tile.mesh.position.x = tile.mesh.userData.baseX + shakeOffset;
+          if (tile.shakeTime <= 0) {
+            tile.mesh.position.x = tile.mesh.userData.baseX;
+          }
         }
       });
 
@@ -404,7 +455,7 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
     };
     animate();
 
-    // Resize Observer
+    // Auto Responsive Resize Handler
     const handleResize = () => {
       if (!container) return;
       camera.aspect = container.clientWidth / container.clientHeight;
@@ -422,18 +473,16 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
       domElement.removeEventListener('pointerdown', onPointerDown);
 
       tiles.forEach(t => {
-        t.mesh.geometry.dispose();
         t.texture.dispose();
-        if (Array.isArray(t.mesh.material)) {
-          t.mesh.material.forEach(m => m.dispose());
-        } else {
-          t.mesh.material.dispose();
-        }
+        t.materials.forEach(m => m.dispose());
       });
 
+      sharedTileGeo.dispose();
       boardGeo.dispose();
       boardMat.dispose();
+      sideMat.dispose();
       renderer.dispose();
+
       if (container.contains(domElement)) {
         container.removeChild(domElement);
       }
@@ -444,7 +493,7 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
     <div
       ref={containerRef}
       className={cn(
-        "w-full aspect-square max-w-[620px] rounded-2xl relative overflow-hidden select-none cursor-pointer shadow-2xl transition-all duration-300",
+        "w-full aspect-square max-w-[580px] rounded-2xl relative overflow-hidden select-none cursor-pointer shadow-lg transition-opacity duration-300",
         isStunned && "opacity-50 grayscale",
         className
       )}
