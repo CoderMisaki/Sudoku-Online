@@ -9,7 +9,7 @@ import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
-import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle, ArrowLeft, ArrowUp, ArrowDown, ArrowRight } from 'lucide-react';
+import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle, ArrowLeft, ArrowUp, ArrowDown, ArrowRight, RotateCw } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
@@ -103,16 +103,15 @@ export default function RoomPage() {
     return true;
   }, [grid]);
 
+  const solutionToken = useGameStore(state => state.solutionToken);
 
-    const solutionToken = useGameStore(state => state.solutionToken);
-
-  // Otomatis minta soal unik jika mode Competition dan papan pemain atau token masih kosong
+  // Otomatis minta soal jika mode Competition dan papan pemain atau token masih kosong
   useEffect(() => {
     if (room && room.mode === 'competition' && (!grid || !solutionToken) && !loading) {
       fetch('/api/game/create-room', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ difficulty: room.difficulty })
+        body: JSON.stringify({ difficulty: room.difficulty || 'medium' })
       })
       .then(res => res.json())
       .then(data => {
@@ -122,7 +121,7 @@ export default function RoomPage() {
       })
       .catch(err => console.error('Failed to fetch competition puzzle:', err));
     }
-  }, [room, grid, solutionToken, loading, setGameData]);
+  }, [room, room?.mode, room?.difficulty, grid, solutionToken, loading, setGameData]);
 
   const handleOpenNextGameModal = () => {
     if (!room) return;
@@ -195,7 +194,6 @@ export default function RoomPage() {
   }, []);
 
   useEffect(() => {
-    // Scroll kontainer chat saja tanpa mengacaukan viewport window utama
     if (chatContainerRef.current) {
       const el = chatContainerRef.current;
       const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
@@ -204,7 +202,6 @@ export default function RoomPage() {
       }
     }
 
-    // Hanya tampilkan notif +1 untuk pesan baru yang masuk setelah user join
     if (messages.length > prevMsgCountRef.current) {
       if (prevMsgCountRef.current > 0) {
         const lastMsg = messages[messages.length - 1];
@@ -263,10 +260,7 @@ export default function RoomPage() {
       return;
     }
 
-    if (!userId) {
-      setUserInfo(storedUserId, storedUsername);
-    }
-
+    setUserInfo(storedUserId, storedUsername);
     enterRoom(roomId);
 
     let isHostFromConfig = false;
@@ -290,14 +284,10 @@ export default function RoomPage() {
     }
 
     const currentState = useGameStore.getState();
-    const existingRoom = currentState.room;
-
-    const isHostFromStorage = existingRoom?.hostId === storedUserId;
     const isHostFromSession = sessionStorage.getItem(`sudoku_host_room_${roomId}`) === '1';
-    const isHost = isHostFromConfig || isHostFromStorage || isHostFromSession;
+    const isHost = isHostFromConfig || isHostFromSession;
 
-    if (!existingRoom && isHost) {
-      if (initHostRef.current) return;
+    if (isHost && !initHostRef.current) {
       initHostRef.current = true;
 
       currentState.setRoom({
@@ -339,7 +329,7 @@ export default function RoomPage() {
 
     const t = setTimeout(() => setLoading(false), 0);
     return () => clearTimeout(t);
-  }, [roomId, router, userId, room, setGameData, setUserInfo, enterRoom]);
+  }, [roomId, router, setUserInfo, enterRoom]);
 
   const copyRoomCode = () => {
     navigator.clipboard.writeText(roomId);
@@ -347,13 +337,11 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // FIX BUG 4 & REQUIREMENT: Pastikan tombol leave selalu keluar dan status jadi 'left'
   const leaveRoom = async () => {
     if (isLeaving) return;
     setIsLeaving(true);
 
     try {
-      // Jalankan broadcast leave room dengan batas waktu aman (maksimal 300ms) agar UI tidak macet
       await Promise.race([
         broadcastLeaveRoom(),
         new Promise((resolve) => setTimeout(resolve, 300))
@@ -367,7 +355,7 @@ export default function RoomPage() {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (useGameStore as any).persist?.clearStorage?.();
-      } catch (_) {}
+      } catch { /* ignore error */ }
       router.replace('/');
     }
   };
@@ -381,8 +369,7 @@ export default function RoomPage() {
   }, [isSpectator]);
 
   const handleHint = useCallback(async () => {
-    if (isSpectator) return;
-    if (!userId) return;
+    if (isSpectator || !userId) return;
 
     if (!selectedCell) {
       toast.error('Pilih kotak terlebih dahulu untuk menggunakan hint!');
@@ -390,10 +377,10 @@ export default function RoomPage() {
     }
 
     const store = useGameStore.getState();
-    const player = store.room?.players[userId];
-    if (!player) return;
+    const p = store.room?.players[userId];
+    if (!p) return;
 
-    if (store.room?.mode !== 'zen' && player.hints <= 0) {
+    if (store.room?.mode !== 'zen' && p.hints <= 0) {
       toast.error('Jatah hint kamu sudah habis!');
       return;
     }
@@ -429,7 +416,7 @@ export default function RoomPage() {
         }
 
         broadcastMove(selectedCell.row, selectedCell.col, data.value);
-        store.updatePlayer(userId, { hints: player.hints - 1 });
+        store.updatePlayer(userId, { hints: p.hints - 1 });
         toast.success('Hint digunakan!');
       } else if (data.error) {
         toast.error(data.error);
@@ -502,14 +489,38 @@ export default function RoomPage() {
     return <div className="min-h-screen flex items-center justify-center bg-background text-foreground">Loading room...</div>;
   }
 
+  // Tampilan Menunggu Host dengan opsi sinkronisasi ulang
   if (!grid) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6 text-center">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-6 text-center space-y-4">
         <div className="space-y-2">
-          <h2 className="text-lg font-semibold">Menunggu host memulai room...</h2>
+          <div className="w-10 h-10 border-3 border-foreground border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <h2 className="text-xl font-bold">Menghubungkan ke Papan Game...</h2>
           <p className="text-secondary text-sm">
-            Room code: <span className="font-mono">{roomId}</span>
+            Menyinkronkan data puzzle dari host untuk room <span className="font-mono font-semibold text-foreground">{roomId}</span>
           </p>
+        </div>
+
+        <div className="flex gap-3 pt-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              reconnect();
+              toast.success('Meminta ulang data puzzle...');
+            }}
+          >
+            <RotateCw className="w-4 h-4 mr-2" /> Sinkronkan Ulang
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={leaveRoom}
+            className="text-red-500 hover:bg-red-500/10"
+          >
+            <LogOut className="w-4 h-4 mr-2" /> Keluar
+          </Button>
         </div>
       </div>
     );
@@ -565,12 +576,12 @@ export default function RoomPage() {
         </div>
       )}
 
-      {/* BANNER STATUS KONEKSI ANTI-FLICKER */}
-      {isSupabaseEnvValid && realtimeStatus !== 'SUBSCRIBED' && connectionError && (
+      {/* BANNER OFFLINE STABIL */}
+      {isSupabaseEnvValid && (realtimeStatus === 'CHANNEL_ERROR' || realtimeStatus === 'TIMED_OUT') && connectionError && (
         <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center">
-          <WifiOff className="w-4 h-4 flex-shrink-0 animate-pulse" />
+          <WifiOff className="w-4 h-4 flex-shrink-0" />
           <span>
-            <strong>ROOM OFFLINE:</strong> {connectionError}
+            <strong>KONEKSI TERPUTUS:</strong> {connectionError}
           </span>
           <Button
             variant="outline"
@@ -597,45 +608,45 @@ export default function RoomPage() {
               </span>
             </div>
             <div className="p-3 overflow-y-auto flex-1 space-y-2 text-xs sm:text-sm">
-              {Object.values(room?.players || {}).map(player => (
-                <div key={player.id} className="flex items-center justify-between">
+              {Object.values(room?.players || {}).map(p => (
+                <div key={p.id} className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div
-                      className={`w-2.5 h-2.5 rounded-full ${player.status !== 'online' ? 'opacity-40' : ''}`}
-                      style={{ backgroundColor: player.status === 'online' ? player.color : '#9ca3af' }}
+                      className={`w-2.5 h-2.5 rounded-full ${p.status !== 'online' ? 'opacity-40' : ''}`}
+                      style={{ backgroundColor: p.status === 'online' ? p.color : '#9ca3af' }}
                     />
-                    <span className={`font-medium ${player.status !== 'online' ? 'line-through text-secondary/60' : ''}`}>
-                      {player.username}
+                    <span className={`font-medium ${p.status !== 'online' ? 'line-through text-secondary/60' : ''}`}>
+                      {p.username || 'Player'}
                     </span>
-                    {player.isHost && (
+                    {p.isHost && (
                       <span className="text-secondary text-xs">(Host)</span>
                     )}
-                    {player.status === 'left' ? (
+                    {p.status === 'left' ? (
                       <span className="text-red-500 font-semibold text-[11px] bg-red-500/10 px-1.5 py-0.5 rounded">
                         ( Leave Room )
                       </span>
-                    ) : player.status === 'disconnected' || player.status === 'offline' ? (
+                    ) : p.status === 'disconnected' || p.status === 'offline' ? (
                       <span className="text-amber-500 font-semibold text-[11px] bg-amber-500/10 px-1.5 py-0.5 rounded">
                         ( Disconnect )
                       </span>
                     ) : null}
-                    {room?.mode === 'race' && (player.streak ?? 0) > 1 && (
+                    {room?.mode === 'race' && (p.streak ?? 0) > 1 && (
                       <span className="text-orange-500 font-bold text-[11px] bg-orange-500/10 px-1.5 py-0.5 rounded flex items-center gap-1">
-                        🔥 x{player.streak}
+                        🔥 x{p.streak}
                       </span>
                     )}
                   </div>
                   <span className="font-mono font-bold">
                     {room?.mode === 'competition' ? (
-                      player.rank && player.rank > 0 ? (
-                        player.rank === 1 ? '🥇 1' :
-                        player.rank === 2 ? '🥈 2' :
-                        player.rank === 3 ? '🥉 3' : ''
+                      p.rank && p.rank > 0 ? (
+                        p.rank === 1 ? '🥇 1' :
+                        p.rank === 2 ? '🥈 2' :
+                        p.rank === 3 ? '🥉 3' : ''
                       ) : (
-                        `${player.progress ?? 0}%`
+                        `${p.progress ?? 0}%`
                       )
                     ) : (
-                      player.score
+                      p.score
                     )}
                   </span>
                 </div>
@@ -668,7 +679,6 @@ export default function RoomPage() {
                   </div>
                 ))
               )}
-
             </div>
             <div className="p-2.5 border-t border-border flex-shrink-0">
               <form onSubmit={handleChatSubmit} className="flex items-center gap-2">
@@ -752,7 +762,7 @@ export default function RoomPage() {
                 </Button>
               </div>
 
-              {/* TOMBOL NAVIGASI PANAH */}
+              {/* NAVIGASI PANAH */}
               <div className="flex items-center gap-2 bg-card p-1.5 rounded-xl border border-border mt-2">
                 <span className="text-xs text-secondary font-medium px-1">Navigasi:</span>
                 <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('left')} disabled={isSpectator}>
