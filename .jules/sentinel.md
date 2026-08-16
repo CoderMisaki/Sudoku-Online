@@ -100,3 +100,8 @@
 - Fixed an issue where `chatEndRef.current?.scrollIntoView()` caused the entire browser window to scroll automatically every time a new message arrived. The solution changes the behavior to explicitly update the `scrollTop` property of the specific chat container `div`.
 - Addressed the persistent "+1 unread message" notification during a room reconnection. By tracking a `joinTimestampRef`, the logic now ensures notifications only trigger for messages originating after the user joins the room.
 - Solved a bug in the Sudoku board where previously correct answers (marked by `isCorrect: true`) could be overwritten if a user accidentally typed on that cell again. The `CellData` type in `gameStore` was extended to include `isCorrect`, and input logic in `SudokuBoard.tsx` was modified to block changes to these cells and emit a toast confirmation.
+
+2024-11-20 - [Fix Disconnect State & Missing Solution Token]
+
+- Resolved issue where players getting disconnected wouldn't update to "disconnected" state instantly by utilizing the `leftPresences` array provided by Supabase in the `presence` `leave` event, and pushing those identifiers into a `departedIds` set to aggressively filter them out of the `channel.presenceState()` which may lag.
+- Resolved issue where players who disconnected and reconnected, or refreshed their browser, would be unable to make moves or play because the `solutionToken` was not being persisted locally, and the `/api/game/create-room` fallback was only checking for `!grid`. Re-added `solutionToken` to the `partialize` array in `useGameStore` and updated the conditional logic in `RoomPage` to also check for `!solutionToken`.

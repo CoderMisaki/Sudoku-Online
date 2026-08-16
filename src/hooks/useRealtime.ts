@@ -34,7 +34,7 @@ export function useRealtime(roomId: string) {
   const leftUntilRef = useRef<Map<string, number>>(new Map());
 
   const markLeft = useCallback((playerId: string) => {
-    leftUntilRef.current.set(playerId, Date.now() + 60000); // Kunci status left 60 detik
+    leftUntilRef.current.set(playerId, Date.now() + 60000);
   }, []);
 
   const hasLeftMark = useCallback((playerId: string) => {
@@ -52,11 +52,11 @@ export function useRealtime(roomId: string) {
 
   const connectRef = useRef<((immediate?: boolean) => void) | null>(null);
 
-  // Sync state dari Host ketika grid sudah siap
+  // Sync state dari Host ketika grid & solutionToken sudah siap
   useEffect(() => {
     if (grid && !prevGridRef.current && channelRef.current && userId) {
       const store = useGameStore.getState();
-      if (store.room && store.room.hostId === userId) {
+      if (store.room && store.room.hostId === userId && store.solutionToken) {
         channelRef.current.send({
           type: 'broadcast',
           event: 'sync_state',
@@ -98,7 +98,7 @@ export function useRealtime(roomId: string) {
 
     const channel = supabase.channel(`room:${roomId}`, {
       config: {
-        broadcast: { self: false, ack: false }, // Ubah ack ke false agar pengiriman tidak macet saat jaringan tidak stabil
+        broadcast: { self: false, ack: false },
         presence: { key: currentUserId },
       },
     });
@@ -122,7 +122,8 @@ export function useRealtime(roomId: string) {
       }
     };
 
-    const handlePresenceChange = () => {
+    // Handler presence change dengan dukungan pengecualian instan untuk departed IDs
+    const handlePresenceChange = (departedIds: Set<string> = new Set()) => {
       const store = useGameStore.getState();
       if (!store.room) return;
 
@@ -131,6 +132,8 @@ export function useRealtime(roomId: string) {
       const leftUserIds = new Set<string>();
 
       Object.keys(presenceState).forEach((key) => {
+        if (departedIds.has(key)) return;
+
         const presences = presenceState[key] as Array<{
           user_id?: string;
           status?: string;
@@ -138,6 +141,8 @@ export function useRealtime(roomId: string) {
 
         presences?.forEach((p) => {
           const pid = p.user_id || key;
+          if (departedIds.has(pid)) return;
+
           if (p.status === 'left') {
             leftUserIds.add(pid);
           } else {
@@ -146,7 +151,7 @@ export function useRealtime(roomId: string) {
         });
       });
 
-      if (currentUserId && !intentionalLeaveRef.current) {
+      if (currentUserId && !intentionalLeaveRef.current && !departedIds.has(currentUserId)) {
         onlineUserIds.add(currentUserId);
       }
 
@@ -159,7 +164,7 @@ export function useRealtime(roomId: string) {
       Object.keys(newPlayers).forEach((pId) => {
         const currentStatus = newPlayers[pId].status;
 
-        // Player eksplisit leave
+        // Player meninggalkan room secara eksplisit
         if (currentStatus === 'left' || leftUserIds.has(pId) || hasLeftMark(pId)) {
           if (currentStatus !== 'left') {
             newPlayers[pId] = { ...newPlayers[pId], status: 'left' };
@@ -178,7 +183,7 @@ export function useRealtime(roomId: string) {
           return;
         }
 
-        // Player terputus koneksi
+        // Player terputus koneksi (disconnect langsung aktif seketika)
         if (currentStatus !== 'disconnected') {
           newPlayers[pId] = { ...newPlayers[pId], status: 'disconnected' };
           changed = true;
@@ -188,6 +193,8 @@ export function useRealtime(roomId: string) {
       const maxPlayers = store.room.maxPlayers || 4;
 
       Object.keys(presenceState).forEach((pId) => {
+        if (departedIds.has(pId)) return;
+
         const presences = presenceState[pId] as Array<{
           username?: string;
           user_id?: string;
@@ -198,7 +205,7 @@ export function useRealtime(roomId: string) {
         const actualId = presObj?.user_id || pId;
         const uname = presObj?.username || 'Player';
 
-        if (presObj?.status === 'left' || hasLeftMark(actualId)) return;
+        if (departedIds.has(actualId) || presObj?.status === 'left' || hasLeftMark(actualId)) return;
 
         if (!newPlayers[actualId]) {
           const activeCount = Object.values(newPlayers).filter((p) => !p.isSpectator).length;
@@ -229,15 +236,21 @@ export function useRealtime(roomId: string) {
     };
 
     channel
-      .on('presence', { event: 'sync' }, handlePresenceChange)
-      .on('presence', { event: 'join' }, handlePresenceChange)
+      .on('presence', { event: 'sync' }, () => handlePresenceChange())
+      .on('presence', { event: 'join' }, () => handlePresenceChange())
       .on('presence', { event: 'leave' }, (payload: { leftPresences?: Array<{ user_id?: string; status?: string }> }) => {
+        const departedIds = new Set<string>();
         payload?.leftPresences?.forEach((p) => {
-          if (p?.user_id && p?.status === 'left') {
-            markLeft(p.user_id);
+          const pid = p?.user_id;
+          if (pid) {
+            departedIds.add(pid);
+            if (p?.status === 'left') {
+              markLeft(pid);
+            }
           }
         });
-        handlePresenceChange();
+        // Langsung eksekusi perubahan status disconnect tanpa menunggu sinkronisasi berkala
+        handlePresenceChange(departedIds);
       })
       .on('broadcast', { event: 'player_disconnected' }, ({ payload }) => {
         if (!payload?.userId) return;
@@ -336,6 +349,7 @@ export function useRealtime(roomId: string) {
           store.setRoom(incomingRoom);
         }
 
+        // Sinkronkan grid dan solutionToken ke player yang baru bergabung/reconnect
         if (payload.room?.mode !== 'competition' && payload.grid && payload.solutionToken) {
           store.setGameData(payload.grid, payload.solutionToken);
         }
@@ -434,6 +448,7 @@ export function useRealtime(roomId: string) {
 
           handlePresenceChange();
 
+          // Minta sinkronisasi token dan state game saat reconnect
           channel.send({ type: 'broadcast', event: 'request_state', payload: { userId: currentUserId } });
 
           if (retryRef.current) clearInterval(retryRef.current);
@@ -441,8 +456,9 @@ export function useRealtime(roomId: string) {
 
           retryRef.current = setInterval(() => {
             const currentGrid = useGameStore.getState().grid;
+            const currentToken = useGameStore.getState().solutionToken;
             attempts += 1;
-            if (currentGrid || attempts >= 20) {
+            if ((currentGrid && currentToken) || attempts >= 10) {
               if (retryRef.current) {
                 clearInterval(retryRef.current);
                 retryRef.current = null;
@@ -638,50 +654,59 @@ export function useRealtime(roomId: string) {
       });
     }
 
-    if (store.solutionToken) {
-      fetch('/api/game/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ row, col, value, solutionToken: store.solutionToken }),
-      })
-        .then((res) => {
-          if (!res.ok) throw new Error('Failed to verify move');
-          return res.json();
-        })
-        .then((data) => {
-          const isCorrect = Boolean(data.isCorrect);
-          store.updateCellWithValidation(row, col, value, userId, isCorrect);
-
-          if (isCorrect) {
-            toast.success('Jawaban benar ✅', { id: `move-${row}-${col}`, duration: 1500 });
-          } else {
-            toast.error('Jawaban salah ❌', { id: `move-${row}-${col}`, duration: 1500 });
-          }
-
-          const latestPlayer = useGameStore.getState().room?.players[userId];
-          if (isCompetition) {
-            channelRef.current?.send({
-              type: 'broadcast',
-              event: 'progress_update',
-              payload: {
-                userId,
-                progress: latestPlayer?.progress ?? 0,
-                rank: latestPlayer?.rank ?? null,
-              },
-            });
-          } else {
-            channelRef.current?.send({
-              type: 'broadcast',
-              event: 'move_verified',
-              payload: { userId, row, col, value, isCorrect },
-            });
-          }
-        })
-        .catch((e) => {
-          console.error('Gagal verifikasi jawaban ke server', e);
-          store.updateCellWithValidation(row, col, value, userId, false);
-        });
+    // Pemulihan otomatis jika solutionToken belum tersinkron
+    if (!store.solutionToken) {
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'request_state',
+        payload: { userId }
+      });
+      toast.error('Menyinkronkan data room... Coba input kembali sebentar lagi.');
+      return;
     }
+
+    fetch('/api/game/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ row, col, value, solutionToken: store.solutionToken }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to verify move');
+        return res.json();
+      })
+      .then((data) => {
+        const isCorrect = Boolean(data.isCorrect);
+        store.updateCellWithValidation(row, col, value, userId, isCorrect);
+
+        if (isCorrect) {
+          toast.success('Jawaban benar ✅', { id: `move-${row}-${col}`, duration: 1500 });
+        } else {
+          toast.error('Jawaban salah ❌', { id: `move-${row}-${col}`, duration: 1500 });
+        }
+
+        const latestPlayer = useGameStore.getState().room?.players[userId];
+        if (isCompetition) {
+          channelRef.current?.send({
+            type: 'broadcast',
+            event: 'progress_update',
+            payload: {
+              userId,
+              progress: latestPlayer?.progress ?? 0,
+              rank: latestPlayer?.rank ?? null,
+            },
+          });
+        } else {
+          channelRef.current?.send({
+            type: 'broadcast',
+            event: 'move_verified',
+            payload: { userId, row, col, value, isCorrect },
+          });
+        }
+      })
+      .catch((e) => {
+        console.error('Gagal verifikasi jawaban ke server', e);
+        store.updateCellWithValidation(row, col, value, userId, false);
+      });
   };
 
   const broadcastNote = (row: number, col: number, note: number) => {
@@ -705,7 +730,6 @@ export function useRealtime(roomId: string) {
     });
   };
 
-  // BROADCAST LEAVE ROOM: Cepat, reliable, dan anti-hang
   const broadcastLeaveRoom = async () => {
     intentionalLeaveRef.current = true;
     const uid = userIdRef.current;
