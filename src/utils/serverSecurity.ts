@@ -1,52 +1,69 @@
-
-
 interface RateLimitRecord {
-  count: number;
-  resetAt: number;
+  timestamps: number[];
 }
 
 const rateLimitMap = new Map<string, RateLimitRecord>();
 
-// Pembersihan berkala memori IP
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, record] of rateLimitMap.entries()) {
-    if (record.resetAt < now) {
-      rateLimitMap.delete(key);
+// Auto garbage collection setiap 5 menit untuk mencegah Memory Leak
+if (typeof setInterval !== 'undefined') {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, record] of rateLimitMap.entries()) {
+      record.timestamps = record.timestamps.filter(t => now - t < 120000);
+      if (record.timestamps.length === 0) {
+        rateLimitMap.delete(key);
+      }
     }
-  }
-}, 30000);
+  }, 300000);
+}
 
-export function checkServerRateLimit(
-  identifier: string,
-  limit: number = 40,
-  windowMs: number = 10000
-): boolean {
+/**
+ * Sliding Window Server-Side Rate Limiter
+ */
+export function checkServerRateLimit(key: string, limit: number, windowMs: number): boolean {
   const now = Date.now();
-  const record = rateLimitMap.get(identifier);
+  let record = rateLimitMap.get(key);
 
-  if (!record || record.resetAt < now) {
-    rateLimitMap.set(identifier, { count: 1, resetAt: now + windowMs });
-    return true;
+  if (!record) {
+    record = { timestamps: [] };
+    rateLimitMap.set(key, record);
   }
 
-  if (record.count >= limit) {
+  record.timestamps = record.timestamps.filter(t => now - t < windowMs);
+
+  if (record.timestamps.length >= limit) {
     return false;
   }
 
-  record.count += 1;
+  record.timestamps.push(now);
   return true;
 }
 
+/**
+ * Validasi Same-Origin & Anti-CSRF Guard
+ */
 export function validateSameOrigin(request: Request): boolean {
+  const secFetchSite = request.headers.get('sec-fetch-site');
+  if (secFetchSite && secFetchSite === 'cross-site') {
+    return false;
+  }
+
   const origin = request.headers.get('origin');
   const host = request.headers.get('host');
 
-  // Izinkan jika request berasal dari lingkungan lokal atau host yang sama
-  if (!origin || !host) return true;
-  return origin.includes(host);
+  if (!origin || !host) return true; // Request non-browser atau direct same-origin
+
+  try {
+    const originUrl = new URL(origin);
+    return originUrl.host.toLowerCase() === host.toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
+/**
+ * Ekstraksi Client IP
+ */
 export function getClientIp(request: Request): string {
   const forwarded = request.headers.get('x-forwarded-for');
   if (forwarded) {

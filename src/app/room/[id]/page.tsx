@@ -85,7 +85,8 @@ export default function RoomPage() {
     broadcastChat,
     broadcastNextGame,
     broadcastLeaveRoom,
-    realtimeStatus,
+
+    isTrulyOffline,
     connectionError,
     reconnect
   } = useRealtime(roomId);
@@ -568,7 +569,7 @@ export default function RoomPage() {
 
       {/* BANNER STATUS KONEKSI */}
       {!isSupabaseEnvValid && (
-        <div className="bg-red-500/10 border-b border-red-500/20 text-red-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center">
+        <div className="bg-red-500/10 border-b border-red-500/20 text-red-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center transition-all duration-300">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
           <span>
             <strong>ENV NOT VALID:</strong> Environment Variables Supabase belum dipasang. Fitur multiplayer realtime mati.
@@ -577,11 +578,11 @@ export default function RoomPage() {
       )}
 
       {/* BANNER OFFLINE STABIL */}
-      {isSupabaseEnvValid && (realtimeStatus === 'CHANNEL_ERROR' || realtimeStatus === 'TIMED_OUT') && connectionError && (
-        <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center">
+      {isSupabaseEnvValid && isTrulyOffline && (
+        <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center transition-all duration-300">
           <WifiOff className="w-4 h-4 flex-shrink-0" />
           <span>
-            <strong>KONEKSI TERPUTUS:</strong> {connectionError}
+            <strong>KONEKSI TERPUTUS:</strong> {connectionError || 'Tidak dapat terhubung ke server.'}
           </span>
           <Button
             variant="outline"

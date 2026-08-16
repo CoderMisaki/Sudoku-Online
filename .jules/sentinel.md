@@ -122,3 +122,4 @@
 - Created `src/utils/serverSecurity.ts` for server-side rate limiting (sliding window per IP address) and origin/host verification (Anti-CSRF).
 - Updated API routes (`create-room`, `verify`, `hint`) to use Zod for strict schema validation, rejecting malformed requests immediately.
 - Integrated rate limiting into API routes to prevent brute-force attacks and spam.
+2024-03-22 - Smart Background Retry & Architecture Upgrades\n- Implementasi Smart Background Retry dengan Grace Period untuk mengatasi kedap-kedip (flickering) notifikasi Room Offline saat koneksi WebSocket jitter.\n- Upgrade enkripsi solusi Sudoku menjadi AES-256-GCM + Anti-Replay + Dynamic Scrypt KDF.\n- Implementasi server-side security: Sliding Window Rate Limiting (in-memory) dan validasi Same-Origin/CSRF di rute API.\n- Penambahan HTTP Security Headers (CSP, HSTS, X-Frame-Options, dll) di konfigurasi Next.js (next.config.ts).
