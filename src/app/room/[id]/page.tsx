@@ -794,54 +794,58 @@ export default function RoomPage() {
               <p className="text-secondary text-sm">Timer</p>
             </div>
 
-            {/* Controls */}
-            <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={handleHint} disabled={(room?.mode !== 'zen' && hintsRemaining <= 0) || isSpectator}>
-                  <Lightbulb className="w-4 h-4 mr-2" /> Hint {room?.mode === 'zen' ? '(∞)' : `(${hintsRemaining})`}
-                </Button>
-                <Button variant={isPencilMode ? "primary" : "outline"} size="sm" onClick={() => { setIsPencilMode(!isPencilMode); setIsEraserMode(false); }}>
-                  <Edit2 className="w-4 h-4 mr-2" /> Note
-                </Button>
-                {room?.mode === 'zen' && (
-                  <Button variant="outline" size="sm" onClick={handleAutoNote} disabled={isSpectator}>
-                    <Lightbulb className="w-4 h-4 mr-2" /> Auto Note
+            {/* CONTROLS (Hanya Ditampilkan Pada Mode Sudoku, Disembunyikan Pada Mode Ular Tangga) */}
+            {room?.mode !== 'snakes_and_ladders' && (
+              <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={handleHint} disabled={(room?.mode !== 'zen' && hintsRemaining <= 0) || isSpectator}>
+                    <Lightbulb className="w-4 h-4 mr-2" /> Hint {room?.mode === 'zen' ? '(∞)' : `(${hintsRemaining})`}
                   </Button>
-                )}
-                <Button variant={isEraserMode ? "primary" : "outline"} size="sm" onClick={handleEraserClick}>
-                  <Eraser className="w-4 h-4 mr-2" /> Eraser
-                </Button>
-              </div>
+                  <Button variant={isPencilMode ? "primary" : "outline"} size="sm" onClick={() => { setIsPencilMode(!isPencilMode); setIsEraserMode(false); }}>
+                    <Edit2 className="w-4 h-4 mr-2" /> Note
+                  </Button>
+                  {room?.mode === 'zen' && (
+                    <Button variant="outline" size="sm" onClick={handleAutoNote} disabled={isSpectator}>
+                      <Lightbulb className="w-4 h-4 mr-2" /> Auto Note
+                    </Button>
+                  )}
+                  <Button variant={isEraserMode ? "primary" : "outline"} size="sm" onClick={handleEraserClick}>
+                    <Eraser className="w-4 h-4 mr-2" /> Eraser
+                  </Button>
+                </div>
 
-              {/* NAVIGASI PANAH */}
-              <div className="flex items-center gap-2 bg-card p-1.5 rounded-xl border border-border mt-2">
-                <span className="text-xs text-secondary font-medium px-1">Navigasi:</span>
-                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('left')} disabled={isSpectator}>
-                  <ArrowLeft className="w-4 h-4" />
-                </Button>
-                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('up')} disabled={isSpectator}>
-                  <ArrowUp className="w-4 h-4" />
-                </Button>
-                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('down')} disabled={isSpectator}>
-                  <ArrowDown className="w-4 h-4" />
-                </Button>
-                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('right')} disabled={isSpectator}>
-                  <ArrowRight className="w-4 h-4" />
-                </Button>
+                {/* NAVIGASI PANAH */}
+                <div className="flex items-center gap-2 bg-card p-1.5 rounded-xl border border-border mt-2">
+                  <span className="text-xs text-secondary font-medium px-1">Navigasi:</span>
+                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('left')} disabled={isSpectator}>
+                    <ArrowLeft className="w-4 h-4" />
+                  </Button>
+                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('up')} disabled={isSpectator}>
+                    <ArrowUp className="w-4 h-4" />
+                  </Button>
+                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('down')} disabled={isSpectator}>
+                    <ArrowDown className="w-4 h-4" />
+                  </Button>
+                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('right')} disabled={isSpectator}>
+                    <ArrowRight className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                {/* NUMPAD ANGKA */}
+                <div className="flex flex-wrap justify-center gap-2 mt-2">
+                  {[1,2,3,4,5,6,7,8,9].map(n => (
+                    <button
+                      key={n}
+                      onClick={() => handleNumpadClick(n)}
+                      disabled={isSpectator}
+                      className="w-10 h-10 rounded-lg border border-border bg-card hover:bg-hover font-semibold text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-foreground disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="flex flex-wrap justify-center gap-2 mt-2">
-                {[1,2,3,4,5,6,7,8,9].map(n => (
-                  <button
-                    key={n}
-                    onClick={() => handleNumpadClick(n)}
-                    disabled={isSpectator}
-                    className="w-10 h-10 rounded-lg border border-border bg-card hover:bg-hover font-semibold text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-foreground disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </main>
