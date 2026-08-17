@@ -240,7 +240,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         <div className="bg-foreground text-background border border-border px-5 py-3 rounded-2xl flex items-center gap-3 w-full justify-center shadow-xl animate-bounce">
           <Trophy className="w-6 h-6 text-amber-400" />
           <span className="font-bold text-sm sm:text-base">
-            🎉 {snakesState?.winnerId ? players[snakesState.winnerId]?.username : 'Pemain' || 'Pemain'} Berhasil Mencapai 100 & Menjadi Juara 1!
+            🎉 {snakesState?.winnerId ? (players[snakesState.winnerId]?.username || 'Pemain') : 'Pemain'} Berhasil Mencapai 100 & Menjadi Juara 1!
           </span>
         </div>
       )}
