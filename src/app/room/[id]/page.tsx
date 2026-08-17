@@ -10,6 +10,7 @@ import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
 import { SudokuBoard3D } from '../../../components/game/SudokuBoard3D';
+import { SnakesAndLaddersBoard } from '../../../components/game/SnakesAndLaddersBoard';
 import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle, ArrowLeft, ArrowUp, ArrowDown, ArrowRight, RotateCw, Box, Grid as GridIcon } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
 import { Difficulty, GameMode } from '../../../types/game';
@@ -87,6 +88,7 @@ export default function RoomPage() {
     broadcastChat,
     broadcastNextGame,
     broadcastLeaveRoom,
+    broadcastSnakesDiceRoll,
 
     isTrulyOffline,
     connectionError,
@@ -756,7 +758,9 @@ export default function RoomPage() {
             </div>
 
             {/* Render Sesuai Mode Pilihan */}
-            {viewMode === '3D' ? (
+            {room?.mode === 'snakes_and_ladders' ? (
+              <SnakesAndLaddersBoard broadcastSnakesDiceRoll={broadcastSnakesDiceRoll} />
+            ) : viewMode === '3D' ? (
               <SudokuBoard3D
                 broadcastMove={broadcastMove}
                 broadcastNote={broadcastNote}
@@ -922,6 +926,7 @@ export default function RoomPage() {
                 <option value="classic">Classic (Klasik)</option>
                 <option value="race">Race (Balapan Skor)</option>
                 <option value="zen">Zen (Santai)</option>
+                <option value="snakes_and_ladders">Snakes & Ladders (Ular Tangga)</option>
               </select>
             </div>
 

@@ -999,6 +999,16 @@ export function useRealtime(roomId: string) {
     });
   };
 
+
+  const broadcastSnakesDiceRoll = (diceValue: number, newPosition: number, nextTurnUserId: string, hasWon: boolean) => {
+    if (!channelRef.current || !userId) return;
+    channelRef.current.send({
+      type: 'broadcast',
+      event: 'snakes_dice_roll',
+      payload: { userId, diceValue, newPosition, nextTurnUserId, hasWon },
+    });
+  };
+
   const broadcastLeaveRoom = async () => {
     intentionalLeaveRef.current = true;
     const uid = userIdRef.current;
@@ -1049,6 +1059,7 @@ export function useRealtime(roomId: string) {
     broadcastChat,
     broadcastNextGame,
     broadcastLeaveRoom,
+    broadcastSnakesDiceRoll,
     realtimeStatus,
     isTrulyOffline,
     connectionError,
