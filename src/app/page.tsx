@@ -191,6 +191,7 @@ export default function Home() {
               <option value="classic">Classic (Klasik)</option>
               <option value="race">Race (Balapan Skor)</option>
               <option value="zen">Zen (Santai)</option>
+              <option value="snakes_and_ladders">Snakes & Ladders (Ular Tangga)</option>
             </select>
           </div>
 
