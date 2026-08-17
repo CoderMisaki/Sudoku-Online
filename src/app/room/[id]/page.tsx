@@ -737,20 +737,27 @@ export default function RoomPage() {
                 <button
                   onClick={() => setViewMode('2D')}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    viewMode === '2D'
+                    viewMode === '2D' || room?.mode === 'snakes_and_ladders'
                       ? 'bg-foreground text-background shadow-xs'
                       : 'text-secondary hover:text-foreground'
                   }`}
                 >
                   <GridIcon className="w-3.5 h-3.5" /> 2D
                 </button>
+
                 <button
-                  onClick={() => setViewMode('3D')}
+                  onClick={() => {
+                    if (room?.mode !== 'snakes_and_ladders') {
+                      setViewMode('3D');
+                    }
+                  }}
+                  disabled={room?.mode === 'snakes_and_ladders'}
+                  title={room?.mode === 'snakes_and_ladders' ? 'Mode 3D Ular Tangga belum tersedia' : 'Mode 3D'}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    viewMode === '3D'
+                    viewMode === '3D' && room?.mode !== 'snakes_and_ladders'
                       ? 'bg-foreground text-background shadow-xs'
                       : 'text-secondary hover:text-foreground'
-                  }`}
+                  } ${room?.mode === 'snakes_and_ladders' ? 'opacity-40 cursor-not-allowed' : ''}`}
                 >
                   <Box className="w-3.5 h-3.5" /> 3D
                 </button>
