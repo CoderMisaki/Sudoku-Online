@@ -90,10 +90,9 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       while (current < intermediateTarget) {
         current++;
         setVisualPositions(prev => ({ ...prev, [targetUserId]: current }));
-        await new Promise(res => setTimeout(res, 200)); // Durasi lompat per kotak
+        await new Promise(res => setTimeout(res, 200));
       }
     } else if (intermediateTarget < current && !isSnake && !isLadder) {
-      // Pantulan jika melebihi 100
       while (current > intermediateTarget) {
         current--;
         setVisualPositions(prev => ({ ...prev, [targetUserId]: current }));
@@ -123,8 +122,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   };
 
   useEffect(() => {
-    // Avoid synchronous setState by using a timeout or checking inside the render loop,
-    // but here we just defer the initialization to avoid the lint error.
     const timer = setTimeout(() => {
       setVisualPositions(prev => {
         const updated = { ...prev };
@@ -253,7 +250,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           </span>
           {finishers.map((f, idx) => (
             <span key={f.id} className="font-bold flex items-center gap-1">
-              {idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉'} {players[f.id]?.username}
+              {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : null} {players[f.id]?.username}
             </span>
           ))}
         </div>
@@ -310,22 +307,23 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           })}
         </div>
 
-        {/* SVG Overlay: Desain Tangga & Ular Lengkap Kepala Hingga Badan */}
+        {/* SVG Overlay: Desain Tangga & Ular Monokrom Lebih Ramping (Dikecilkan >50%) */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" viewBox="0 0 100 100">
           <defs>
-            {/* Gradasi Badan Ular */}
+            {/* Gradasi Monokrom Badan Ular */}
             <linearGradient id="snakeBodyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#15803d" />
-              <stop offset="50%" stopColor="#22c55e" />
-              <stop offset="100%" stopColor="#166534" />
+              <stop offset="0%" stopColor="#27272a" />
+              <stop offset="50%" stopColor="#71717a" />
+              <stop offset="100%" stopColor="#18181b" />
             </linearGradient>
+            {/* Gradasi Monokrom Sisik/Perut Ular */}
             <linearGradient id="snakeBellyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#fef08a" />
-              <stop offset="100%" stopColor="#ca8a04" />
+              <stop offset="0%" stopColor="#e4e4e7" />
+              <stop offset="100%" stopColor="#a1a1aa" />
             </linearGradient>
           </defs>
 
-          {/* 1. TANGGA (Ladders) */}
+          {/* 1. TANGGA MONOKROM (Ramping / 50% Lebih Kecil) */}
           {config.ladders.map((ladder) => {
             const start = getTileCoordinates(ladder.start);
             const end = getTileCoordinates(ladder.end);
@@ -333,15 +331,16 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             const dx = end.x - start.x;
             const dy = end.y - start.y;
             const length = Math.sqrt(dx * dx + dy * dy);
-            const nx = (-dy / length) * 1.3;
-            const ny = (dx / length) * 1.3;
+            // Lebar tangga dipersempit dari 1.3 menjadi 0.6
+            const nx = (-dy / length) * 0.6;
+            const ny = (dx / length) * 0.6;
             const rungsCount = Math.max(3, Math.floor(length / 4.5));
 
             return (
               <g key={ladder.id}>
-                {/* Tiang Tangga Kiri & Kanan */}
-                <line x1={start.x + nx} y1={start.y + ny} x2={end.x + nx} y2={end.y + ny} stroke="#3b82f6" strokeWidth="0.9" strokeLinecap="round" opacity="0.9" />
-                <line x1={start.x - nx} y1={start.y - ny} x2={end.x - nx} y2={end.y - ny} stroke="#3b82f6" strokeWidth="0.9" strokeLinecap="round" opacity="0.9" />
+                {/* Tiang Tangga Kiri & Kanan (Monokrom) */}
+                <line x1={start.x + nx} y1={start.y + ny} x2={end.x + nx} y2={end.y + ny} stroke="#71717a" strokeWidth="0.4" strokeLinecap="round" opacity="0.85" />
+                <line x1={start.x - nx} y1={start.y - ny} x2={end.x - nx} y2={end.y - ny} stroke="#71717a" strokeWidth="0.4" strokeLinecap="round" opacity="0.85" />
 
                 {/* Anak Tangga */}
                 {Array.from({ length: rungsCount }, (_, r) => {
@@ -355,8 +354,8 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                       y1={ry + ny}
                       x2={rx - nx}
                       y2={ry - ny}
-                      stroke="#60a5fa"
-                      strokeWidth="0.7"
+                      stroke="#d4d4d8"
+                      strokeWidth="0.3"
                       strokeLinecap="round"
                     />
                   );
@@ -365,7 +364,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             );
           })}
 
-          {/* 2. ULAR LENGKAP (Snakes with Head, Eyes, Tongue, and Scaled Wavy Body) */}
+          {/* 2. ULAR MONOKROM (Ramping / 50% Lebih Kecil) */}
           {config.snakes.map((snake) => {
             const head = getTileCoordinates(snake.head);
             const tail = getTileCoordinates(snake.tail);
@@ -374,70 +373,70 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             const dy = tail.y - head.y;
             const angle = Math.atan2(dy, dx);
 
-            // Double Wave Control Points untuk lekukan S-Curve alami
-            const c1x = head.x + dx * 0.35 + Math.cos(angle + Math.PI / 2) * snake.waveStrength;
-            const c1y = head.y + dy * 0.35 + Math.sin(angle + Math.PI / 2) * snake.waveStrength;
-            const c2x = head.x + dx * 0.7 - Math.cos(angle + Math.PI / 2) * snake.waveStrength;
-            const c2y = head.y + dy * 0.7 - Math.sin(angle + Math.PI / 2) * snake.waveStrength;
+            // Double Wave Control Points
+            const c1x = head.x + dx * 0.35 + Math.cos(angle + Math.PI / 2) * (snake.waveStrength * 0.8);
+            const c1y = head.y + dy * 0.35 + Math.sin(angle + Math.PI / 2) * (snake.waveStrength * 0.8);
+            const c2x = head.x + dx * 0.7 - Math.cos(angle + Math.PI / 2) * (snake.waveStrength * 0.8);
+            const c2y = head.y + dy * 0.7 - Math.sin(angle + Math.PI / 2) * (snake.waveStrength * 0.8);
 
             const pathD = `M ${head.x} ${head.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${tail.x} ${tail.y}`;
 
-            // Posisi Lidah Menjulur dari Mulut Kepala Ular
-            const tongueLength = 2.4;
+            // Lidah Ramping
+            const tongueLength = 1.2;
             const tx = head.x - Math.cos(angle) * tongueLength;
             const ty = head.y - Math.sin(angle) * tongueLength;
-            const fork1X = tx - Math.cos(angle + 0.45) * 1.1;
-            const fork1Y = ty - Math.sin(angle + 0.45) * 1.1;
-            const fork2X = tx - Math.cos(angle - 0.45) * 1.1;
-            const fork2Y = ty - Math.sin(angle - 0.45) * 1.1;
+            const fork1X = tx - Math.cos(angle + 0.45) * 0.55;
+            const fork1Y = ty - Math.sin(angle + 0.45) * 0.55;
+            const fork2X = tx - Math.cos(angle - 0.45) * 0.55;
+            const fork2Y = ty - Math.sin(angle - 0.45) * 0.55;
 
             return (
               <g key={snake.id}>
-                {/* Lidah Bercabang Merah */}
+                {/* Lidah Monokrom */}
                 <path
                   d={`M ${head.x} ${head.y} L ${tx} ${ty} M ${tx} ${ty} L ${fork1X} ${fork1Y} M ${tx} ${ty} L ${fork2X} ${fork2Y}`}
-                  stroke="#ef4444"
-                  strokeWidth="0.4"
+                  stroke="#71717a"
+                  strokeWidth="0.2"
                   strokeLinecap="round"
                 />
 
-                {/* Badan Utama Ular */}
+                {/* Badan Utama Ular (Dikecilkan ke 1.2) */}
                 <path
                   d={pathD}
                   fill="none"
                   stroke="url(#snakeBodyGrad)"
-                  strokeWidth="2.6"
+                  strokeWidth="1.2"
                   strokeLinecap="round"
                 />
 
-                {/* Motif Sisik / Pola Garis Perut Ular */}
+                {/* Motif Sisik Garis Perut Ular */}
                 <path
                   d={pathD}
                   fill="none"
                   stroke="url(#snakeBellyGrad)"
-                  strokeWidth="0.9"
-                  strokeDasharray="1 1.2"
+                  strokeWidth="0.4"
+                  strokeDasharray="0.6 0.8"
                   strokeLinecap="round"
                 />
 
-                {/* Kepala Ular (Oval Segitiga Dinamis) */}
+                {/* Kepala Ular Monokrom (Dikecilkan ke rx 1.0, ry 0.75) */}
                 <ellipse
                   cx={head.x}
                   cy={head.y}
-                  rx="2.2"
-                  ry="1.7"
+                  rx="1.0"
+                  ry="0.75"
                   transform={`rotate(${(angle * 180) / Math.PI + 180}, ${head.x}, ${head.y})`}
-                  fill="#15803d"
-                  stroke="#166534"
-                  strokeWidth="0.3"
+                  fill="#3f3f46"
+                  stroke="#18181b"
+                  strokeWidth="0.15"
                 />
 
                 {/* Mata Kiri & Kanan */}
-                <circle cx={head.x - 0.7} cy={head.y - 0.7} r="0.5" fill="#facc15" />
-                <circle cx={head.x + 0.7} cy={head.y - 0.7} r="0.5" fill="#facc15" />
-                {/* Pupil Mata Hitam */}
-                <circle cx={head.x - 0.7} cy={head.y - 0.7} r="0.25" fill="#000000" />
-                <circle cx={head.x + 0.7} cy={head.y - 0.7} r="0.25" fill="#000000" />
+                <circle cx={head.x - 0.35} cy={head.y - 0.35} r="0.22" fill="#f4f4f5" />
+                <circle cx={head.x + 0.35} cy={head.y - 0.35} r="0.22" fill="#f4f4f5" />
+                {/* Pupil Mata */}
+                <circle cx={head.x - 0.35} cy={head.y - 0.35} r="0.1" fill="#09090b" />
+                <circle cx={head.x + 0.35} cy={head.y - 0.35} r="0.1" fill="#09090b" />
               </g>
             );
           })}
@@ -473,7 +472,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                   {p.username || 'Player'}
                 </div>
 
-                {/* Avatar Token Pion Beranimasi Loncat (Hop Squish & Stretch) */}
+                {/* Avatar Token Pion Beranimasi Loncat */}
                 <motion.div
                   key={`${pId}-${pos}`}
                   initial={{ y: -10, scaleY: 1.25, scaleX: 0.8 }}
