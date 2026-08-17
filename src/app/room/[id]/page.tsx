@@ -97,7 +97,11 @@ export default function RoomPage() {
 
   const [chatInput, setChatInput] = useState('');
 
+  const snakesWinnerId = useGameStore(state => state.snakesState?.winnerId);
   const isGameCompleted = React.useMemo(() => {
+    if (room?.mode === 'snakes_and_ladders') {
+      return Boolean(snakesWinnerId);
+    }
     if (!grid) return false;
     for (let r = 0; r < 9; r++) {
       for (let c = 0; c < 9; c++) {
@@ -106,7 +110,7 @@ export default function RoomPage() {
       }
     }
     return true;
-  }, [grid]);
+  }, [grid, room?.mode, snakesWinnerId]);
 
   const solutionToken = useGameStore(state => state.solutionToken);
 
@@ -642,14 +646,12 @@ export default function RoomPage() {
                     )}
                   </div>
                   <span className="font-mono font-bold">
-                    {room?.mode === 'competition' ? (
-                      p.rank && p.rank > 0 ? (
-                        p.rank === 1 ? '🥇 1' :
-                        p.rank === 2 ? '🥈 2' :
-                        p.rank === 3 ? '🥉 3' : ''
-                      ) : (
-                        `${p.progress ?? 0}%`
-                      )
+                    {p.rank && p.rank > 0 ? (
+                      p.rank === 1 ? '🥇 1' :
+                      p.rank === 2 ? '🥈 2' :
+                      p.rank === 3 ? '🥉 3' : ''
+                    ) : room?.mode === 'competition' ? (
+                      `${p.progress ?? 0}%`
                     ) : (
                       p.score
                     )}

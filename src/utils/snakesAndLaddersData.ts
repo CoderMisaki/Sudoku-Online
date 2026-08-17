@@ -1,119 +1,123 @@
-export interface LadderItem {
-  id: string;
-  start: number; // Kotak bawah
-  end: number;   // Kotak atas
-  color?: string;
-}
+import { Difficulty } from '@/types/game';
 
 export interface SnakeItem {
   id: string;
-  head: number;  // Kotak kepala (atas)
-  tail: number;  // Kotak ekor (bawah)
-  color: string;
-  patternColor: string;
-  curveFactor: number; // Variasi lekukan gelombang ular
+  head: number;
+  tail: number;
+  waveStrength: number;
 }
 
-export interface SnakesAndLaddersConfig {
-  ladders: LadderItem[];
+export interface LadderItem {
+  id: string;
+  start: number;
+  end: number;
+}
+
+export interface BoardConfig {
   snakes: SnakeItem[];
-  map: Record<number, number>; // Mapping kotak -> tujuan
+  ladders: LadderItem[];
+  map: Record<number, number>;
 }
 
-const SNAKE_PALETTES = [
-  { color: '#15803d', patternColor: '#86efac' }, // Hijau
-  { color: '#b91c1c', patternColor: '#fde047' }, // Merah-Kuning
-  { color: '#1d4ed8', patternColor: '#93c5fd' }, // Biru-Putih
-  { color: '#c2410c', patternColor: '#fed7aa' }, // Oranye
-  { color: '#7e22ce', patternColor: '#f5d0fe' }, // Ungu
-  { color: '#0f766e', patternColor: '#99f6e4' }, // Toska
-];
-
-// Konversi nomor kotak (1-100) ke koordinat persentase X, Y papan 10x10 (Boustrophedon)
+// Menghitung koordinat X dan Y (persentase 0 - 100) berdasarkan pola Boustrophedon
 export function getTileCoordinates(tileNumber: number): { x: number; y: number } {
-  const rowFromBottom = Math.floor((tileNumber - 1) / 10);
-  const rowFromTop = 9 - rowFromBottom;
+  if (tileNumber < 1) tileNumber = 1;
+  if (tileNumber > 100) tileNumber = 100;
 
-  let col = 0;
+  const zeroIndexed = tileNumber - 1;
+  const rowFromBottom = Math.floor(zeroIndexed / 10);
+  const rowFromTop = 9 - rowFromBottom;
+  const colInRow = zeroIndexed % 10;
+
+  let col: number;
   if (rowFromBottom % 2 === 0) {
-    // Genap: Kiri ke Kanan (1-10, 21-30, dst)
-    col = (tileNumber - 1) % 10;
+    col = colInRow; // Kiri ke Kanan
   } else {
-    // Ganjil: Kanan ke Kiri (11-20, 31-40, dst)
-    col = 9 - ((tileNumber - 1) % 10);
+    col = 9 - colInRow; // Kanan ke Kiri
   }
 
-  // Ambil titik tengah kotak dalam skala 0 - 100%
   return {
-    x: (col + 0.5) * 10,
-    y: (rowFromTop + 0.5) * 10,
+    x: col * 10 + 5,
+    y: rowFromTop * 10 + 5,
   };
 }
 
-// Generator acak prosedural agar tiap game memiliki ular dan tangga yang selalu berbeda
-export function generateRandomSnakesAndLadders(): SnakesAndLaddersConfig {
-  const ladders: LadderItem[] = [];
-  const snakes: SnakeItem[] = [];
-  const map: Record<number, number> = {};
-  const occupiedTiles = new Set<number>([1, 100]); // Kotak start & finish tidak boleh ada kepala/ekor
+// Konfigurasi Tangga dan Ular Berdasarkan Tingkat Kesulitan
+export function generateSnakesAndLaddersByDifficulty(difficulty: Difficulty = 'medium'): BoardConfig {
+  let laddersRaw: [number, number][] = [];
+  let snakesRaw: [number, number][] = [];
 
-  const numLadders = 6;
-  const numSnakes = 6;
+  switch (difficulty) {
+    case 'easy':
+      laddersRaw = [
+        [4, 25], [13, 46], [33, 70], [42, 63],
+        [50, 78], [62, 85], [74, 95], [80, 99]
+      ];
+      snakesRaw = [
+        [37, 18], [64, 45], [89, 71], [96, 84]
+      ];
+      break;
 
-  // 1. Generate Tangga Acak
-  let ladderAttempts = 0;
-  while (ladders.length < numLadders && ladderAttempts < 150) {
-    ladderAttempts++;
-    const startRow = Math.floor(Math.random() * 7); // Baris 0 - 6 (kotak 2 - 70)
-    const endRow = startRow + Math.floor(Math.random() * 3) + 2; // Naik 2-4 baris ke atas
+    case 'hard':
+      laddersRaw = [
+        [9, 27], [36, 55], [51, 67], [72, 91]
+      ];
+      snakesRaw = [
+        [44, 16], [58, 22], [69, 31], [83, 40],
+        [92, 53], [95, 73], [98, 48], [76, 29]
+      ];
+      break;
 
-    if (endRow >= 10) continue;
+    case 'expert':
+      laddersRaw = [
+        [15, 34], [48, 65], [68, 86]
+      ];
+      snakesRaw = [
+        [47, 12], [61, 23], [73, 19], [84, 38],
+        [89, 52], [93, 33], [97, 60], [99, 41], [54, 21]
+      ];
+      break;
 
-    const start = (startRow * 10) + (Math.floor(Math.random() * 10) + 1);
-    const end = (endRow * 10) + (Math.floor(Math.random() * 10) + 1);
+    case 'evil':
+      laddersRaw = [
+        [18, 37], [56, 75]
+      ];
+      snakesRaw = [
+        [32, 7], [49, 11], [62, 19], [75, 28],
+        [82, 39], [88, 24], [94, 43], [96, 35],
+        [98, 14], [99, 10], [70, 26]
+      ];
+      break;
 
-    if (start >= end || occupiedTiles.has(start) || occupiedTiles.has(end)) continue;
-
-    occupiedTiles.add(start);
-    occupiedTiles.add(end);
-    map[start] = end;
-
-    ladders.push({
-      id: `ladder-${start}-${end}`,
-      start,
-      end,
-      color: '#1e293b'
-    });
+    case 'medium':
+    default:
+      laddersRaw = [
+        [6, 26], [19, 43], [38, 60],
+        [53, 76], [67, 88], [77, 97]
+      ];
+      snakesRaw = [
+        [46, 17], [59, 37], [71, 32],
+        [83, 45], [92, 68], [98, 55]
+      ];
+      break;
   }
 
-  // 2. Generate Ular Acak
-  let snakeAttempts = 0;
-  while (snakes.length < numSnakes && snakeAttempts < 150) {
-    snakeAttempts++;
-    const headRow = Math.floor(Math.random() * 7) + 3; // Baris 3 - 9 (kotak 31 - 99)
-    const tailRow = headRow - (Math.floor(Math.random() * 3) + 2); // Turun 2-4 baris ke bawah
+  const map: Record<number, number> = {};
 
-    if (tailRow < 0) continue;
+  const ladders: LadderItem[] = laddersRaw.map(([start, end], idx) => {
+    map[start] = end;
+    return { id: `ladder-${idx}`, start, end };
+  });
 
-    const head = (headRow * 10) + (Math.floor(Math.random() * 10) + 1);
-    const tail = (tailRow * 10) + (Math.floor(Math.random() * 10) + 1);
-
-    if (head <= tail || head === 100 || occupiedTiles.has(head) || occupiedTiles.has(tail)) continue;
-
-    occupiedTiles.add(head);
-    occupiedTiles.add(tail);
+  const snakes: SnakeItem[] = snakesRaw.map(([head, tail], idx) => {
     map[head] = tail;
-
-    const palette = SNAKE_PALETTES[snakes.length % SNAKE_PALETTES.length];
-    snakes.push({
-      id: `snake-${head}-${tail}`,
+    return {
+      id: `snake-${idx}`,
       head,
       tail,
-      color: palette.color,
-      patternColor: palette.patternColor,
-      curveFactor: (Math.random() > 0.5 ? 1 : -1) * (15 + Math.random() * 15)
-    });
-  }
+      waveStrength: (idx % 2 === 0 ? 1 : -1) * (6 + (idx % 4) * 2),
+    };
+  });
 
-  return { ladders, snakes, map };
+  return { snakes, ladders, map };
 }
