@@ -254,8 +254,7 @@ export function useRealtime(roomId: string) {
           payload.col,
           payload.value,
           payload.userId,
-          payload.isCorrect,
-          true
+          payload.isCorrect
         );
 
         if (store.room?.mode === 'collaborative' || store.room?.mode === 'classic') {
