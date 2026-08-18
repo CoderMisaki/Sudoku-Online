@@ -86,6 +86,7 @@ export default function RoomPage() {
     const isHostFromSession = sessionStorage.getItem(`sudoku_host_room_${roomId}`) === '1';
     if ((isHost || isHostFromSession) && !initHostRef.current) {
       initHostRef.current = true;
+
       const currentState = useGameStore.getState();
 
       currentState.setRoom({
@@ -111,18 +112,39 @@ export default function RoomPage() {
         startedAt: Date.now(),
       });
 
-      fetch('/api/game/create-room', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ difficulty }),
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.initialGrid && data.solutionToken) {
-          currentState.setGameData(data.initialGrid, data.solutionToken);
-        }
-      })
-      .catch(err => console.error('Failed to create puzzle:', err));
+      // Jika mode snakes, buat state awal snakes and ladders
+      if (mode === 'snakes_and_ladders') {
+        currentState.updateSnakesState({
+          currentTurnUserId: storedUserId,
+          turnOrder: [storedUserId],
+          diceValue: null,
+          isRolling: false,
+          playerPositions: {
+            [storedUserId]: 1,
+          },
+          winnerId: null,
+        });
+      } else {
+        // Mode Sudoku biasa
+        fetch('/api/game/create-room', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ difficulty }),
+        })
+          .then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+
+            if (!res.ok || !data.initialGrid || !data.solutionToken) {
+              throw new Error(data.error || `HTTP ${res.status}`);
+            }
+
+            currentState.setGameData(data.initialGrid, data.solutionToken);
+          })
+          .catch((err) => {
+            console.error('Failed to create puzzle:', err);
+            toast.error(`Gagal membuat puzzle: ${err.message}. Cek ROOM_SECRET_KEY / server.`);
+          });
+      }
     }
 
     const timer = setTimeout(() => {
@@ -130,6 +152,20 @@ export default function RoomPage() {
     }, 0);
     return () => clearTimeout(timer);
   }, [roomId, router, setUserInfo, enterRoom]);
+
+  const snakesState = useGameStore(state => state.snakesState);
+  const isSnakesMode = room?.mode === 'snakes_and_ladders';
+  const hasBoardData = isSnakesMode ? Boolean(snakesState) : Boolean(grid);
+
+  useEffect(() => {
+    if (realtimeStatus === 'SUBSCRIBED' && !hasBoardData) {
+      const timer = setTimeout(() => {
+        requestState();
+      }, 400);
+
+      return () => clearTimeout(timer);
+    }
+  }, [realtimeStatus, hasBoardData, requestState]);
 
   const copyRoomCode = () => {
     navigator.clipboard.writeText(roomId);
@@ -196,10 +232,6 @@ export default function RoomPage() {
       toast.error('Gagal membuat puzzle baru.', { id: 'create-board' });
     }
   };
-
-  const snakesState = useGameStore(state => state.snakesState);
-  const isSnakesMode = room?.mode === 'snakes_and_ladders';
-  const hasBoardData = isSnakesMode ? Boolean(snakesState) : Boolean(grid);
 
   // Tampilan Menunggu Host / Stuck Loading Fallback
   if (loading || !hasBoardData) {
