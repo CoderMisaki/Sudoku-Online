@@ -1,19 +1,25 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://oywdrriwqkzsvyeyjxzp.supabase.co';
-const supabaseAnonKey = 'sb_publishable_kn9Us8pmI_X2eEBvK4-pRQ_noRVPnFz';
+// Kredensial Supabase langsung tanpa process.env
+export const SUPABASE_URL = 'https://oywdrriwqkzsvyeyjxzp.supabase.co';
+export const SUPABASE_ANON_KEY = 'sb_publishable_kn9Us8pmI_X2eEBvK4-pRQ_noRVPnFz';
 
-export const isSupabaseEnvValid = true;
+export const isSupabaseEnvValid = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+
+console.log('[Supabase Init] Initializing Supabase Client with direct endpoint:', SUPABASE_URL);
 
 export const supabase = createClient(
-  supabaseUrl,
-  supabaseAnonKey,
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
   {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
     realtime: {
       params: {
-        eventsPerSecond: 50,
+        eventsPerSecond: 20,
       },
-      heartbeatIntervalMs: 2500,
     },
   }
 );
