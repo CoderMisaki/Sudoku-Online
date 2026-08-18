@@ -10,17 +10,25 @@ interface SudokuBoardProps {
   broadcastNote: (row: number, col: number, note: number) => void;
   broadcastCursor: (row: number, col: number) => void;
   lockCell: (row: number, col: number) => boolean | void;
-  locks: Record<string, { userId: string, expiresAt: number }>;
+  locks: Record<string, { userId: string; expiresAt: number }>;
   isPencilMode: boolean;
   isEraserMode: boolean;
 }
 
-export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, isPencilMode, isEraserMode }) => {
-  const grid = useGameStore(state => state.grid);
-  const selectedCell = useGameStore(state => state.selectedCell);
-  const setSelectedCell = useGameStore(state => state.setSelectedCell);
-  const room = useGameStore(state => state.room);
-  const userId = useGameStore(state => state.userId);
+export const SudokuBoard: React.FC<SudokuBoardProps> = ({
+  broadcastMove,
+  broadcastNote,
+  broadcastCursor,
+  lockCell,
+  locks,
+  isPencilMode,
+  isEraserMode,
+}) => {
+  const grid = useGameStore((state) => state.grid);
+  const selectedCell = useGameStore((state) => state.selectedCell);
+  const setSelectedCell = useGameStore((state) => state.setSelectedCell);
+  const room = useGameStore((state) => state.room);
+  const userId = useGameStore((state) => state.userId);
 
   const isCompetition = room?.mode === 'competition';
 
@@ -41,95 +49,93 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     }
   }, [stunEnd]);
 
-  const handleCellClick = useCallback((row: number, col: number) => {
-    if (!grid) return;
+  const handleCellClick = useCallback(
+    (row: number, col: number) => {
+      if (!grid) return;
 
-    if (room?.mode === 'race' && userId) {
-      if (isStunned) {
-        return; // prevent click if stunned
-      }
-    }
-
-    if (!isCompetition) {
-      const key = `${row}-${col}`;
-      const currentLock = locks[key];
-      if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
-        return;
-      }
-    }
-
-    setSelectedCell({ row, col });
-    if (!isCompetition) {
-      broadcastCursor(row, col);
-      lockCell(row, col);
-    }
-  }, [grid, locks, userId, setSelectedCell, broadcastCursor, lockCell, isCompetition, room?.mode, isStunned]);
-
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    const target = e.target as HTMLElement | null;
-    if (target?.closest('input, textarea, select, [contenteditable="true"]')) {
-      return;
-    }
-
-    if (!grid || !userId) return;
-
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-      e.preventDefault(); // Prevent page scrolling
-      const current = selectedCell || { row: 0, col: 0 };
-      let newRow = current.row;
-      let newCol = current.col;
-      if (e.key === 'ArrowUp') newRow = Math.max(0, current.row - 1);
-      if (e.key === 'ArrowDown') newRow = Math.min(8, current.row + 1);
-      if (e.key === 'ArrowLeft') newCol = Math.max(0, current.col - 1);
-      if (e.key === 'ArrowRight') newCol = Math.min(8, current.col + 1);
-      handleCellClick(newRow, newCol);
-      return;
-    }
-
-    if (!selectedCell) return;
-
-    if (room?.mode === 'race' && userId) {
-      if (isStunned) {
-        return; // prevent keydown if stunned
-      }
-    }
-
-    const { row, col } = selectedCell;
-    const cell = grid[row][col];
-
-    if (!isCompetition) {
-      const key = `${row}-${col}`;
-      const currentLock = locks[key];
-      if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
-        return;
-      }
-    }
-
-    const isCellFixed = Boolean(cell.isLocked || cell.isCorrect);
-
-    if (e.key >= '1' && e.key <= '9') {
-      const val = parseInt(e.key);
-      if (isCellFixed) {
-        toast('Jawaban sudah benar', { icon: '✅', id: 'cell-correct' });
-        return;
-      }
-      if (isEraserMode && cell.value === null) {
-        if (cell.notes.includes(val)) {
-          broadcastNote(row, col, val);
+      if (room?.mode === 'race' && userId) {
+        if (isStunned) {
+          return;
         }
-      } else if (isPencilMode && cell.value === null) {
-        broadcastNote(row, col, val);
-      } else {
-        broadcastMove(row, col, val);
       }
-    } else if (e.key === 'Backspace' || e.key === 'Delete') {
-      if (isCellFixed) {
-        toast('Jawaban sudah benar', { icon: '✅', id: 'cell-correct' });
+
+      if (!isCompetition) {
+        const key = `${row}-${col}`;
+        const currentLock = locks[key];
+        if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
+          return;
+        }
+      }
+
+      setSelectedCell({ row, col });
+      if (!isCompetition) {
+        broadcastCursor(row, col);
+        lockCell(row, col);
+      }
+    },
+    [grid, locks, userId, setSelectedCell, broadcastCursor, lockCell, isCompetition, room?.mode, isStunned]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (!grid || !userId) return;
+
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+        const current = selectedCell || { row: 0, col: 0 };
+        let newRow = current.row;
+        let newCol = current.col;
+        if (e.key === 'ArrowUp') newRow = Math.max(0, current.row - 1);
+        if (e.key === 'ArrowDown') newRow = Math.min(8, current.row + 1);
+        if (e.key === 'ArrowLeft') newCol = Math.max(0, current.col - 1);
+        if (e.key === 'ArrowRight') newCol = Math.min(8, current.col + 1);
+        handleCellClick(newRow, newCol);
         return;
       }
-      broadcastMove(row, col, null);
-    }
-  }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode, isCompetition, room?.mode, isStunned]);
+
+      if (!selectedCell) return;
+
+      if (room?.mode === 'race' && userId) {
+        if (isStunned) return;
+      }
+
+      const { row, col } = selectedCell;
+      const cell = grid[row][col];
+
+      if (!isCompetition) {
+        const key = `${row}-${col}`;
+        const currentLock = locks[key];
+        if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
+          return;
+        }
+      }
+
+      const isFixed = Boolean(cell.isLocked || cell.isCorrect);
+
+      if (cell.isLocked || cell.isCorrect) {
+        if (e.key >= '1' && e.key <= '9') {
+          toast('Jawaban sudah benar', { icon: '✅', id: 'cell-correct' });
+        }
+        return;
+      }
+
+      if (e.key >= '1' && e.key <= '9') {
+        const val = parseInt(e.key);
+        if (isEraserMode && cell.value === null) {
+          if (cell.notes.includes(val)) broadcastNote(row, col, val);
+        } else if (isPencilMode && cell.value === null) {
+          broadcastNote(row, col, val);
+        } else {
+          broadcastMove(row, col, val);
+        }
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        broadcastMove(row, col, null);
+      }
+    },
+    [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode, isCompetition, room?.mode, isStunned]
+  );
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -139,15 +145,22 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
   if (!grid) return null;
 
   return (
-    <div className={cn("w-full aspect-square max-w-[600px] border-[3px] border-foreground bg-foreground grid grid-cols-9 grid-rows-9 gap-px p-1 mx-auto rounded-md shadow-lg overflow-hidden relative select-none mt-2 mb-2 transition-all duration-300", { "opacity-50 grayscale": isStunned })}>
-      {grid.map((row, rIndex) => (
+    <div
+      className={cn(
+        "w-full aspect-square max-w-[600px] border-[3px] border-foreground bg-foreground grid grid-cols-9 grid-rows-9 gap-px p-1 mx-auto rounded-md shadow-lg overflow-hidden relative select-none mt-2 mb-2 transition-all duration-300",
+        { "opacity-50 grayscale": isStunned }
+      )}
+    >
+      {grid.map((row, rIndex) =>
         row.map((cell, cIndex) => {
           const isSelected = selectedCell?.row === rIndex && selectedCell?.col === cIndex;
+          const isError = cell.isWrong || (cell.isConflicting && room?.mode !== 'zen');
+          const isFixed = Boolean(cell.isLocked || cell.isCorrect);
 
           let isSameValue = false;
           if (selectedCell) {
-            const selectedVal = grid[selectedCell.row][selectedCell.col].value;
-            isSameValue = selectedVal !== null && cell.value === selectedVal;
+            const selectedVal = grid[selectedCell.row][selectedCell.col]?.value;
+            isSameValue = selectedVal !== null && selectedVal !== undefined && cell.value === selectedVal;
           }
 
           const lockKey = `${rIndex}-${cIndex}`;
@@ -165,9 +178,6 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
             }
           }
 
-          const isError = cell.isConflicting || cell.isWrong;
-          const isFixed = Boolean(cell.isLocked || cell.isCorrect);
-
           return (
             <div
               key={`${rIndex}-${cIndex}`}
@@ -178,14 +188,12 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "border-b-2 border-foreground": rIndex % 3 === 2 && rIndex !== 8,
                   "border-r-2 border-foreground": cIndex % 3 === 2 && cIndex !== 8,
                   "bg-secondary/40": isSelected && !isError,
-                  "bg-red-500/30": isError && !isSelected && room?.mode !== 'zen',
-                  "bg-orange-400/30": isError && !isSelected && room?.mode === 'zen',
+                  "bg-red-500/20": isError && !isSelected,
                   "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected,
                   "ring-2 ring-white ring-inset": isSameValue && isSelected,
-                  "text-foreground font-bold": !isSameValue && (isFixed || isError),
-                  "text-foreground font-medium": !isSameValue && !isFixed && !isError,
-                  "text-pink-500 font-bold": isSameValue && (isFixed || isError),
-                  "text-pink-500 font-medium": isSameValue && !isFixed && !isError,
+                  "text-red-500 font-black": isError,
+                  "text-foreground font-bold": !isError && isFixed,
+                  "text-foreground font-semibold": !isError && !isFixed,
                   "cursor-not-allowed opacity-80": isLockedByOther
                 }
               )}
@@ -202,10 +210,10 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                     <div
                       key={n}
                       className={cn(
-                        "flex items-center justify-center text-[10px] sm:text-[11px] leading-none select-none transition-colors duration-150",
+                        "flex items-center justify-center text-[10px] sm:text-[11px] leading-none select-none transition-colors duration-150 font-bold",
                         isSelected
-                          ? "text-black dark:text-black font-black"
-                          : "text-foreground/90 dark:text-gray-100 font-bold"
+                          ? "text-foreground font-black"
+                          : "text-foreground/90 dark:text-gray-100"
                       )}
                     >
                       {cell.notes.includes(n) ? n : ''}
@@ -223,7 +231,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
             </div>
           );
         })
-      ))}
+      )}
     </div>
   );
 };

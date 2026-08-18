@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
-import { Grid, RoomState, ChatMessage } from '../types/game';
+import { ChatMessage, Grid, RoomState } from '../types/game';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getOrCreateUserId } from '../utils/uuid';
+import toast from 'react-hot-toast';
 
 const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
-const OFFLINE_TIMEOUT_MS = 6000; // 6 detik tanpa respon = Room Offline
+const OFFLINE_TIMEOUT_MS = 6000;
 
 type RealtimeStatus =
   | 'CONNECTING'
@@ -56,6 +57,23 @@ export function useRealtime(roomId: string) {
     setDebugLogs((prev) => [logEntry, ...prev.slice(0, 49)]);
   }, []);
 
+  // Toast notification for move answers (1.5 seconds)
+  const triggerAnswerToast = useCallback((playerName: string, isCorrect: boolean) => {
+    if (isCorrect) {
+      toast.success(`${playerName}: Jawaban Benar`, {
+        duration: 1500,
+        position: 'top-center',
+        id: `ans-${playerName}-${Date.now()}`,
+      });
+    } else {
+      toast.error(`${playerName}: Jawaban Salah`, {
+        duration: 1500,
+        position: 'top-center',
+        id: `ans-${playerName}-${Date.now()}`,
+      });
+    }
+  }, []);
+
   const requestState = useCallback(() => {
     const currentUid = userIdRef.current || getOrCreateUserId();
 
@@ -72,7 +90,7 @@ export function useRealtime(roomId: string) {
     }
   }, [addLog]);
 
-  // Host memancarkan state ke guest ketika data sudah tersedia
+  // Host broadcasts initial state when ready
   useEffect(() => {
     const store = useGameStore.getState();
     const currentUid = userIdRef.current || store.userId;
@@ -122,20 +140,16 @@ export function useRealtime(roomId: string) {
       channelRef.current = null;
     }
 
-    setRealtimeStatus('CONNECTING');
     setIsTrulyOffline(false);
     setConnectionError(null);
-    addLog(`[Connect] Menghubungkan ke Realtime channel room:${roomId}...`);
 
-    // Set timeout deteksi room offline jika tidak ada respons
     if (offlineTimeoutRef.current) clearTimeout(offlineTimeoutRef.current);
     offlineTimeoutRef.current = setTimeout(() => {
       const currentState = useGameStore.getState();
       const hasBoard = currentState.room?.mode === 'snakes_and_ladders' ? Boolean(currentState.snakesState) : Boolean(currentState.grid);
       if (!hasBoard) {
         setIsTrulyOffline(true);
-        setConnectionError('Room offline atau Host tidak aktif/tidak merespons.');
-        addLog(`[Timeout] Tidak ada respons dari Host setelah ${OFFLINE_TIMEOUT_MS / 1000}s. Room dinyatakan OFFLINE.`);
+        setConnectionError('Room offline atau Host tidak aktif.');
       }
     }, OFFLINE_TIMEOUT_MS);
 
@@ -151,24 +165,27 @@ export function useRealtime(roomId: string) {
     channel
       .on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState();
-        const userCount = Object.keys(state).length;
-        addLog(`[Presence SYNC] Total pemain aktif di presence: ${userCount}`);
-
         const store = useGameStore.getState();
         if (store.room) {
           const updatedPlayers = { ...store.room.players };
           Object.keys(state).forEach((key) => {
-            const pres = (state[key] as Array<{ username?: string }>)?.[0];
-            if (pres && !updatedPlayers[key]) {
-              updatedPlayers[key] = {
-                id: key,
-                username: pres.username || 'Player',
-                color: PLAYER_COLORS[Object.keys(updatedPlayers).length % PLAYER_COLORS.length],
-                isHost: key === store.room?.hostId,
-                score: 0,
-                hints: 3,
-                status: 'online',
-              };
+            const pres = (state[key] as Array<{ username?: string; status?: string }>)?.[0];
+            if (pres) {
+              if (updatedPlayers[key]) {
+                if (updatedPlayers[key].status !== 'left') {
+                  updatedPlayers[key].status = 'online';
+                }
+              } else {
+                updatedPlayers[key] = {
+                  id: key,
+                  username: pres.username || 'Player',
+                  color: PLAYER_COLORS[Object.keys(updatedPlayers).length % PLAYER_COLORS.length],
+                  isHost: key === store.room?.hostId,
+                  score: 0,
+                  hints: 3,
+                  status: 'online',
+                };
+              }
             }
           });
           store.setRoom({ ...store.room, players: updatedPlayers });
@@ -176,80 +193,21 @@ export function useRealtime(roomId: string) {
       })
       .on('presence', { event: 'join' }, ({ key, newPresences }) => {
         const user = newPresences?.[0] as { username?: string } | undefined;
-        addLog(`[Presence JOIN] Player masuk: ${user?.username || key}`);
+        const store = useGameStore.getState();
 
-        let store = useGameStore.getState();
-
-        // Tambahkan player baru ke room jika belum ada
-        if (store.room && !store.room.players[key]) {
-          const updatedPlayers = {
-            ...store.room.players,
-            [key]: {
-              id: key,
-              username: user?.username || 'Player',
-              color: PLAYER_COLORS[Object.keys(store.room.players).length % PLAYER_COLORS.length],
-              isHost: key === store.room.hostId,
-              score: 0,
-              hints: 3,
-              status: 'online' as const,
-            },
-          };
-
-          store.setRoom({
-            ...store.room,
-            players: updatedPlayers,
+        if (store.room) {
+          const existingStatus = store.room.players[key]?.status;
+          store.updatePlayer(key, {
+            status: existingStatus === 'left' ? 'left' : 'online',
+            username: user?.username || store.room.players[key]?.username || 'Player',
           });
-
-          store = useGameStore.getState();
-        }
-
-        // Jika mode snakes, tambahkan player baru ke snakesState
-        if (
-          store.room?.mode === 'snakes_and_ladders' &&
-          store.snakesState &&
-          !store.snakesState.playerPositions[key]
-        ) {
-          store.updateSnakesState({
-            turnOrder: [...store.snakesState.turnOrder, key],
-            playerPositions: {
-              ...store.snakesState.playerPositions,
-              [key]: 1,
-            },
-          });
-
-          store = useGameStore.getState();
-        }
-
-        const hasBoard =
-          store.room?.mode === 'snakes_and_ladders'
-            ? Boolean(store.snakesState)
-            : Boolean(store.grid);
-
-        // Jika kita host dan board sudah siap, langsung kirim state ke player baru
-        if (store.room && store.room.hostId === currentUserId && hasBoard) {
-          addLog(`[Host Auto-Sync] Mengirim state ke player baru (${key}).`);
-
-          channel.send({
-            type: 'broadcast',
-            event: 'sync_state',
-            payload: {
-              room: store.room,
-              grid: store.grid,
-              solutionToken: store.solutionToken,
-              snakesState: store.snakesState,
-              messages: store.messages,
-              senderId: currentUserId,
-            },
-          }).catch((err) => {
-            addLog(`[Host Auto-Sync] Gagal mengirim sync_state: ${String(err)}`);
-          });
-        } else if (store.room && store.room.hostId === currentUserId) {
-          addLog(`[Host Auto-Sync] Player baru masuk, tetapi board belum siap.`);
         }
       })
       .on('presence', { event: 'leave' }, ({ key }) => {
-        addLog(`[Presence LEAVE] Player keluar: ${key}`);
-        useGameStore.getState().updatePlayer(key, { status: 'offline' });
+        const store = useGameStore.getState();
+        if (store.room?.players[key]?.status !== 'left') {
+          store.updatePlayer(key, { status: 'disconnected' });
+        }
       })
       .on('broadcast', { event: 'request_sync' }, ({ payload }) => {
         addLog(`[Broadcast] Menerima request_sync dari ${payload?.requesterId}`);
@@ -290,7 +248,20 @@ export function useRealtime(roomId: string) {
       .on('broadcast', { event: 'cell_move' }, ({ payload }) => {
         const store = useGameStore.getState();
         if (store.room?.mode === 'competition') return;
-        store.updateCellWithValidation(payload.row, payload.col, payload.value, payload.userId, true);
+
+        store.updateCellWithValidation(
+          payload.row,
+          payload.col,
+          payload.value,
+          payload.userId,
+          payload.isCorrect,
+          true
+        );
+
+        if (store.room?.mode === 'collaborative' || store.room?.mode === 'classic') {
+          const senderName = store.room.players[payload.userId]?.username || 'Player';
+          triggerAnswerToast(senderName, payload.isCorrect);
+        }
       })
       .on('broadcast', { event: 'cell_note' }, ({ payload }) => {
         const store = useGameStore.getState();
@@ -313,6 +284,9 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'chat_message' }, ({ payload }) => {
         useGameStore.getState().addMessage(payload);
+      })
+      .on('broadcast', { event: 'player_leave_room' }, ({ payload }) => {
+        useGameStore.getState().updatePlayer(payload.userId, { status: 'left' });
       })
       .on('broadcast', { event: 'next_game' }, ({ payload }) => {
         addLog(`[Next Game] Game baru dimulai oleh host.`);
@@ -340,6 +314,8 @@ export function useRealtime(roomId: string) {
         setRealtimeStatus(status as RealtimeStatus);
 
         if (status === 'SUBSCRIBED') {
+          setIsTrulyOffline(false);
+          setConnectionError(null);
           addLog(`[Presence Track] Mendaftarkan player ${currentUsername} (${currentUserId})`);
 
           try {
@@ -354,7 +330,6 @@ export function useRealtime(roomId: string) {
           }
 
           const store = useGameStore.getState();
-
           const hasBoard =
             store.room?.mode === 'snakes_and_ladders'
               ? Boolean(store.snakesState)
@@ -362,7 +337,6 @@ export function useRealtime(roomId: string) {
 
           const isHost = Boolean(store.room && store.room.hostId === currentUserId);
 
-          // Jika host sudah punya board, langsung kirim state awal
           if (isHost && hasBoard) {
             addLog('[Host Sync] Channel SUBSCRIBED. Mengirim state awal ke semua guest.');
 
@@ -382,20 +356,30 @@ export function useRealtime(roomId: string) {
             });
           }
 
-          // Jika kita guest dan belum ada board, minta sync ke host
           if (!hasBoard) {
             requestState();
           }
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
           setIsTrulyOffline(true);
           setConnectionError(`Koneksi realtime ${status.toLowerCase()}.`);
         }
       });
-  }, [roomId, addLog, requestState, setRealtimeStatus]);
+  }, [roomId, addLog, requestState, setRealtimeStatus, triggerAnswerToast]);
 
+  // SMART AUTO RECONNECT (Network Online / Tab Focus / Visibility Change)
   useEffect(() => {
     isMountedRef.current = true;
     connectChannel();
+
+    const handleSmartReconnect = () => {
+      if (document.visibilityState === 'visible' || navigator.onLine) {
+        connectChannel();
+      }
+    };
+
+    window.addEventListener('online', handleSmartReconnect);
+    window.addEventListener('focus', handleSmartReconnect);
+    document.addEventListener('visibilitychange', handleSmartReconnect);
 
     // Polling sync jika board masih kosong
     syncPollIntervalRef.current = setInterval(() => {
@@ -413,6 +397,9 @@ export function useRealtime(roomId: string) {
 
     return () => {
       isMountedRef.current = false;
+      window.removeEventListener('online', handleSmartReconnect);
+      window.removeEventListener('focus', handleSmartReconnect);
+      document.removeEventListener('visibilitychange', handleSmartReconnect);
 
       if (syncPollIntervalRef.current) {
         clearInterval(syncPollIntervalRef.current);
@@ -430,26 +417,59 @@ export function useRealtime(roomId: string) {
   }, [connectChannel, requestState]);
 
   // Actions
-  const broadcastMove = useCallback((row: number, col: number, value: number | null) => {
-    const currentUid = userIdRef.current || getOrCreateUserId();
-    if (value === null) {
-      useGameStore.getState().updateCellWithValidation(row, col, null, currentUid, false);
-    } else {
-      useGameStore.getState().setOptimisticMove(row, col, value);
-    }
-    channelRef.current?.send({
-      type: 'broadcast',
-      event: 'cell_move',
-      payload: { row, col, value, userId: currentUid },
-    });
-  }, []);
+  const broadcastMove = useCallback(
+    async (row: number, col: number, value: number | null) => {
+      const currentUid = userIdRef.current || getOrCreateUserId();
+      const currentUname = usernameRef.current || 'Player';
+      const store = useGameStore.getState();
+
+      if (value === null) {
+        store.updateCellWithValidation(row, col, null, currentUid, false);
+        channelRef.current?.send({
+          type: 'broadcast',
+          event: 'cell_move',
+          payload: { row, col, value: null, userId: currentUid, isCorrect: false },
+        });
+        return;
+      }
+
+      try {
+        const token = store.solutionToken;
+        if (!token) return;
+
+        const res = await fetch('/api/game/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ row, col, value, solutionToken: token }),
+        });
+        const data = await res.json();
+        const isCorrect = Boolean(data.isCorrect);
+
+        store.updateCellWithValidation(row, col, value, currentUid, isCorrect);
+
+        if (store.room?.mode === 'collaborative' || store.room?.mode === 'classic') {
+          triggerAnswerToast(currentUname, isCorrect);
+        }
+
+        channelRef.current?.send({
+          type: 'broadcast',
+          event: 'cell_move',
+          payload: { row, col, value, userId: currentUid, isCorrect },
+        });
+      } catch (err) {
+        console.error('Failed to verify move:', err);
+      }
+    },
+    [triggerAnswerToast]
+  );
 
   const broadcastNote = useCallback((row: number, col: number, note: number) => {
+    const currentUid = userIdRef.current || getOrCreateUserId();
     useGameStore.getState().toggleNote(row, col, note);
     channelRef.current?.send({
       type: 'broadcast',
       event: 'cell_note',
-      payload: { row, col, note },
+      payload: { row, col, note, userId: currentUid },
     });
   }, []);
 
@@ -498,6 +518,13 @@ export function useRealtime(roomId: string) {
   }, []);
 
   const broadcastLeaveRoom = useCallback(async () => {
+    const currentUid = userIdRef.current || getOrCreateUserId();
+    useGameStore.getState().updatePlayer(currentUid, { status: 'left' });
+    await channelRef.current?.send({
+      type: 'broadcast',
+      event: 'player_leave_room',
+      payload: { userId: currentUid },
+    });
     if (channelRef.current) {
       await channelRef.current.untrack();
       supabase.removeChannel(channelRef.current);

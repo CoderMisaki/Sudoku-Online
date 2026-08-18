@@ -141,7 +141,7 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
       }
 
       if (!isSelected && !isSameValue && !isError) {
-        textColor = isFixed ? (isDark ? '#fafafa' : '#18181b') : (isDark ? '#60a5fa' : '#2563eb');
+        textColor = isDark ? '#fafafa' : '#18181b';
       }
 
       ctx.fillStyle = textColor;
