@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useGameStore } from '../../../store/gameStore';
 import { useRealtime } from '../../../hooks/useRealtime';
@@ -9,10 +9,7 @@ import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
-import { SudokuBoard3D } from '../../../components/game/SudokuBoard3D';
-import { SnakesAndLaddersBoard } from '../../../components/game/SnakesAndLaddersBoard';
-import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle, ArrowLeft, ArrowUp, ArrowDown, ArrowRight, RotateCw, Box, Grid as GridIcon } from 'lucide-react';
-import { isSupabaseEnvValid } from '../../../services/supabase';
+import { Copy, Users, Settings, LogOut, CheckCircle2, RotateCw, Terminal, AlertOctagon } from 'lucide-react';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
 
@@ -27,73 +24,15 @@ export default function RoomPage() {
   const enterRoom = useGameStore(state => state.enterRoom);
   const grid = useGameStore(state => state.grid);
   const resetGame = useGameStore(state => state.resetGame);
-  const setGameData = useGameStore(state => state.setGameData);
   const setUserInfo = useGameStore(state => state.setUserInfo);
-  const selectedCell = useGameStore(state => state.selectedCell);
-  const messages = useGameStore(state => state.messages);
-  const player = useGameStore(state => state.room?.players[userId || '']);
-  const hintsRemaining = player?.hints ?? 3;
-  const isSpectator = Boolean(player?.isSpectator);
 
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isLeaving, setIsLeaving] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
   const initHostRef = useRef(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
-  const [isPencilMode, setIsPencilMode] = useState(false);
-  const [isEraserMode, setIsEraserMode] = useState(false);
-  const [showFallbackButton, setShowFallbackButton] = useState(false);
-
-  // Modal Next Game State
-  const [isNextGameModalOpen, setIsNextGameModalOpen] = useState(false);
-  const [nextGameStep, setNextGameStep] = useState<'confirm' | 'settings'>('confirm');
-  const [isApplied, setIsApplied] = useState(false);
-  const [viewMode, setViewMode] = useState<'2D' | '3D'>(() => {
-    if (typeof window !== "undefined") {
-      const savedMode = localStorage.getItem("sudoku_view_3d");
-      if (savedMode !== null) {
-        return savedMode === "true" ? "3D" : "2D";
-      }
-    }
-    return "2D";
-  });
-
-  const handleSetViewMode = (mode: '2D' | '3D') => {
-    setViewMode(mode);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("sudoku_view_3d", String(mode === "3D"));
-    }
-  };
-
-  const [nextDifficulty, setNextDifficulty] = useState<Difficulty>('medium');
-  const [nextMode, setNextMode] = useState<GameMode>('collaborative');
-  const [nextMaxPlayers, setNextMaxPlayers] = useState(4);
-
-  const applyTheme = useCallback((newTheme: 'light' | 'dark' | 'system') => {
-    if (newTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-      document.documentElement.classList.remove('light');
-    } else if (newTheme === 'light') {
-      document.documentElement.classList.add('light');
-      document.documentElement.classList.remove('dark');
-    } else {
-      document.documentElement.classList.remove('dark', 'light');
-    }
-  }, []);
-
-  useEffect(() => {
-    const storedTheme = localStorage.getItem('sudoku_theme') as 'light' | 'dark' | 'system' || 'system';
-    setTimeout(() => setTheme(storedTheme), 0);
-    applyTheme(storedTheme);
-  }, [applyTheme]);
-
-  const toggleTheme = () => {
-    const newTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(newTheme);
-    localStorage.setItem('sudoku_theme', newTheme);
-    applyTheme(newTheme);
-  };
 
   const {
     broadcastMove,
@@ -101,184 +40,18 @@ export default function RoomPage() {
     broadcastCursor,
     lockCell,
     locks,
-    broadcastChat,
-    broadcastNextGame,
     broadcastLeaveRoom,
-    broadcastSnakesDiceRoll,
+    broadcastNextGame,
     requestState,
-
     realtimeStatus,
     isTrulyOffline,
     connectionError,
+    debugLogs,
     reconnect
   } = useRealtime(roomId);
 
-  const [chatInput, setChatInput] = useState('');
-
-  const snakesWinnerId = useGameStore(state => state.snakesState?.winnerId);
-  const isGameCompleted = React.useMemo(() => {
-    if (room?.mode === 'snakes_and_ladders') {
-      return Boolean(snakesWinnerId);
-    }
-    if (!grid) return false;
-    for (let r = 0; r < 9; r++) {
-      for (let c = 0; c < 9; c++) {
-        const cell = grid[r][c];
-        if (cell.value === null || cell.isConflicting || cell.isWrong) return false;
-      }
-    }
-    return true;
-  }, [grid, room?.mode, snakesWinnerId]);
-
-  const solutionToken = useGameStore(state => state.solutionToken);
-
-  // Otomatis minta soal jika mode Competition dan papan pemain atau token masih kosong
-  useEffect(() => {
-    if (room && room.mode === 'competition' && (!grid || !solutionToken) && !loading) {
-      fetch('/api/game/create-room', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ difficulty: room.difficulty || 'medium' })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.initialGrid && data.solutionToken) {
-          setGameData(data.initialGrid, data.solutionToken);
-        }
-      })
-      .catch(err => console.error('Failed to fetch competition puzzle:', err));
-    }
-  }, [room, room?.mode, room?.difficulty, grid, solutionToken, loading, setGameData]);
-
-  const handleOpenNextGameModal = () => {
-    if (!room) return;
-    setNextDifficulty(room.difficulty || 'medium');
-    setNextMode(room.mode || 'collaborative');
-    setNextMaxPlayers(room.maxPlayers || 4);
-    setNextGameStep('confirm');
-    setIsApplied(false);
-    setIsNextGameModalOpen(true);
-  };
-
-  const executeStartNextGame = async (diff: Difficulty, gameMode: GameMode, maxP: number) => {
-    if (!room) return;
-    try {
-      toast.loading('Mempersiapkan game baru...', { id: 'nextGame' });
-
-      const updatedRoom = {
-        ...room,
-        difficulty: diff,
-        mode: gameMode,
-        maxPlayers: maxP
-      };
-      useGameStore.getState().setRoom(updatedRoom);
-
-      if (gameMode === 'competition') {
-        broadcastNextGame(null, null, updatedRoom);
-        const res = await fetch('/api/game/create-room', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ difficulty: diff })
-        });
-        const data = await res.json();
-        if (res.ok && data.initialGrid && data.solutionToken) {
-          useGameStore.getState().startNextGame(data.initialGrid, data.solutionToken);
-          toast.success('Game baru dimulai!', { id: 'nextGame' });
-        } else {
-          toast.error('Gagal membuat game baru', { id: 'nextGame' });
-        }
-      } else {
-        const res = await fetch('/api/game/create-room', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ difficulty: diff })
-        });
-        const data = await res.json();
-        if (res.ok && data.initialGrid && data.solutionToken) {
-          useGameStore.getState().startNextGame(data.initialGrid, data.solutionToken);
-          broadcastNextGame(data.initialGrid, data.solutionToken, updatedRoom);
-          toast.success('Game baru dimulai!', { id: 'nextGame' });
-        } else {
-          toast.error('Gagal membuat game baru', { id: 'nextGame' });
-        }
-      }
-      setIsNextGameModalOpen(false);
-    } catch {
-      toast.error('Gagal membuat game baru', { id: 'nextGame' });
-    }
-  };
-
-  const [newMsgNotif, setNewMsgNotif] = useState(false);
-  const [elapsedTime, setElapsedTime] = useState(0);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const prevMsgCountRef = useRef<number>(0);
-  const joinTimestampRef = useRef<number>(0);
-
-  useEffect(() => {
-    if (joinTimestampRef.current === 0) {
-      joinTimestampRef.current = Date.now();
-    }
-  }, []);
-
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      const el = chatContainerRef.current;
-      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
-      if (isNearBottom) {
-        el.scrollTop = el.scrollHeight;
-      }
-    }
-
-    if (messages.length > prevMsgCountRef.current) {
-      if (prevMsgCountRef.current > 0) {
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg && lastMsg.userId !== userId && lastMsg.timestamp >= joinTimestampRef.current) {
-          setTimeout(() => setNewMsgNotif(true), 0);
-          const timer = setTimeout(() => setNewMsgNotif(false), 2000);
-          prevMsgCountRef.current = messages.length;
-          return () => clearTimeout(timer);
-        }
-      }
-      prevMsgCountRef.current = messages.length;
-    }
-  }, [messages, userId]);
-
-  useEffect(() => {
-    if (!room?.startedAt) return;
-    const updateTimer = () => {
-      const now = Date.now();
-      const diffInSeconds = Math.floor((now - room.startedAt!) / 1000);
-      setElapsedTime(diffInSeconds > 0 ? diffInSeconds : 0);
-    };
-
-    updateTimer();
-    const interval = setInterval(updateTimer, 1000);
-    return () => clearInterval(interval);
-  }, [room?.startedAt]);
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const secs = (seconds % 60).toString().padStart(2, '0');
-    return `${mins}:${secs}`;
-  };
-
-  const handleChatSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (chatInput.trim()) {
-      broadcastChat(chatInput.trim());
-      setChatInput('');
-      const textarea = document.getElementById('chat-textarea');
-      if (textarea) textarea.style.height = '40px';
-
-      if (chatContainerRef.current) {
-        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-      }
-    }
-  };
-
   useEffect(() => {
     if (!roomId) return;
-
     const storedUserId = getOrCreateUserId();
     const storedUsername = typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') : null;
 
@@ -290,7 +63,7 @@ export default function RoomPage() {
     setUserInfo(storedUserId, storedUsername);
     enterRoom(roomId);
 
-    let isHostFromConfig = false;
+    let isHost = false;
     let difficulty: Difficulty = 'medium';
     let mode: GameMode = 'collaborative';
     let maxPlayers = 4;
@@ -299,23 +72,21 @@ export default function RoomPage() {
     if (roomConfigStr) {
       try {
         const config = JSON.parse(roomConfigStr);
-        isHostFromConfig = Boolean(config.isHost);
-        if (isHostFromConfig) {
+        isHost = Boolean(config.isHost);
+        if (isHost) {
           difficulty = (config.difficulty as Difficulty) || 'medium';
           mode = (config.mode as GameMode) || 'collaborative';
           maxPlayers = config.maxPlayers || 4;
         }
-      } catch (error) {
-        console.error('Failed to parse room config', error);
+      } catch (e) {
+        console.error(e);
       }
     }
 
-    const currentState = useGameStore.getState();
     const isHostFromSession = sessionStorage.getItem(`sudoku_host_room_${roomId}`) === '1';
-    const isHost = isHostFromConfig || isHostFromSession;
-
-    if (isHost && !initHostRef.current) {
+    if ((isHost || isHostFromSession) && !initHostRef.current) {
       initHostRef.current = true;
+      const currentState = useGameStore.getState();
 
       currentState.setRoom({
         id: roomId,
@@ -340,17 +111,6 @@ export default function RoomPage() {
         startedAt: Date.now(),
       });
 
-      if (mode === "snakes_and_ladders") {
-        currentState.updateSnakesState({
-          currentTurnUserId: storedUserId,
-          turnOrder: [storedUserId],
-          diceValue: null,
-          isRolling: false,
-          playerPositions: { [storedUserId]: 1 },
-          winnerId: null,
-        });
-      }
-
       fetch('/api/game/create-room', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -362,11 +122,13 @@ export default function RoomPage() {
           currentState.setGameData(data.initialGrid, data.solutionToken);
         }
       })
-      .catch(err => console.error('Failed to initialize room data:', err));
+      .catch(err => console.error('Failed to create puzzle:', err));
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLoading(false);
+    const timer = setTimeout(() => {
+      setLoading(false);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [roomId, router, setUserInfo, enterRoom]);
 
   const copyRoomCode = () => {
@@ -378,224 +140,38 @@ export default function RoomPage() {
   const leaveRoom = async () => {
     if (isLeaving) return;
     setIsLeaving(true);
-
     try {
-      await Promise.race([
-        broadcastLeaveRoom(),
-        new Promise((resolve) => setTimeout(resolve, 300))
-      ]);
-    } catch (err) {
-      console.warn('Leave room non-blocking error:', err);
+      await broadcastLeaveRoom();
     } finally {
       sessionStorage.removeItem(`sudoku_host_room_${roomId}`);
       sessionStorage.removeItem(`sudoku_room_config_${roomId}`);
       resetGame();
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (useGameStore as any).persist?.clearStorage?.();
-      } catch { /* ignore error */ }
       router.replace('/');
     }
   };
 
-  const handleAutoNote = useCallback(() => {
-    if (isSpectator) return;
-    const store = useGameStore.getState();
-    if (!store.grid) return;
-    store.autoNote();
-    toast.success('Auto Note applied!', { duration: 1500 });
-  }, [isSpectator]);
-
-  const handleHint = useCallback(async () => {
-    if (isSpectator || !userId) return;
-
-    if (!selectedCell) {
-      toast.error('Pilih kotak terlebih dahulu untuk menggunakan hint!');
-      return;
-    }
-
-    const store = useGameStore.getState();
-    const p = store.room?.players[userId];
-    if (!p) return;
-
-    if (store.room?.mode !== 'zen' && p.hints <= 0) {
-      toast.error('Jatah hint kamu sudah habis!');
-      return;
-    }
-
-    const currentCell = store.grid?.[selectedCell.row]?.[selectedCell.col];
-    if (!currentCell) return;
-
-    if (currentCell.isLocked) {
-      toast('Jawaban sudah benar', { icon: '✅' });
-      return;
-    }
-
-    if (!store.solutionToken) {
-      toast.error('Token room tidak ditemukan.');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/game/hint', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          row: selectedCell.row,
-          col: selectedCell.col,
-          solutionToken: store.solutionToken,
-        }),
-      });
-      const data = await res.json();
-      if (data.value !== undefined) {
-        if (currentCell.value !== null && currentCell.value === data.value) {
-          toast('Jawaban sudah benar', { icon: '✅' });
-          return;
-        }
-
-        broadcastMove(selectedCell.row, selectedCell.col, data.value);
-        store.updatePlayer(userId, { hints: p.hints - 1 });
-        toast.success('Hint digunakan!');
-      } else if (data.error) {
-        toast.error(data.error);
-      }
-    } catch (e) {
-      console.error('Gagal mendapatkan hint:', e);
-      toast.error('Gagal mengambil hint');
-    }
-  }, [userId, selectedCell, broadcastMove, isSpectator]);
-
-  const handleArrowNavigate = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
-    if (isSpectator) return;
-    const current = selectedCell || { row: 0, col: 0 };
-    let newRow = current.row;
-    let newCol = current.col;
-
-    if (direction === 'up') newRow = Math.max(0, current.row - 1);
-    if (direction === 'down') newRow = Math.min(8, current.row + 1);
-    if (direction === 'left') newCol = Math.max(0, current.col - 1);
-    if (direction === 'right') newCol = Math.min(8, current.col + 1);
-
-    useGameStore.getState().setSelectedCell({ row: newRow, col: newCol });
-    if (room?.mode !== 'competition') {
-      broadcastCursor(newRow, newCol);
-      lockCell(newRow, newCol);
-    }
-  }, [selectedCell, broadcastCursor, lockCell, isSpectator, room?.mode]);
-
-  const handleNumpadClick = useCallback((num: number) => {
-    if (isSpectator || !selectedCell || !userId) return;
-    const { row, col } = selectedCell;
-    const key = `${row}-${col}`;
-    const currentLock = locks[key];
-
-    if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) return;
-
-    const currentGrid = useGameStore.getState().grid;
-    if (currentGrid && currentGrid[row][col].isLocked) return;
-
-    if (isEraserMode && currentGrid && currentGrid[row][col].value === null) {
-      if (currentGrid[row][col].notes.includes(num)) broadcastNote(row, col, num);
-    } else if (!isSpectator && isPencilMode && currentGrid && currentGrid[row][col].value === null) {
-      broadcastNote(row, col, num);
-    } else if (!isSpectator) {
-      broadcastMove(row, col, num);
-    }
-  }, [selectedCell, userId, broadcastMove, broadcastNote, locks, isPencilMode, isEraserMode, isSpectator]);
-
-  const handleEraserClick = useCallback(() => {
-    if (isSpectator) return;
-    setIsEraserMode(!isEraserMode);
-    setIsPencilMode(false);
-
-    if (!selectedCell || !userId) return;
-    const { row, col } = selectedCell;
-    const key = `${row}-${col}`;
-    const currentLock = locks[key];
-
-    if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) return;
-
-    const currentGrid = useGameStore.getState().grid;
-    if (currentGrid && currentGrid[row][col].isLocked) return;
-
-    if (currentGrid && currentGrid[row][col].value !== null) {
-      broadcastMove(row, col, null);
-    }
-  }, [isEraserMode, selectedCell, userId, broadcastMove, locks, isSpectator]);
-
-
-  const snakesState = useGameStore(state => state.snakesState);
-  const isSnakesMode = room?.mode === "snakes_and_ladders";
-
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (!loading && (isSnakesMode ? !snakesState : !grid)) {
-      timer = setTimeout(() => {
-        setShowFallbackButton(true);
-      }, 3000);
-    } else {
-      timer = setTimeout(() => {
-        setShowFallbackButton(false);
-      }, 0);
-    }
-    return () => clearTimeout(timer);
-  }, [loading, grid, snakesState, isSnakesMode]);
-
-  useEffect(() => {
-    if (isSnakesMode && !snakesState && roomId) {
-      const syncTimeout = setTimeout(() => {
-        const currentState = useGameStore.getState();
-        if (!currentState.snakesState && currentState.room) {
-          console.warn("[SnakesAndLadders] Host sync timeout, generating local board fallback...");
-          const activePids = Object.values(currentState.room.players)
-            .filter(p => !p.isSpectator && p.status !== "left")
-            .map(p => p.id);
-          const fallbackPositions: Record<string, number> = {};
-          activePids.forEach(pId => {
-            fallbackPositions[pId] = 1;
-          });
-          currentState.updateSnakesState({
-            currentTurnUserId: activePids[0] || currentState.userId || "",
-            turnOrder: activePids,
-            diceValue: null,
-            isRolling: false,
-            playerPositions: fallbackPositions,
-            winnerId: null,
-          });
-        }
-      }, 1500);
-
-      return () => clearTimeout(syncTimeout);
-    }
-  }, [isSnakesMode, snakesState, roomId]);
-
-  if (loading) {
-    return <div className="min-h-screen flex items-center justify-center bg-background text-foreground">Loading room...</div>;
-  }
-
   const handlePromoteAndCreateBoard = async () => {
     const currentUid = userId || getOrCreateUserId();
-    const currentUsername = username || (typeof window !== "undefined" ? localStorage.getItem("sudoku_username") || "Player" : "Player");
-    if (typeof window !== "undefined") {
-      sessionStorage.setItem("sudoku_host_room_" + roomId, "1");
-    }
+    const currentUsername = username || 'Player';
+    sessionStorage.setItem(`sudoku_host_room_${roomId}`, '1');
+
     const newRoom = {
       id: roomId,
       code: roomId,
       hostId: currentUid,
-      difficulty: ("medium" as Difficulty),
-      mode: ("collaborative" as GameMode),
+      difficulty: ('medium' as Difficulty),
+      mode: ('collaborative' as GameMode),
       maxPlayers: 4,
-      status: "playing" as const,
+      status: 'playing' as const,
       players: {
         [currentUid]: {
           id: currentUid,
           username: currentUsername,
-          color: "#3b82f6",
+          color: '#3b82f6',
           isHost: true,
           score: 0,
           hints: 3,
-          status: "online" as const,
+          status: 'online' as const,
         },
       },
       createdAt: Date.now(),
@@ -604,66 +180,84 @@ export default function RoomPage() {
     useGameStore.getState().setRoom(newRoom);
 
     try {
-      const res = await fetch("/api/game/create-room", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ difficulty: "medium" }),
+      toast.loading('Membuat puzzle baru...', { id: 'create-board' });
+      const res = await fetch('/api/game/create-room', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ difficulty: 'medium' }),
       });
       const data = await res.json();
       if (data.initialGrid && data.solutionToken) {
         useGameStore.getState().setGameData(data.initialGrid, data.solutionToken);
-        toast.success("Berhasil membuat papan baru dan diangkat menjadi Host!");
         broadcastNextGame(data.initialGrid, data.solutionToken, newRoom);
+        toast.success('Kamu sekarang adalah Host room ini! 👑', { id: 'create-board' });
       }
-    } catch (e) {
-      console.error(e);
-      toast.error("Gagal membuat papan baru.");
+    } catch {
+      toast.error('Gagal membuat puzzle baru.', { id: 'create-board' });
     }
   };
 
-  // Tampilan Menunggu Host dengan opsi sinkronisasi ulang
-  if (isSnakesMode ? !snakesState : !grid) {
+  const snakesState = useGameStore(state => state.snakesState);
+  const isSnakesMode = room?.mode === 'snakes_and_ladders';
+  const hasBoardData = isSnakesMode ? Boolean(snakesState) : Boolean(grid);
+
+  // Tampilan Menunggu Host / Stuck Loading Fallback
+  if (loading || !hasBoardData) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-6 text-center space-y-4 max-w-lg mx-auto">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-6 text-center space-y-5 max-w-lg mx-auto">
         <div className="space-y-3 w-full">
-          <div className="w-10 h-10 border-3 border-foreground border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-          <h2 className="text-xl font-bold">Menghubungkan ke Papan Game...</h2>
+          <div className="w-12 h-12 border-4 border-foreground border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+
+          <h2 className="text-xl font-bold">
+            {isTrulyOffline ? 'Room Offline / Host Tidak Ditemukan' : 'Menghubungkan ke Room...'}
+          </h2>
+
           <p className="text-secondary text-sm">
-            Menyinkronkan data puzzle dari host untuk room <span className="font-mono font-semibold text-foreground">{roomId}</span>
+            {isTrulyOffline
+              ? `Room ${roomId} tidak aktif atau Host belum membuat papan permainan.`
+              : `Menyinkronkan data puzzle dari host untuk room ${roomId}...`}
           </p>
-          <div className="text-xs font-mono bg-card border border-border p-2.5 rounded-lg text-left text-secondary space-y-1">
-            <div>Status Realtime: <span className="font-bold text-foreground">{realtimeStatus}</span></div>
-            {isTrulyOffline && connectionError && (
-              <div className="text-red-400">Error: {connectionError}</div>
-            )}
-            {!room?.hostId && (
-              <div className="text-amber-400">Diagnostik: Belum menerima data Host dari WebSocket.</div>
+
+          {/* Banner Status Realtime */}
+          <div className="bg-card border border-border p-3.5 rounded-xl text-left font-mono text-xs space-y-1.5 shadow-sm">
+            <div className="flex justify-between items-center">
+              <span className="text-secondary">Status Realtime:</span>
+              <span className={`font-bold px-2 py-0.5 rounded text-[11px] ${
+                realtimeStatus === 'SUBSCRIBED' ? 'bg-green-500/10 text-green-500' : 'bg-amber-500/10 text-amber-500'
+              }`}>
+                {realtimeStatus}
+              </span>
+            </div>
+            {connectionError && (
+              <div className="text-red-400 font-semibold flex items-center gap-1.5 pt-1">
+                <AlertOctagon className="w-3.5 h-3.5 flex-shrink-0" />
+                {connectionError}
+              </div>
             )}
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-center gap-3 pt-2 w-full">
+        {/* Action Buttons */}
+        <div className="flex flex-wrap items-center justify-center gap-3 w-full pt-2">
           <Button
             variant="outline"
             size="sm"
             onClick={() => {
               reconnect();
               requestState();
-              toast.success("Meminta ulang data puzzle...");
+              toast.success('Mencoba sinkronisasi ulang...');
             }}
           >
-            <RotateCw className="w-4 h-4 mr-2" /> Sinkronkan Ulang
+            <RotateCw className="w-4 h-4 mr-2" /> Coba Lagi
           </Button>
 
-          {showFallbackButton && (
-            <Button
-              size="sm"
-              onClick={handlePromoteAndCreateBoard}
-              className="bg-green-600 hover:bg-green-700 text-white"
-            >
-              Buat Board Baru & Promosi Host
-            </Button>
-          )}
+          <Button
+            size="sm"
+            onClick={handlePromoteAndCreateBoard}
+            className="bg-green-600 hover:bg-green-700 text-white"
+          >
+            Jadikan Saya Host (Buat Soal)
+          </Button>
 
           <Button
             variant="ghost"
@@ -671,8 +265,29 @@ export default function RoomPage() {
             onClick={leaveRoom}
             className="text-red-500 hover:bg-red-500/10"
           >
-            <LogOut className="w-4 h-4 mr-2" /> Keluar
+            <LogOut className="w-4 h-4 mr-2" /> Keluar ke Beranda
           </Button>
+        </div>
+
+        {/* Live Debug Logs Accordion */}
+        <div className="w-full text-left pt-2">
+          <button
+            onClick={() => setShowLogs(!showLogs)}
+            className="text-xs text-secondary hover:text-foreground flex items-center gap-1.5 font-mono cursor-pointer mx-auto"
+          >
+            <Terminal className="w-3.5 h-3.5" />
+            {showLogs ? 'Sembunyikan Debug Logs' : 'Lihat Live Debug Logs'}
+          </button>
+
+          {showLogs && (
+            <div className="mt-3 bg-black text-green-400 font-mono text-[11px] p-3 rounded-xl border border-border/40 max-h-48 overflow-y-auto space-y-1">
+              {debugLogs.length === 0 ? (
+                <div className="text-zinc-500">Belum ada log aktif...</div>
+              ) : (
+                debugLogs.map((log, idx) => <div key={idx}>{log}</div>)
+              )}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -694,15 +309,25 @@ export default function RoomPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-2">
-            <span className="text-xs sm:text-sm font-medium">{username}</span>
-            <div className="w-7 h-7 rounded-full bg-secondary/20 flex items-center justify-center text-xs font-bold">
-              {username?.charAt(0).toUpperCase()}
-            </div>
-          </div>
-          <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(true)} className="p-1.5 h-8 w-8">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowLogs(!showLogs)}
+            className="h-8 px-2 text-xs font-mono text-secondary"
+            title="Toggle Debug Logs"
+          >
+            <Terminal className="w-4 h-4 mr-1" /> Logs
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsSettingsOpen(true)}
+            className="p-1.5 h-8 w-8"
+          >
             <Settings className="w-4 h-4" />
           </Button>
+
           <Button
             variant="outline"
             size="sm"
@@ -711,287 +336,50 @@ export default function RoomPage() {
             className="h-8 px-2.5 text-xs text-red-500 border-red-500/30 hover:bg-red-500/10"
           >
             <LogOut className="w-3.5 h-3.5 sm:mr-1.5" />
-            <span className="hidden sm:inline">
-              {isLeaving ? 'Leaving...' : 'Leave'}
-            </span>
+            <span className="hidden sm:inline">{isLeaving ? 'Leaving...' : 'Leave'}</span>
           </Button>
         </div>
       </header>
 
-      {/* BANNER STATUS KONEKSI */}
-      {!isSupabaseEnvValid && (
-        <div className="bg-red-500/10 border-b border-red-500/20 text-red-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center transition-all duration-300">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>
-            <strong>ENV NOT VALID:</strong> Environment Variables Supabase belum dipasang. Fitur multiplayer realtime mati.
-          </span>
-        </div>
-      )}
-
-      {/* BANNER OFFLINE STABIL */}
-      {isSupabaseEnvValid && isTrulyOffline && (
-        <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center transition-all duration-300">
-          <WifiOff className="w-4 h-4 flex-shrink-0" />
-          <span>
-            <strong>KONEKSI TERPUTUS:</strong> {connectionError || 'Tidak dapat terhubung ke server.'}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => reconnect()}
-            className="h-7 px-2.5 text-xs border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 ml-2"
-          >
-            Hubungkan Ulang
-          </Button>
-        </div>
-      )}
-
-      {/* Main Content */}
+      {/* Main Game Interface */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* Sidebar Left: Players & Chat */}
+        {/* Sidebar Left */}
         <div className="space-y-4 flex flex-col h-full lg:col-span-2">
-          <Card className="flex-shrink-0 flex flex-col overflow-hidden min-h-[250px] lg:min-h-0 lg:flex-1">
-            <div className="p-3 border-b border-border bg-background/50 flex items-center justify-between">
+          <Card className="p-3 border-b border-border bg-background/50">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="font-semibold text-sm flex items-center gap-2">
-                <Users className="w-4 h-4" /> Players
+                <Users className="w-4 h-4" /> Players ({Object.keys(room?.players || {}).length})
               </h2>
-              <span className="text-xs text-secondary bg-secondary/10 px-2 py-0.5 rounded-full">
-                {Object.keys(room?.players || {}).length} / {room?.maxPlayers || 4}
-              </span>
             </div>
-            <div className="p-3 overflow-y-auto flex-1 space-y-2 text-xs sm:text-sm">
+            <div className="space-y-2 text-xs sm:text-sm">
               {Object.values(room?.players || {}).map(p => (
                 <div key={p.id} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={`w-2.5 h-2.5 rounded-full ${p.status !== 'online' ? 'opacity-40' : ''}`}
-                      style={{ backgroundColor: p.status === 'online' ? p.color : '#9ca3af' }}
-                    />
-                    <span className={`font-medium ${p.status !== 'online' ? 'line-through text-secondary/60' : ''}`}>
-                      {p.username || 'Player'}
-                    </span>
-                    {p.isHost && (
-                      <span className="text-secondary text-xs">(Host)</span>
-                    )}
-                    {p.status === 'left' ? (
-                      <span className="text-red-500 font-semibold text-[11px] bg-red-500/10 px-1.5 py-0.5 rounded">
-                        ( Leave Room )
-                      </span>
-                    ) : p.status === 'disconnected' || p.status === 'offline' ? (
-                      <span className="text-amber-500 font-semibold text-[11px] bg-amber-500/10 px-1.5 py-0.5 rounded">
-                        ( Disconnect )
-                      </span>
-                    ) : null}
-                    {room?.mode === 'race' && (p.streak ?? 0) > 1 && (
-                      <span className="text-orange-500 font-bold text-[11px] bg-orange-500/10 px-1.5 py-0.5 rounded flex items-center gap-1">
-                        🔥 x{p.streak}
-                      </span>
-                    )}
-                  </div>
-                  <span className="font-mono font-bold">
-                    {p.rank && p.rank > 0 ? (
-                      p.rank === 1 ? '🥇 1' :
-                      p.rank === 2 ? '🥈 2' :
-                      p.rank === 3 ? '🥉 3' : ''
-                    ) : room?.mode === 'competition' ? (
-                      `${p.progress ?? 0}%`
-                    ) : (
-                      p.score
-                    )}
-                  </span>
+                  <span className="font-medium">{p.username} {p.isHost ? '(Host)' : ''}</span>
+                  <span className="font-mono">{p.score}</span>
                 </div>
               ))}
             </div>
           </Card>
 
-          <Card className="flex-shrink-0 flex flex-col overflow-hidden h-[380px] w-full">
-            <div className="p-3 border-b border-border bg-background/50 flex-shrink-0">
-              <h2 className="font-semibold text-sm flex items-center justify-between w-full">
-                <div className="flex items-center gap-2">
-                  <MessageCircle className="w-4 h-4" /> Chat
-                </div>
-                {newMsgNotif && (
-                  <span className="text-xs bg-foreground text-background font-semibold px-2 py-0.5 rounded-full animate-pulse transition-opacity duration-300 flex items-center gap-1 shadow-sm">
-                    ✉️ +1
-                  </span>
-                )}
-              </h2>
+          {showLogs && (
+            <div className="bg-black text-green-400 font-mono text-[11px] p-3 rounded-xl border border-border/40 max-h-44 overflow-y-auto space-y-1">
+              <div className="text-zinc-500 font-bold border-b border-zinc-800 pb-1 mb-1">LIVE LOGS:</div>
+              {debugLogs.map((log, idx) => <div key={idx}>{log}</div>)}
             </div>
-            <div ref={chatContainerRef}
-              className="flex-1 p-3 flex flex-col overflow-y-auto space-y-2 text-xs sm:text-sm min-h-0">
-              {messages.length === 0 ? (
-                <div className="text-secondary italic text-center my-auto">No messages yet.</div>
-              ) : (
-                messages.map(msg => (
-                  <div key={msg.id} className="flex flex-col">
-                    <span className="font-semibold text-[11px] text-secondary">{msg.username}</span>
-                    <span className="bg-secondary/10 px-2.5 py-1 rounded-md w-fit max-w-full break-words text-xs">{msg.text}</span>
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="p-2.5 border-t border-border flex-shrink-0">
-              <form onSubmit={handleChatSubmit} className="flex items-center gap-2">
-                <textarea
-                  id="chat-textarea"
-                  value={chatInput}
-                  onChange={e => {
-                    setChatInput(e.target.value);
-                    e.target.style.height = '40px';
-                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
-                  }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleChatSubmit(e as unknown as React.FormEvent);
-                    }
-                  }}
-                  placeholder="Type a message..."
-                  className="flex-1 bg-background border border-border rounded-lg px-3 py-1.5 text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-foreground resize-none min-h-[40px] max-h-[120px] overflow-y-auto"
-                  rows={1}
-                />
-                <Button type="submit" size="sm" className="h-8 px-3 text-xs flex-shrink-0">
-                  Send
-                </Button>
-              </form>
-            </div>
-          </Card>
+          )}
         </div>
 
         {/* Center: Game Board */}
         <div className="lg:col-span-3 flex flex-col items-center justify-center">
-          <div className="w-full max-w-2xl flex flex-col items-center gap-6">
-            <div className="w-full flex justify-between items-end">
-              <div>
-                <h2 className="text-2xl font-bold">{room?.difficulty?.toUpperCase() || 'MEDIUM'}</h2>
-                {isGameCompleted && player?.isHost && (
-                  <Button onClick={handleOpenNextGameModal} className="mt-2 bg-green-600 hover:bg-green-700 text-white">
-                    Next Game
-                  </Button>
-                )}
-                {isGameCompleted && !player?.isHost && (
-                  <div className="mt-2 text-sm text-green-500 font-medium animate-pulse">
-                    Game selesai! Menunggu host...
-                  </div>
-                )}
-                <p className="text-secondary text-sm">Mode: {room?.mode || 'collaborative'}</p>
-              </div>
-
-              {/* Toggle Switch 2D / 3D */}
-              <div className="flex items-center bg-card border border-border p-1 rounded-xl gap-1 shadow-sm">
-                <button
-                  onClick={() => handleSetViewMode('2D')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    viewMode === '2D' || room?.mode === 'snakes_and_ladders'
-                      ? 'bg-foreground text-background shadow-xs'
-                      : 'text-secondary hover:text-foreground'
-                  }`}
-                >
-                  <GridIcon className="w-3.5 h-3.5" /> 2D
-                </button>
-
-                <button
-                  onClick={() => {
-                    if (room?.mode !== 'snakes_and_ladders') {
-                      handleSetViewMode('3D');
-                    }
-                  }}
-                  disabled={room?.mode === 'snakes_and_ladders'}
-                  title={room?.mode === 'snakes_and_ladders' ? 'Mode 3D Ular Tangga belum tersedia' : 'Mode 3D'}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    viewMode === '3D' && room?.mode !== 'snakes_and_ladders'
-                      ? 'bg-foreground text-background shadow-xs'
-                      : 'text-secondary hover:text-foreground'
-                  } ${room?.mode === 'snakes_and_ladders' ? 'opacity-40 cursor-not-allowed' : ''}`}
-                >
-                  <Box className="w-3.5 h-3.5" /> 3D
-                </button>
-              </div>
-            </div>
-
-            {/* Render Sesuai Mode Pilihan */}
-            {room?.mode === 'snakes_and_ladders' ? (
-              <SnakesAndLaddersBoard broadcastSnakesDiceRoll={broadcastSnakesDiceRoll} />
-            ) : viewMode === '3D' ? (
-              <SudokuBoard3D
-                broadcastMove={broadcastMove}
-                broadcastNote={broadcastNote}
-                broadcastCursor={broadcastCursor}
-                lockCell={lockCell}
-                locks={locks}
-                isPencilMode={isPencilMode}
-                isEraserMode={isEraserMode}
-              />
-            ) : (
-              <SudokuBoard
-                broadcastMove={broadcastMove}
-                broadcastNote={broadcastNote}
-                broadcastCursor={broadcastCursor}
-                lockCell={lockCell}
-                locks={locks}
-                isPencilMode={isPencilMode}
-                isEraserMode={isEraserMode}
-              />
-            )}
-
-            <div className="flex flex-col items-center">
-              <div className="text-2xl font-mono">{formatTime(elapsedTime)}</div>
-              <p className="text-secondary text-sm">Timer</p>
-            </div>
-
-            {/* CONTROLS (Hanya Ditampilkan Pada Mode Sudoku, Disembunyikan Pada Mode Ular Tangga) */}
-            {room?.mode !== 'snakes_and_ladders' && (
-              <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={handleHint} disabled={(room?.mode !== 'zen' && hintsRemaining <= 0) || isSpectator}>
-                    <Lightbulb className="w-4 h-4 mr-2" /> Hint {room?.mode === 'zen' ? '(∞)' : `(${hintsRemaining})`}
-                  </Button>
-                  <Button variant={isPencilMode ? "primary" : "outline"} size="sm" onClick={() => { setIsPencilMode(!isPencilMode); setIsEraserMode(false); }}>
-                    <Edit2 className="w-4 h-4 mr-2" /> Note
-                  </Button>
-                  {room?.mode === 'zen' && (
-                    <Button variant="outline" size="sm" onClick={handleAutoNote} disabled={isSpectator}>
-                      <Lightbulb className="w-4 h-4 mr-2" /> Auto Note
-                    </Button>
-                  )}
-                  <Button variant={isEraserMode ? "primary" : "outline"} size="sm" onClick={handleEraserClick}>
-                    <Eraser className="w-4 h-4 mr-2" /> Eraser
-                  </Button>
-                </div>
-
-                {/* NAVIGASI PANAH */}
-                <div className="flex items-center gap-2 bg-card p-1.5 rounded-xl border border-border mt-2">
-                  <span className="text-xs text-secondary font-medium px-1">Navigasi:</span>
-                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('left')} disabled={isSpectator}>
-                    <ArrowLeft className="w-4 h-4" />
-                  </Button>
-                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('up')} disabled={isSpectator}>
-                    <ArrowUp className="w-4 h-4" />
-                  </Button>
-                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('down')} disabled={isSpectator}>
-                    <ArrowDown className="w-4 h-4" />
-                  </Button>
-                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('right')} disabled={isSpectator}>
-                    <ArrowRight className="w-4 h-4" />
-                  </Button>
-                </div>
-
-                {/* NUMPAD ANGKA */}
-                <div className="flex flex-wrap justify-center gap-2 mt-2">
-                  {[1,2,3,4,5,6,7,8,9].map(n => (
-                    <button
-                      key={n}
-                      onClick={() => handleNumpadClick(n)}
-                      disabled={isSpectator}
-                      className="w-10 h-10 rounded-lg border border-border bg-card hover:bg-hover font-semibold text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-foreground disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                    >
-                      {n}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <SudokuBoard
+            broadcastMove={broadcastMove}
+            broadcastNote={broadcastNote}
+            broadcastCursor={broadcastCursor}
+            lockCell={lockCell}
+            locks={locks}
+            isPencilMode={false}
+            isEraserMode={false}
+          />
         </div>
       </main>
 
@@ -999,139 +387,27 @@ export default function RoomPage() {
       <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Settings">
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Tema Gelap (Dark Mode)</span>
-            <Button variant="outline" size="sm" onClick={toggleTheme}>
-              {theme === 'dark' ? 'Aktif' : 'Nonaktif'}
+            <span className="text-sm font-medium">Theme</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const nextTheme = theme === 'dark' ? 'light' : 'dark';
+                setTheme(nextTheme);
+                if (nextTheme === 'dark') {
+                  document.documentElement.classList.add('dark');
+                } else {
+                  document.documentElement.classList.remove('dark');
+                }
+              }}
+            >
+              {theme === 'dark' ? 'Dark' : 'Light'}
             </Button>
           </div>
           <div className="flex justify-end pt-4 border-t border-border">
             <Button onClick={() => setIsSettingsOpen(false)}>Close</Button>
           </div>
         </div>
-      </Modal>
-
-      {/* Next Game Modal for Host */}
-      <Modal
-        isOpen={isNextGameModalOpen}
-        onClose={() => setIsNextGameModalOpen(false)}
-        title="Game Berikutnya"
-      >
-        {nextGameStep === 'confirm' ? (
-          <div className="space-y-6 text-center">
-            <p className="text-sm text-foreground">
-              Lanjut permainan tanpa ada perubahan?
-            </p>
-            <div className="flex gap-3 justify-center">
-              <Button
-                fullWidth
-                onClick={() => {
-                  if (room) {
-                    executeStartNextGame(room.difficulty, room.mode, room.maxPlayers);
-                  }
-                }}
-              >
-                Yes
-              </Button>
-              <Button
-                variant="outline"
-                fullWidth
-                onClick={() => {
-                  setNextGameStep('settings');
-                  setIsApplied(false);
-                }}
-              >
-                No
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <p className="text-xs text-secondary mb-2">
-              Pilih opsi pengaturan permainan yang ingin diubah:
-            </p>
-            <div>
-              <label className="text-sm font-medium block mb-1.5">Kesulitan (Difficulty)</label>
-              <select
-                value={nextDifficulty}
-                onChange={(e) => {
-                  setNextDifficulty(e.target.value as Difficulty);
-                  setIsApplied(false);
-                }}
-                className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
-              >
-                <option value="easy">Easy (Mudah)</option>
-                <option value="medium">Medium (Sedang)</option>
-                <option value="hard">Hard (Sulit)</option>
-                <option value="expert">Expert (Pakar)</option>
-                <option value="evil">Evil (Ekstrem)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium block mb-1.5">Mode Permainan</label>
-              <select
-                value={nextMode}
-                onChange={(e) => {
-                  setNextMode(e.target.value as GameMode);
-                  setIsApplied(false);
-                }}
-                className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
-              >
-                <option value="collaborative">Collaborative (Kerjasama)</option>
-                <option value="competition">Competition (Persaingan)</option>
-                <option value="classic">Classic (Klasik)</option>
-                <option value="race">Race (Balapan Skor)</option>
-                <option value="zen">Zen (Santai)</option>
-                <option value="snakes_and_ladders">Snakes & Ladders (Ular Tangga)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium block mb-1.5">Maksimal Pemain</label>
-              <select
-                value={nextMaxPlayers}
-                onChange={(e) => {
-                  setNextMaxPlayers(Number(e.target.value));
-                  setIsApplied(false);
-                }}
-                className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
-              >
-                <option value={2}>2 Pemain</option>
-                <option value={4}>4 Pemain</option>
-                <option value={6}>6 Pemain</option>
-                <option value={8}>8 Pemain</option>
-              </select>
-            </div>
-
-            <div className="pt-4 flex gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setNextGameStep('confirm')}
-                className="w-1/3"
-              >
-                Kembali
-              </Button>
-              {!isApplied ? (
-                <Button
-                  className="flex-1"
-                  onClick={() => {
-                    setIsApplied(true);
-                    toast.success('Pengaturan diterapkan! Klik Next Game untuk memulai.');
-                  }}
-                >
-                  Apply
-                </Button>
-              ) : (
-                <Button
-                  className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                  onClick={() => executeStartNextGame(nextDifficulty, nextMode, nextMaxPlayers)}
-                >
-                  Next Game
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
       </Modal>
     </div>
   );
