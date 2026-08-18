@@ -365,10 +365,8 @@ export default function RoomPage() {
       .catch(err => console.error('Failed to initialize room data:', err));
     }
 
-    const forceReadyTimer = setTimeout(() => {
-      setLoading(false);
-    }, 1000);
-    return () => clearTimeout(forceReadyTimer);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(false);
   }, [roomId, router, setUserInfo, enterRoom]);
 
   const copyRoomCode = () => {

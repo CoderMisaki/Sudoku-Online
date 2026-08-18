@@ -754,7 +754,7 @@ export function useRealtime(roomId: string) {
               event: 'request_state',
               payload: { userId: currentUserId, username: currentUsername }
             });
-          }, 1500);
+          }, 300);
 
           // Orphan room detection: Jika dalam 2.5 detik belum ada state dan tidak ada host di presence,
           // angkat diri sendiri sebagai host jika belum ada room.
@@ -817,7 +817,7 @@ export function useRealtime(roomId: string) {
                   .catch((e) => console.error('Failed to create fallback room data:', e));
               }
             }
-          }, 1000);
+          }, 800);
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           const rawError = err?.message || (status === 'TIMED_OUT' ? 'Server Supabase tidak merespons (Timeout).' : 'Koneksi WebSocket terputus.');
 
