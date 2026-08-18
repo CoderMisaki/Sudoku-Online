@@ -16,13 +16,16 @@ export function useRealtime(roomId: string) {
   const retryRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const offlineGraceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hostCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCountRef = useRef<number>(0);
   const isMountedRef = useRef(true);
 
   const userId = useGameStore((state) => state.userId);
   const username = useGameStore((state) => state.username);
   const grid = useGameStore((state) => state.grid);
+  const snakesState = useGameStore((state) => state.snakesState);
   const prevGridRef = useRef(grid);
+  const prevSnakesStateRef = useRef(snakesState);
 
   const userIdRef = useRef(userId);
   const usernameRef = useRef(username);
@@ -62,12 +65,15 @@ export function useRealtime(roomId: string) {
 
   const connectRef = useRef<((immediate?: boolean) => void) | null>(null);
 
-  // Sync state dari Host ketika grid & solutionToken sudah siap
+  // Sync state dari Host ketika grid/solutionToken atau snakesState baru saja siap
   useEffect(() => {
-    if (grid && !prevGridRef.current && channelRef.current) {
-      const store = useGameStore.getState();
-      const currentUid = userIdRef.current || store.userId;
-      if (store.room && store.room.hostId === currentUid && store.solutionToken) {
+    const store = useGameStore.getState();
+    const currentUid = userIdRef.current || store.userId;
+    if (store.room && store.room.hostId === currentUid && channelRef.current) {
+      const isGridJustReady = Boolean(grid && !prevGridRef.current && store.solutionToken);
+      const isSnakesJustReady = Boolean(snakesState && !prevSnakesStateRef.current);
+
+      if (isGridJustReady || isSnakesJustReady) {
         channelRef.current.send({
           type: 'broadcast',
           event: 'sync_state',
@@ -75,6 +81,7 @@ export function useRealtime(roomId: string) {
             room: store.room,
             grid: store.grid,
             solutionToken: store.solutionToken,
+            snakesState: store.snakesState,
             messages: store.messages,
             senderId: currentUid
           }
@@ -82,7 +89,8 @@ export function useRealtime(roomId: string) {
       }
     }
     prevGridRef.current = grid;
-  }, [grid]);
+    prevSnakesStateRef.current = snakesState;
+  }, [grid, snakesState]);
 
   const connectChannel = useCallback((immediate: boolean = false) => {
     const currentUserId = userIdRef.current || (typeof window !== 'undefined' ? getOrCreateUserId() : '');
@@ -342,6 +350,23 @@ export function useRealtime(roomId: string) {
           }
         });
         handlePresenceChange();
+
+        // Ketika ada player baru bergabung, jika saya adalah Host, langsung kirim sync_state
+        const store = useGameStore.getState();
+        if (store.room && store.room.hostId === currentUserId) {
+          channel.send({
+            type: 'broadcast',
+            event: 'sync_state',
+            payload: {
+              room: store.room,
+              grid: store.grid,
+              solutionToken: store.solutionToken,
+              snakesState: store.snakesState,
+              messages: store.messages,
+              senderId: currentUserId,
+            },
+          });
+        }
       })
       .on('presence', { event: 'leave' }, (payload: { leftPresences?: Array<{ user_id?: string; username?: string; status?: string }> }) => {
         const store = useGameStore.getState();
@@ -685,6 +710,23 @@ export function useRealtime(roomId: string) {
             payload: { userId: currentUserId, username: currentUsername }
           });
 
+          // PENTING: Jika saya adalah Host, langsung kirim sync_state saat berhasil subscribe
+          const store = useGameStore.getState();
+          if (store.room && store.room.hostId === currentUserId) {
+            channel.send({
+              type: 'broadcast',
+              event: 'sync_state',
+              payload: {
+                room: store.room,
+                grid: store.grid,
+                solutionToken: store.solutionToken,
+                snakesState: store.snakesState,
+                messages: store.messages,
+                senderId: currentUserId,
+              },
+            });
+          }
+
           if (retryRef.current) clearInterval(retryRef.current);
           let attempts = 0;
 
@@ -693,10 +735,14 @@ export function useRealtime(roomId: string) {
               if (retryRef.current) clearInterval(retryRef.current);
               return;
             }
-            const currentGrid = useGameStore.getState().grid;
-            const currentToken = useGameStore.getState().solutionToken;
+            const st = useGameStore.getState();
+            const isSnakesMode = st.room?.mode === 'snakes_and_ladders';
+            const hasState = isSnakesMode
+              ? Boolean(st.snakesState)
+              : Boolean(st.grid && st.solutionToken);
+
             attempts += 1;
-            if ((currentGrid && currentToken) || attempts >= 8) {
+            if (hasState || attempts >= 8) {
               if (retryRef.current) {
                 clearInterval(retryRef.current);
                 retryRef.current = null;
@@ -709,6 +755,69 @@ export function useRealtime(roomId: string) {
               payload: { userId: currentUserId, username: currentUsername }
             });
           }, 1500);
+
+          // Orphan room detection: Jika dalam 2.5 detik belum ada state dan tidak ada host di presence,
+          // angkat diri sendiri sebagai host jika belum ada room.
+          if (hostCheckTimerRef.current) clearTimeout(hostCheckTimerRef.current);
+          hostCheckTimerRef.current = setTimeout(() => {
+            if (!isMountedRef.current) return;
+            const currentStore = useGameStore.getState();
+            const isSnakes = currentStore.room?.mode === 'snakes_and_ladders';
+            const stateLoaded = isSnakes ? Boolean(currentStore.snakesState) : Boolean(currentStore.grid);
+
+            if (!stateLoaded && !currentStore.room) {
+              const presence = channel.presenceState();
+              let hostFoundInPresence = false;
+              Object.values(presence).flat().forEach((p: Record<string, unknown>) => {
+                if (p?.user_id && p.user_id === currentStore.room?.hostId) {
+                  hostFoundInPresence = true;
+                }
+              });
+
+              if (!hostFoundInPresence) {
+                console.log('[Orphan Room] No active host found in room. Promoting self to Host.');
+                if (typeof window !== 'undefined') {
+                  sessionStorage.setItem(`sudoku_host_room_${roomId}`, '1');
+                }
+                const newRoom: RoomState = {
+                  id: roomId,
+                  code: roomId,
+                  hostId: currentUserId,
+                  difficulty: 'medium',
+                  mode: 'collaborative',
+                  maxPlayers: 4,
+                  status: 'playing',
+                  players: {
+                    [currentUserId]: {
+                      id: currentUserId,
+                      username: currentUsername,
+                      color: PLAYER_COLORS[0],
+                      isHost: true,
+                      score: 0,
+                      hints: 3,
+                      status: 'online',
+                    },
+                  },
+                  createdAt: Date.now(),
+                  startedAt: Date.now(),
+                };
+                currentStore.setRoom(newRoom);
+
+                fetch('/api/game/create-room', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ difficulty: 'medium' }),
+                })
+                  .then((res) => res.json())
+                  .then((data) => {
+                    if (data.initialGrid && data.solutionToken) {
+                      currentStore.setGameData(data.initialGrid, data.solutionToken);
+                    }
+                  })
+                  .catch((e) => console.error('Failed to create fallback room data:', e));
+              }
+            }
+          }, 2500);
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           const rawError = err?.message || (status === 'TIMED_OUT' ? 'Server Supabase tidak merespons (Timeout).' : 'Koneksi WebSocket terputus.');
 
@@ -908,6 +1017,10 @@ export function useRealtime(roomId: string) {
     return () => {
       isMountedRef.current = false;
       clearTimeout(initialConnectTimeout);
+      if (hostCheckTimerRef.current) {
+        clearTimeout(hostCheckTimerRef.current);
+        hostCheckTimerRef.current = null;
+      }
       window.removeEventListener('online', handleInstantReconnect);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('focus', handleInstantReconnect);
@@ -1134,6 +1247,18 @@ export function useRealtime(roomId: string) {
     });
   };
 
+  const requestState = useCallback(() => {
+    const uid = userIdRef.current || (typeof window !== 'undefined' ? getOrCreateUserId() : '');
+    const uname = usernameRef.current || (typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') || 'Player' : 'Player');
+    if (channelRef.current && uid) {
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'request_state',
+        payload: { userId: uid, username: uname }
+      });
+    }
+  }, []);
+
   return {
     broadcastCursor,
     broadcastMove,
@@ -1144,6 +1269,7 @@ export function useRealtime(roomId: string) {
     broadcastNextGame,
     broadcastLeaveRoom,
     broadcastSnakesDiceRoll,
+    requestState,
     realtimeStatus,
     isTrulyOffline,
     connectionError,

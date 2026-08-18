@@ -104,6 +104,7 @@ export default function RoomPage() {
     broadcastNextGame,
     broadcastLeaveRoom,
     broadcastSnakesDiceRoll,
+    requestState,
 
     isTrulyOffline,
     connectionError,
@@ -364,7 +365,7 @@ export default function RoomPage() {
 
     const forceReadyTimer = setTimeout(() => {
       setLoading(false);
-    }, 2000);
+    }, 1000);
     return () => clearTimeout(forceReadyTimer);
   }, [roomId, router, setUserInfo, enterRoom]);
 
@@ -575,6 +576,7 @@ export default function RoomPage() {
             size="sm"
             onClick={() => {
               reconnect();
+              requestState();
               toast.success('Meminta ulang data puzzle...');
             }}
           >
