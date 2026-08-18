@@ -817,7 +817,7 @@ export function useRealtime(roomId: string) {
                   .catch((e) => console.error('Failed to create fallback room data:', e));
               }
             }
-          }, 2500);
+          }, 1000);
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           const rawError = err?.message || (status === 'TIMED_OUT' ? 'Server Supabase tidak merespons (Timeout).' : 'Koneksi WebSocket terputus.');
 

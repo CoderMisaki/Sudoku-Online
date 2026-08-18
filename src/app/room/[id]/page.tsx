@@ -43,6 +43,7 @@ export default function RoomPage() {
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [isPencilMode, setIsPencilMode] = useState(false);
   const [isEraserMode, setIsEraserMode] = useState(false);
+  const [showFallbackButton, setShowFallbackButton] = useState(false);
 
   // Modal Next Game State
   const [isNextGameModalOpen, setIsNextGameModalOpen] = useState(false);
@@ -106,6 +107,7 @@ export default function RoomPage() {
     broadcastSnakesDiceRoll,
     requestState,
 
+    realtimeStatus,
     isTrulyOffline,
     connectionError,
     reconnect
@@ -523,8 +525,23 @@ export default function RoomPage() {
     }
   }, [isEraserMode, selectedCell, userId, broadcastMove, locks, isSpectator]);
 
+
   const snakesState = useGameStore(state => state.snakesState);
   const isSnakesMode = room?.mode === "snakes_and_ladders";
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (!loading && (isSnakesMode ? !snakesState : !grid)) {
+      timer = setTimeout(() => {
+        setShowFallbackButton(true);
+      }, 3000);
+    } else {
+      timer = setTimeout(() => {
+        setShowFallbackButton(false);
+      }, 0);
+    }
+    return () => clearTimeout(timer);
+  }, [loading, grid, snakesState, isSnakesMode]);
 
   useEffect(() => {
     if (isSnakesMode && !snakesState && roomId) {
@@ -558,30 +575,97 @@ export default function RoomPage() {
     return <div className="min-h-screen flex items-center justify-center bg-background text-foreground">Loading room...</div>;
   }
 
+  const handlePromoteAndCreateBoard = async () => {
+    const currentUid = userId || getOrCreateUserId();
+    const currentUsername = username || (typeof window !== "undefined" ? localStorage.getItem("sudoku_username") || "Player" : "Player");
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("sudoku_host_room_" + roomId, "1");
+    }
+    const newRoom = {
+      id: roomId,
+      code: roomId,
+      hostId: currentUid,
+      difficulty: ("medium" as Difficulty),
+      mode: ("collaborative" as GameMode),
+      maxPlayers: 4,
+      status: "playing" as const,
+      players: {
+        [currentUid]: {
+          id: currentUid,
+          username: currentUsername,
+          color: "#3b82f6",
+          isHost: true,
+          score: 0,
+          hints: 3,
+          status: "online" as const,
+        },
+      },
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+    };
+    useGameStore.getState().setRoom(newRoom);
+
+    try {
+      const res = await fetch("/api/game/create-room", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ difficulty: "medium" }),
+      });
+      const data = await res.json();
+      if (data.initialGrid && data.solutionToken) {
+        useGameStore.getState().setGameData(data.initialGrid, data.solutionToken);
+        toast.success("Berhasil membuat papan baru dan diangkat menjadi Host!");
+        broadcastNextGame(data.initialGrid, data.solutionToken, newRoom);
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error("Gagal membuat papan baru.");
+    }
+  };
+
   // Tampilan Menunggu Host dengan opsi sinkronisasi ulang
   if (isSnakesMode ? !snakesState : !grid) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-6 text-center space-y-4">
-        <div className="space-y-2">
-          <div className="w-10 h-10 border-3 border-foreground border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-6 text-center space-y-4 max-w-lg mx-auto">
+        <div className="space-y-3 w-full">
+          <div className="w-10 h-10 border-3 border-foreground border-t-transparent rounded-full animate-spin mx-auto mb-2" />
           <h2 className="text-xl font-bold">Menghubungkan ke Papan Game...</h2>
           <p className="text-secondary text-sm">
             Menyinkronkan data puzzle dari host untuk room <span className="font-mono font-semibold text-foreground">{roomId}</span>
           </p>
+          <div className="text-xs font-mono bg-card border border-border p-2.5 rounded-lg text-left text-secondary space-y-1">
+            <div>Status Realtime: <span className="font-bold text-foreground">{realtimeStatus}</span></div>
+            {isTrulyOffline && connectionError && (
+              <div className="text-red-400">Error: {connectionError}</div>
+            )}
+            {!room?.hostId && (
+              <div className="text-amber-400">Diagnostik: Belum menerima data Host dari WebSocket.</div>
+            )}
+          </div>
         </div>
 
-        <div className="flex gap-3 pt-2">
+        <div className="flex flex-wrap items-center justify-center gap-3 pt-2 w-full">
           <Button
             variant="outline"
             size="sm"
             onClick={() => {
               reconnect();
               requestState();
-              toast.success('Meminta ulang data puzzle...');
+              toast.success("Meminta ulang data puzzle...");
             }}
           >
             <RotateCw className="w-4 h-4 mr-2" /> Sinkronkan Ulang
           </Button>
+
+          {showFallbackButton && (
+            <Button
+              size="sm"
+              onClick={handlePromoteAndCreateBoard}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              Buat Board Baru & Promosi Host
+            </Button>
+          )}
 
           <Button
             variant="ghost"
