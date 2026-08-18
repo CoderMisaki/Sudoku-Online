@@ -48,7 +48,22 @@ export default function RoomPage() {
   const [isNextGameModalOpen, setIsNextGameModalOpen] = useState(false);
   const [nextGameStep, setNextGameStep] = useState<'confirm' | 'settings'>('confirm');
   const [isApplied, setIsApplied] = useState(false);
-  const [viewMode, setViewMode] = useState<'2D' | '3D'>('3D');
+  const [viewMode, setViewMode] = useState<'2D' | '3D'>(() => {
+    if (typeof window !== "undefined") {
+      const savedMode = localStorage.getItem("sudoku_view_3d");
+      if (savedMode !== null) {
+        return savedMode === "true" ? "3D" : "2D";
+      }
+    }
+    return "2D";
+  });
+
+  const handleSetViewMode = (mode: '2D' | '3D') => {
+    setViewMode(mode);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("sudoku_view_3d", String(mode === "3D"));
+    }
+  };
 
   const [nextDifficulty, setNextDifficulty] = useState<Difficulty>('medium');
   const [nextMode, setNextMode] = useState<GameMode>('collaborative');
@@ -322,6 +337,17 @@ export default function RoomPage() {
         startedAt: Date.now(),
       });
 
+      if (mode === "snakes_and_ladders") {
+        currentState.updateSnakesState({
+          currentTurnUserId: storedUserId,
+          turnOrder: [storedUserId],
+          diceValue: null,
+          isRolling: false,
+          playerPositions: { [storedUserId]: 1 },
+          winnerId: null,
+        });
+      }
+
       fetch('/api/game/create-room', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -336,8 +362,10 @@ export default function RoomPage() {
       .catch(err => console.error('Failed to initialize room data:', err));
     }
 
-    const t = setTimeout(() => setLoading(false), 0);
-    return () => clearTimeout(t);
+    const forceReadyTimer = setTimeout(() => {
+      setLoading(false);
+    }, 2000);
+    return () => clearTimeout(forceReadyTimer);
   }, [roomId, router, setUserInfo, enterRoom]);
 
   const copyRoomCode = () => {
@@ -494,12 +522,43 @@ export default function RoomPage() {
     }
   }, [isEraserMode, selectedCell, userId, broadcastMove, locks, isSpectator]);
 
+  const snakesState = useGameStore(state => state.snakesState);
+  const isSnakesMode = room?.mode === "snakes_and_ladders";
+
+  useEffect(() => {
+    if (isSnakesMode && !snakesState && roomId) {
+      const syncTimeout = setTimeout(() => {
+        const currentState = useGameStore.getState();
+        if (!currentState.snakesState && currentState.room) {
+          console.warn("[SnakesAndLadders] Host sync timeout, generating local board fallback...");
+          const activePids = Object.values(currentState.room.players)
+            .filter(p => !p.isSpectator && p.status !== "left")
+            .map(p => p.id);
+          const fallbackPositions: Record<string, number> = {};
+          activePids.forEach(pId => {
+            fallbackPositions[pId] = 1;
+          });
+          currentState.updateSnakesState({
+            currentTurnUserId: activePids[0] || currentState.userId || "",
+            turnOrder: activePids,
+            diceValue: null,
+            isRolling: false,
+            playerPositions: fallbackPositions,
+            winnerId: null,
+          });
+        }
+      }, 1500);
+
+      return () => clearTimeout(syncTimeout);
+    }
+  }, [isSnakesMode, snakesState, roomId]);
+
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center bg-background text-foreground">Loading room...</div>;
   }
 
   // Tampilan Menunggu Host dengan opsi sinkronisasi ulang
-  if (!grid) {
+  if (isSnakesMode ? !snakesState : !grid) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-6 text-center space-y-4">
         <div className="space-y-2">
@@ -737,7 +796,7 @@ export default function RoomPage() {
               {/* Toggle Switch 2D / 3D */}
               <div className="flex items-center bg-card border border-border p-1 rounded-xl gap-1 shadow-sm">
                 <button
-                  onClick={() => setViewMode('2D')}
+                  onClick={() => handleSetViewMode('2D')}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                     viewMode === '2D' || room?.mode === 'snakes_and_ladders'
                       ? 'bg-foreground text-background shadow-xs'
@@ -750,7 +809,7 @@ export default function RoomPage() {
                 <button
                   onClick={() => {
                     if (room?.mode !== 'snakes_and_ladders') {
-                      setViewMode('3D');
+                      handleSetViewMode('3D');
                     }
                   }}
                   disabled={room?.mode === 'snakes_and_ladders'}
