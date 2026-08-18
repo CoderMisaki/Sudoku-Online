@@ -113,6 +113,62 @@ export function useRealtime(roomId: string) {
       setConnectionError(null);
     }
 
+    const checkAndMigrateHost = (leftOrDisconnectedUserId: string, currentChan: RealtimeChannel | null) => {
+      const store = useGameStore.getState();
+      if (!store.room || store.room.hostId !== leftOrDisconnectedUserId) return;
+
+      const currentUid = userIdRef.current || store.userId;
+      const allPlayers = Object.values(store.room.players);
+      const remainingPlayers = allPlayers.filter(
+        (p) => p.id !== leftOrDisconnectedUserId && p.status !== "left"
+      );
+
+      if (remainingPlayers.length > 0) {
+        const newHost = remainingPlayers[0];
+        const isMeNewHost = newHost.id === currentUid;
+
+        console.log(`[Host Migration] Host ${leftOrDisconnectedUserId} left/disconnected. Promoting ${newHost.id} (${newHost.username}) to Host.`);
+
+        const updatedPlayers = { ...store.room.players };
+        Object.keys(updatedPlayers).forEach((pId) => {
+          updatedPlayers[pId] = {
+            ...updatedPlayers[pId],
+            isHost: pId === newHost.id,
+          };
+        });
+
+        const updatedRoom = {
+          ...store.room,
+          hostId: newHost.id,
+          players: updatedPlayers,
+        };
+
+        store.setRoom(updatedRoom);
+
+        if (isMeNewHost) {
+          if (typeof window !== "undefined") {
+            sessionStorage.setItem(`sudoku_host_room_${roomId}`, "1");
+          }
+          toast.success("Host keluar. Kamu diangkat menjadi Host baru! 👑", { id: "host-migration" });
+
+          if (currentChan) {
+            currentChan.send({
+              type: "broadcast",
+              event: "sync_state",
+              payload: {
+                room: updatedRoom,
+                grid: store.grid,
+                solutionToken: store.solutionToken,
+                snakesState: store.snakesState,
+                messages: store.messages,
+                senderId: newHost.id,
+              },
+            });
+          }
+        }
+      }
+    };
+
     const channel = supabase.channel(`room:${roomId}`, {
       config: {
         broadcast: { self: false, ack: true },
@@ -300,11 +356,14 @@ export function useRealtime(roomId: string) {
           if (presence.status === 'left') {
             markLeft(playerId);
             store.updatePlayer(playerId, { status: 'left' });
-            continue;
+          } else {
+            disconnectedIdsRef.current.add(playerId);
+            store.updatePlayer(playerId, { status: 'disconnected' });
           }
 
-          disconnectedIdsRef.current.add(playerId);
-            store.updatePlayer(playerId, { status: 'disconnected' });
+          if (store.room?.hostId === playerId) {
+            checkAndMigrateHost(playerId, channel);
+          }
         }
 
         handlePresenceChange(departedIds);
@@ -320,7 +379,9 @@ export function useRealtime(roomId: string) {
         }
 
         const latest = useGameStore.getState();
-        if (latest.room?.hostId === currentUserId && latest.room.players[pId]) {
+        if (latest.room?.hostId === pId) {
+          checkAndMigrateHost(pId, channel);
+        } else if (latest.room?.hostId === currentUserId && latest.room.players[pId]) {
           channel.send({
             type: 'broadcast',
             event: 'sync_state',
@@ -328,6 +389,7 @@ export function useRealtime(roomId: string) {
               room: latest.room,
               grid: latest.grid,
               solutionToken: latest.solutionToken,
+              snakesState: latest.snakesState,
               messages: latest.messages,
               senderId: currentUserId,
             },
@@ -357,7 +419,9 @@ export function useRealtime(roomId: string) {
         }
 
         const latest = useGameStore.getState();
-        if (latest.room?.hostId === currentUserId) {
+        if (latest.room?.hostId === pId) {
+          checkAndMigrateHost(pId, channel);
+        } else if (latest.room?.hostId === currentUserId) {
           channel.send({
             type: 'broadcast',
             event: 'sync_state',
@@ -365,6 +429,7 @@ export function useRealtime(roomId: string) {
               room: latest.room,
               grid: latest.grid,
               solutionToken: latest.solutionToken,
+              snakesState: latest.snakesState,
               messages: latest.messages,
               senderId: currentUserId,
             },
@@ -409,6 +474,7 @@ export function useRealtime(roomId: string) {
               room: updatedRoom,
               grid: store.grid,
               solutionToken: store.solutionToken,
+              snakesState: store.snakesState,
               messages: store.messages,
               senderId: currentUserId,
             },
@@ -475,6 +541,10 @@ export function useRealtime(roomId: string) {
 
         if (payload.room?.mode !== 'competition' && payload.grid && payload.solutionToken) {
           store.setGameData(payload.grid, payload.solutionToken);
+        }
+
+        if (payload.snakesState) {
+          store.updateSnakesState(payload.snakesState);
         }
 
         if (Array.isArray(payload.messages)) {
@@ -550,6 +620,20 @@ export function useRealtime(roomId: string) {
         } else if (payload?.grid && payload?.solutionToken) {
           store.startNextGame(payload.grid, payload.solutionToken);
         }
+      })
+      .on('broadcast', { event: 'snakes_dice_roll' }, ({ payload }) => {
+        if (!payload?.userId) return;
+        const store = useGameStore.getState();
+        const currentPositions = store.snakesState?.playerPositions || {};
+        store.updateSnakesState({
+          diceValue: payload.diceValue,
+          playerPositions: {
+            ...currentPositions,
+            [payload.userId]: payload.newPosition,
+          },
+          currentTurnUserId: payload.nextTurnUserId,
+          winnerId: payload.hasWon ? payload.userId : (store.snakesState?.winnerId || null),
+        });
       })
       .on('broadcast', { event: 'chat' }, ({ payload }) => {
         useGameStore.getState().addMessage(payload);
