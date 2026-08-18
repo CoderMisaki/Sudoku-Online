@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
-import { Grid, RoomState } from "../types/game";
+import { Grid, RoomState, ChatMessage } from '../types/game';
 import { RealtimeChannel } from '@supabase/supabase-js';
-import { ChatMessage } from '../types/game';
 import { moveRateLimiter } from '../utils/rateLimiter';
 import { getOrCreateUserId } from '../utils/uuid';
 import toast from 'react-hot-toast';
 
 const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+const MAX_SILENT_RETRIES = 5;
+const OFFLINE_GRACE_PERIOD_MS = 6000; // 6 detik grace period sebelum menampilkan UI offline
 
 export function useRealtime(roomId: string) {
   const channelRef = useRef<RealtimeChannel | null>(null);
   const retryRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const offlineGraceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCountRef = useRef<number>(0);
   const isMountedRef = useRef(true);
 
@@ -32,6 +34,9 @@ export function useRealtime(roomId: string) {
 
   const [locks, setLocks] = useState<Record<string, { userId: string; expiresAt: number }>>({});
   const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED'>('CONNECTING');
+
+  // State stabil untuk UI (Hanya bernilai true jika benar-benar offline setelah seluruh retry gagal)
+  const [isTrulyOffline, setIsTrulyOffline] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const intentionalLeaveRef = useRef(false);
@@ -95,17 +100,22 @@ export function useRealtime(roomId: string) {
       channelRef.current = null;
       try {
         supabase.removeChannel(oldChannel);
-      } catch { /* ignore error */ }
+      } catch { /* ignore */ }
     }
 
     setRealtimeStatus('CONNECTING');
     if (immediate) {
+      if (offlineGraceTimerRef.current) {
+        clearTimeout(offlineGraceTimerRef.current);
+        offlineGraceTimerRef.current = null;
+      }
+      setIsTrulyOffline(false);
       setConnectionError(null);
     }
 
     const channel = supabase.channel(`room:${roomId}`, {
       config: {
-        broadcast: { self: false, ack: false },
+        broadcast: { self: false, ack: true },
         presence: { key: currentUserId },
       },
     });
@@ -144,7 +154,6 @@ export function useRealtime(roomId: string) {
         });
       });
 
-      // Bersihkan cache disconnected/left untuk user yang terdeteksi aktif di onlineUserIds
       onlineUserIds.forEach((pid) => {
         disconnectedUserIds.delete(pid);
         disconnectedIdsRef.current.delete(pid);
@@ -172,7 +181,6 @@ export function useRealtime(roomId: string) {
       Object.keys(newPlayers).forEach((pId) => {
         const currentStatus = newPlayers[pId].status;
 
-        // 1. Prioritas Online: Jika user aktif, hapus status Disconnect / Leave
         if (onlineUserIds.has(pId)) {
           clearLeftMark(pId);
           disconnectedIdsRef.current.delete(pId);
@@ -183,7 +191,6 @@ export function useRealtime(roomId: string) {
           return;
         }
 
-        // 2. Explicit Leave Room
         if (currentStatus === 'left' || leftUserIds.has(pId) || hasLeftMark(pId)) {
           if (currentStatus !== 'left') {
             newPlayers[pId] = { ...newPlayers[pId], status: 'left' };
@@ -192,7 +199,6 @@ export function useRealtime(roomId: string) {
           return;
         }
 
-        // 3. Disconnected / Tab Minimize
         if (disconnectedUserIds.has(pId) || disconnectedIdsRef.current.has(pId) || !onlineUserIds.has(pId)) {
           if (currentStatus !== 'disconnected') {
             newPlayers[pId] = { ...newPlayers[pId], status: 'disconnected' };
@@ -298,7 +304,7 @@ export function useRealtime(roomId: string) {
           }
 
           disconnectedIdsRef.current.add(playerId);
-          store.updatePlayer(playerId, { status: 'disconnected' });
+            store.updatePlayer(playerId, { status: 'disconnected' });
         }
 
         handlePresenceChange(departedIds);
@@ -306,7 +312,6 @@ export function useRealtime(roomId: string) {
       .on('broadcast', { event: 'player_disconnected' }, ({ payload }) => {
         if (!payload?.userId || hasLeftMark(payload.userId)) return;
         const pId = payload.userId;
-
         disconnectedIdsRef.current.add(pId);
 
         const store = useGameStore.getState();
@@ -555,6 +560,12 @@ export function useRealtime(roomId: string) {
         setRealtimeStatus(status as 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED');
 
         if (status === 'SUBSCRIBED') {
+          // Bersihkan seluruh timer offline & reset error state secara mulus
+          if (offlineGraceTimerRef.current) {
+            clearTimeout(offlineGraceTimerRef.current);
+            offlineGraceTimerRef.current = null;
+          }
+          setIsTrulyOffline(false);
           setConnectionError(null);
           retryCountRef.current = 0;
 
@@ -576,7 +587,6 @@ export function useRealtime(roomId: string) {
 
           handlePresenceChange();
 
-          // Kirim broadcast online ke semua player seketika tersambung
           if (!intentionalLeaveRef.current && !isHidden) {
             channel.send({
               type: 'broadcast',
@@ -616,23 +626,37 @@ export function useRealtime(roomId: string) {
             });
           }, 1500);
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          const errorMsg = err?.message || (status === 'TIMED_OUT' ? 'Server Supabase tidak merespons (Timeout).' : 'Koneksi WebSocket terputus.');
-          setConnectionError(errorMsg);
+          const rawError = err?.message || (status === 'TIMED_OUT' ? 'Server Supabase tidak merespons (Timeout).' : 'Koneksi WebSocket terputus.');
 
+          // Mulai Grace Period Timer: Jangan langsung tampilkan error ke UI!
+          if (!offlineGraceTimerRef.current && !isTrulyOffline) {
+            offlineGraceTimerRef.current = setTimeout(() => {
+              offlineGraceTimerRef.current = null;
+              if (isMountedRef.current && !intentionalLeaveRef.current) {
+                setIsTrulyOffline(true);
+                setConnectionError(rawError);
+              }
+            }, OFFLINE_GRACE_PERIOD_MS);
+          }
+
+          // Silent Background Auto-Reconnect dengan Exponential Backoff
           if (!reconnectTimeoutRef.current && isMountedRef.current && !intentionalLeaveRef.current) {
-            const delay = Math.min(1000 * Math.pow(1.5, retryCountRef.current), 4000);
+            const delay = Math.min(800 * Math.pow(1.5, retryCountRef.current), 4500);
             retryCountRef.current += 1;
 
             reconnectTimeoutRef.current = setTimeout(() => {
               reconnectTimeoutRef.current = null;
-              if (isMountedRef.current && connectRef.current) {
+              if (isMountedRef.current && connectRef.current && retryCountRef.current <= MAX_SILENT_RETRIES) {
                 connectRef.current(false);
+              } else if (retryCountRef.current > MAX_SILENT_RETRIES) {
+                setIsTrulyOffline(true);
+                setConnectionError('Gagal menghubungkan otomatis setelah beberapa kali mencoba.');
               }
             }, delay);
           }
         }
       });
-  }, [roomId, clearLeftMark, hasLeftMark, markLeft]);
+  }, [roomId, clearLeftMark, hasLeftMark, markLeft, isTrulyOffline]);
 
   useEffect(() => {
     connectRef.current = connectChannel;
@@ -718,7 +742,16 @@ export function useRealtime(roomId: string) {
 
     const handleOffline = () => {
       setRealtimeStatus('CHANNEL_ERROR');
-      setConnectionError('Koneksi internet terputus.');
+      if (!offlineGraceTimerRef.current && !isTrulyOffline) {
+        offlineGraceTimerRef.current = setTimeout(() => {
+          offlineGraceTimerRef.current = null;
+          if (isMountedRef.current && !intentionalLeaveRef.current) {
+            setIsTrulyOffline(true);
+            setConnectionError('Koneksi internet perangkat terputus.');
+          }
+        }, 3000);
+      }
+
       const uid = userIdRef.current;
       const uname = usernameRef.current;
       const channel = channelRef.current;
@@ -802,6 +835,10 @@ export function useRealtime(roomId: string) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+      if (offlineGraceTimerRef.current) {
+        clearTimeout(offlineGraceTimerRef.current);
+        offlineGraceTimerRef.current = null;
+      }
       if (retryRef.current) {
         clearInterval(retryRef.current);
         retryRef.current = null;
@@ -813,7 +850,7 @@ export function useRealtime(roomId: string) {
         supabase.removeChannel(chan);
       }
     };
-  }, [connectChannel, clearLeftMark]);
+  }, [connectChannel, clearLeftMark, isTrulyOffline]);
 
   const broadcastCursor = (row: number, col: number) => {
     if (!channelRef.current || !userId) return;
@@ -962,6 +999,16 @@ export function useRealtime(roomId: string) {
     });
   };
 
+
+  const broadcastSnakesDiceRoll = (diceValue: number, newPosition: number, nextTurnUserId: string, hasWon: boolean) => {
+    if (!channelRef.current || !userId) return;
+    channelRef.current.send({
+      type: 'broadcast',
+      event: 'snakes_dice_roll',
+      payload: { userId, diceValue, newPosition, nextTurnUserId, hasWon },
+    });
+  };
+
   const broadcastLeaveRoom = async () => {
     intentionalLeaveRef.current = true;
     const uid = userIdRef.current;
@@ -1012,7 +1059,9 @@ export function useRealtime(roomId: string) {
     broadcastChat,
     broadcastNextGame,
     broadcastLeaveRoom,
+    broadcastSnakesDiceRoll,
     realtimeStatus,
+    isTrulyOffline,
     connectionError,
     reconnect: () => connectChannel(true),
   };

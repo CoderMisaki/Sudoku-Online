@@ -27,14 +27,16 @@ interface GameStore {
 
   // UI State
   messages: ChatMessage[];
+  snakesState?: import("../types/game").SnakesAndLaddersState;
   addMessage: (msg: ChatMessage) => void;
   setMessages: (msgs: ChatMessage[]) => void;
 
   selectedCell: { row: number; col: number } | null;
   setSelectedCell: (cell: { row: number; col: number } | null) => void;
   resetGame: () => void;
-  startNextGame: (newGrid: Grid, newSolutionToken: string) => void;
-  enterRoom: (roomId: string) => void;
+    startNextGame: (newGrid: Grid, newSolutionToken: string) => void;
+  updateSnakesState: (state: Partial<import("../types/game").SnakesAndLaddersState>) => void;
+      enterRoom: (roomId: string) => void;
 }
 
 export const useGameStore = create<GameStore>()(
@@ -370,14 +372,29 @@ export const useGameStore = create<GameStore>()(
       }),
 
       selectedCell: null,
+      snakesState: undefined,
       setSelectedCell: (cell) => set({ selectedCell: cell }),
-      resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null }),
+      updateSnakesState: (updates) => set((state) => ({ snakesState: { ...state.snakesState, ...updates } as import("../types/game").SnakesAndLaddersState })),
+      resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null, snakesState: undefined }),
 
       startNextGame: (newGrid, newSolutionToken) => set((state) => {
         if (!state.room) return state;
 
         // Reset skor, progress, dan peringkat untuk semua pemain
         const newPlayers = { ...state.room.players };
+        const isSnakesMode = state.room.mode === 'snakes_and_ladders';
+        let newSnakesState = state.snakesState;
+
+        if (isSnakesMode) {
+            newSnakesState = {
+                currentTurnUserId: Object.keys(newPlayers)[0] || '',
+                turnOrder: Object.keys(newPlayers),
+                diceValue: null,
+                isRolling: false,
+                playerPositions: Object.keys(newPlayers).reduce((acc, id) => ({ ...acc, [id]: 1 }), {}),
+                winnerId: null
+            };
+        }
         Object.keys(newPlayers).forEach(playerId => {
           newPlayers[playerId] = {
             ...newPlayers[playerId],
@@ -401,6 +418,7 @@ export const useGameStore = create<GameStore>()(
           grid: checkConflicts(newGrid),
           solutionToken: newSolutionToken,
           selectedCell: null,
+          snakesState: newSnakesState,
           // PERBAIKAN BUG: Tidak menghapus pesan chat (messages)
         };
       }),
@@ -414,6 +432,7 @@ export const useGameStore = create<GameStore>()(
           solutionToken: null,
           messages: [],
           selectedCell: null,
+          snakesState: undefined,
         });
       },
     }),
@@ -424,6 +443,7 @@ export const useGameStore = create<GameStore>()(
         grid: state.grid,
         solutionToken: state.solutionToken,
         messages: state.messages,
+        snakesState: state.snakesState,
       }),
     }
   )

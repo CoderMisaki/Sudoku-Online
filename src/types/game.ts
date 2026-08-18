@@ -1,5 +1,5 @@
 export type Difficulty = 'easy' | 'medium' | 'hard' | 'expert' | 'evil';
-export type GameMode = 'classic' | 'learning' | 'collaborative' | 'race' | 'zen' | 'competition';
+export type GameMode = 'classic' | 'learning' | 'collaborative' | 'race' | 'zen' | 'competition' | 'snakes_and_ladders';
 
 export interface Player {
   id: string;
@@ -51,4 +51,18 @@ export interface ChatMessage {
   username: string;
   text: string;
   timestamp: number;
+}
+
+export interface SnakeOrLadder {
+  from: number;
+  to: number;
+}
+
+export interface SnakesAndLaddersState {
+  currentTurnUserId: string;
+  turnOrder: string[];
+  diceValue: number | null;
+  isRolling: boolean;
+  playerPositions: Record<string, number>;
+  winnerId: string | null;
 }

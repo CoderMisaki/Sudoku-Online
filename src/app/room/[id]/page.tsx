@@ -9,7 +9,9 @@ import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
-import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle, ArrowLeft, ArrowUp, ArrowDown, ArrowRight, RotateCw } from 'lucide-react';
+import { SudokuBoard3D } from '../../../components/game/SudokuBoard3D';
+import { SnakesAndLaddersBoard } from '../../../components/game/SnakesAndLaddersBoard';
+import { Copy, Users, Settings, LogOut, CheckCircle2, Lightbulb, AlertTriangle, WifiOff, Edit2, Eraser, MessageCircle, ArrowLeft, ArrowUp, ArrowDown, ArrowRight, RotateCw, Box, Grid as GridIcon } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
@@ -46,6 +48,7 @@ export default function RoomPage() {
   const [isNextGameModalOpen, setIsNextGameModalOpen] = useState(false);
   const [nextGameStep, setNextGameStep] = useState<'confirm' | 'settings'>('confirm');
   const [isApplied, setIsApplied] = useState(false);
+  const [viewMode, setViewMode] = useState<'2D' | '3D'>('3D');
 
   const [nextDifficulty, setNextDifficulty] = useState<Difficulty>('medium');
   const [nextMode, setNextMode] = useState<GameMode>('collaborative');
@@ -85,14 +88,20 @@ export default function RoomPage() {
     broadcastChat,
     broadcastNextGame,
     broadcastLeaveRoom,
-    realtimeStatus,
+    broadcastSnakesDiceRoll,
+
+    isTrulyOffline,
     connectionError,
     reconnect
   } = useRealtime(roomId);
 
   const [chatInput, setChatInput] = useState('');
 
+  const snakesWinnerId = useGameStore(state => state.snakesState?.winnerId);
   const isGameCompleted = React.useMemo(() => {
+    if (room?.mode === 'snakes_and_ladders') {
+      return Boolean(snakesWinnerId);
+    }
     if (!grid) return false;
     for (let r = 0; r < 9; r++) {
       for (let c = 0; c < 9; c++) {
@@ -101,7 +110,7 @@ export default function RoomPage() {
       }
     }
     return true;
-  }, [grid]);
+  }, [grid, room?.mode, snakesWinnerId]);
 
   const solutionToken = useGameStore(state => state.solutionToken);
 
@@ -568,7 +577,7 @@ export default function RoomPage() {
 
       {/* BANNER STATUS KONEKSI */}
       {!isSupabaseEnvValid && (
-        <div className="bg-red-500/10 border-b border-red-500/20 text-red-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center">
+        <div className="bg-red-500/10 border-b border-red-500/20 text-red-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center transition-all duration-300">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
           <span>
             <strong>ENV NOT VALID:</strong> Environment Variables Supabase belum dipasang. Fitur multiplayer realtime mati.
@@ -577,11 +586,11 @@ export default function RoomPage() {
       )}
 
       {/* BANNER OFFLINE STABIL */}
-      {isSupabaseEnvValid && (realtimeStatus === 'CHANNEL_ERROR' || realtimeStatus === 'TIMED_OUT') && connectionError && (
-        <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center">
+      {isSupabaseEnvValid && isTrulyOffline && (
+        <div className="bg-amber-500/10 border-b border-amber-500/20 text-amber-500 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-center gap-2 text-center transition-all duration-300">
           <WifiOff className="w-4 h-4 flex-shrink-0" />
           <span>
-            <strong>KONEKSI TERPUTUS:</strong> {connectionError}
+            <strong>KONEKSI TERPUTUS:</strong> {connectionError || 'Tidak dapat terhubung ke server.'}
           </span>
           <Button
             variant="outline"
@@ -637,14 +646,12 @@ export default function RoomPage() {
                     )}
                   </div>
                   <span className="font-mono font-bold">
-                    {room?.mode === 'competition' ? (
-                      p.rank && p.rank > 0 ? (
-                        p.rank === 1 ? '🥇 1' :
-                        p.rank === 2 ? '🥈 2' :
-                        p.rank === 3 ? '🥉 3' : ''
-                      ) : (
-                        `${p.progress ?? 0}%`
-                      )
+                    {p.rank && p.rank > 0 ? (
+                      p.rank === 1 ? '🥇 1' :
+                      p.rank === 2 ? '🥈 2' :
+                      p.rank === 3 ? '🥉 3' : ''
+                    ) : room?.mode === 'competition' ? (
+                      `${p.progress ?? 0}%`
                     ) : (
                       p.score
                     )}
@@ -726,71 +733,121 @@ export default function RoomPage() {
                 )}
                 <p className="text-secondary text-sm">Mode: {room?.mode || 'collaborative'}</p>
               </div>
+
+              {/* Toggle Switch 2D / 3D */}
+              <div className="flex items-center bg-card border border-border p-1 rounded-xl gap-1 shadow-sm">
+                <button
+                  onClick={() => setViewMode('2D')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    viewMode === '2D' || room?.mode === 'snakes_and_ladders'
+                      ? 'bg-foreground text-background shadow-xs'
+                      : 'text-secondary hover:text-foreground'
+                  }`}
+                >
+                  <GridIcon className="w-3.5 h-3.5" /> 2D
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (room?.mode !== 'snakes_and_ladders') {
+                      setViewMode('3D');
+                    }
+                  }}
+                  disabled={room?.mode === 'snakes_and_ladders'}
+                  title={room?.mode === 'snakes_and_ladders' ? 'Mode 3D Ular Tangga belum tersedia' : 'Mode 3D'}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    viewMode === '3D' && room?.mode !== 'snakes_and_ladders'
+                      ? 'bg-foreground text-background shadow-xs'
+                      : 'text-secondary hover:text-foreground'
+                  } ${room?.mode === 'snakes_and_ladders' ? 'opacity-40 cursor-not-allowed' : ''}`}
+                >
+                  <Box className="w-3.5 h-3.5" /> 3D
+                </button>
+              </div>
             </div>
 
-            <SudokuBoard
-              broadcastMove={broadcastMove}
-              broadcastNote={broadcastNote}
-              broadcastCursor={broadcastCursor}
-              lockCell={lockCell}
-              locks={locks}
-              isPencilMode={isPencilMode}
-              isEraserMode={isEraserMode}
-            />
+            {/* Render Sesuai Mode Pilihan */}
+            {room?.mode === 'snakes_and_ladders' ? (
+              <SnakesAndLaddersBoard broadcastSnakesDiceRoll={broadcastSnakesDiceRoll} />
+            ) : viewMode === '3D' ? (
+              <SudokuBoard3D
+                broadcastMove={broadcastMove}
+                broadcastNote={broadcastNote}
+                broadcastCursor={broadcastCursor}
+                lockCell={lockCell}
+                locks={locks}
+                isPencilMode={isPencilMode}
+                isEraserMode={isEraserMode}
+              />
+            ) : (
+              <SudokuBoard
+                broadcastMove={broadcastMove}
+                broadcastNote={broadcastNote}
+                broadcastCursor={broadcastCursor}
+                lockCell={lockCell}
+                locks={locks}
+                isPencilMode={isPencilMode}
+                isEraserMode={isEraserMode}
+              />
+            )}
 
             <div className="flex flex-col items-center">
               <div className="text-2xl font-mono">{formatTime(elapsedTime)}</div>
               <p className="text-secondary text-sm">Timer</p>
             </div>
 
-            {/* Controls */}
-            <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={handleHint} disabled={(room?.mode !== 'zen' && hintsRemaining <= 0) || isSpectator}>
-                  <Lightbulb className="w-4 h-4 mr-2" /> Hint {room?.mode === 'zen' ? '(∞)' : `(${hintsRemaining})`}
-                </Button>
-                <Button variant={isPencilMode ? "primary" : "outline"} size="sm" onClick={() => { setIsPencilMode(!isPencilMode); setIsEraserMode(false); }}>
-                  <Edit2 className="w-4 h-4 mr-2" /> Note
-                </Button>
-                {room?.mode === 'zen' && (
-                  <Button variant="outline" size="sm" onClick={handleAutoNote} disabled={isSpectator}>
-                    <Lightbulb className="w-4 h-4 mr-2" /> Auto Note
+            {/* CONTROLS (Hanya Ditampilkan Pada Mode Sudoku, Disembunyikan Pada Mode Ular Tangga) */}
+            {room?.mode !== 'snakes_and_ladders' && (
+              <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={handleHint} disabled={(room?.mode !== 'zen' && hintsRemaining <= 0) || isSpectator}>
+                    <Lightbulb className="w-4 h-4 mr-2" /> Hint {room?.mode === 'zen' ? '(∞)' : `(${hintsRemaining})`}
                   </Button>
-                )}
-                <Button variant={isEraserMode ? "primary" : "outline"} size="sm" onClick={handleEraserClick}>
-                  <Eraser className="w-4 h-4 mr-2" /> Eraser
-                </Button>
-              </div>
+                  <Button variant={isPencilMode ? "primary" : "outline"} size="sm" onClick={() => { setIsPencilMode(!isPencilMode); setIsEraserMode(false); }}>
+                    <Edit2 className="w-4 h-4 mr-2" /> Note
+                  </Button>
+                  {room?.mode === 'zen' && (
+                    <Button variant="outline" size="sm" onClick={handleAutoNote} disabled={isSpectator}>
+                      <Lightbulb className="w-4 h-4 mr-2" /> Auto Note
+                    </Button>
+                  )}
+                  <Button variant={isEraserMode ? "primary" : "outline"} size="sm" onClick={handleEraserClick}>
+                    <Eraser className="w-4 h-4 mr-2" /> Eraser
+                  </Button>
+                </div>
 
-              {/* NAVIGASI PANAH */}
-              <div className="flex items-center gap-2 bg-card p-1.5 rounded-xl border border-border mt-2">
-                <span className="text-xs text-secondary font-medium px-1">Navigasi:</span>
-                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('left')} disabled={isSpectator}>
-                  <ArrowLeft className="w-4 h-4" />
-                </Button>
-                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('up')} disabled={isSpectator}>
-                  <ArrowUp className="w-4 h-4" />
-                </Button>
-                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('down')} disabled={isSpectator}>
-                  <ArrowDown className="w-4 h-4" />
-                </Button>
-                <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('right')} disabled={isSpectator}>
-                  <ArrowRight className="w-4 h-4" />
-                </Button>
+                {/* NAVIGASI PANAH */}
+                <div className="flex items-center gap-2 bg-card p-1.5 rounded-xl border border-border mt-2">
+                  <span className="text-xs text-secondary font-medium px-1">Navigasi:</span>
+                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('left')} disabled={isSpectator}>
+                    <ArrowLeft className="w-4 h-4" />
+                  </Button>
+                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('up')} disabled={isSpectator}>
+                    <ArrowUp className="w-4 h-4" />
+                  </Button>
+                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('down')} disabled={isSpectator}>
+                    <ArrowDown className="w-4 h-4" />
+                  </Button>
+                  <Button variant="outline" size="sm" className="w-8 h-8 p-0" onClick={() => handleArrowNavigate('right')} disabled={isSpectator}>
+                    <ArrowRight className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                {/* NUMPAD ANGKA */}
+                <div className="flex flex-wrap justify-center gap-2 mt-2">
+                  {[1,2,3,4,5,6,7,8,9].map(n => (
+                    <button
+                      key={n}
+                      onClick={() => handleNumpadClick(n)}
+                      disabled={isSpectator}
+                      className="w-10 h-10 rounded-lg border border-border bg-card hover:bg-hover font-semibold text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-foreground disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="flex flex-wrap justify-center gap-2 mt-2">
-                {[1,2,3,4,5,6,7,8,9].map(n => (
-                  <button
-                    key={n}
-                    onClick={() => handleNumpadClick(n)}
-                    disabled={isSpectator}
-                    className="w-10 h-10 rounded-lg border border-border bg-card hover:bg-hover font-semibold text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-foreground disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </main>
@@ -882,6 +939,7 @@ export default function RoomPage() {
                 <option value="classic">Classic (Klasik)</option>
                 <option value="race">Race (Balapan Skor)</option>
                 <option value="zen">Zen (Santai)</option>
+                <option value="snakes_and_ladders">Snakes & Ladders (Ular Tangga)</option>
               </select>
             </div>
 
