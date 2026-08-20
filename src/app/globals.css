@@ -1,52 +1,51 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-  --card: #ffffff;
-  --border: #e5e5e5;
-  --secondary: #6b7280;
-  --hover: #f3f4f6;
-  --destructive: #ef4444;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-border: var(--border);
-  --color-secondary: var(--secondary);
-  --color-hover: var(--hover);
-  --color-destructive: var(--destructive);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-
-.dark {
-  --background: #0a0a0a;
-  --foreground: #ededed;
-  --card: #171717;
-  --border: #262626;
-  --secondary: #a3a3a3;
-  --hover: #262626;
-  --destructive: #ef4444;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not(.light) {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --card: #171717;
-    --border: #262626;
-    --secondary: #a3a3a3;
-    --hover: #262626;
-    --destructive: #ef4444;
-  }
-}
-
+/* Base styles for luxurious monochrome theme */
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  @apply bg-background-dark text-text-primary;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
+
+/* Optional: Scrollbar styling for a cleaner look */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-surface-dark;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-accent-secondary rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-accent-primary;
+}
+
+/* Ensure all links inherit text color by default unless specified */
+a {
+  @apply text-inherit;
+}
+
+/* Basic button styles (if not using specific UI components like shadcn/ui) */
+button {
+  @apply py-2 px-4 rounded-md transition-colors duration-200;
+}
+
+button:hover {
+  @apply opacity-90; /* Subtle hover effect */
+}
+
+/* Focus outline for accessibility */
+*:focus-visible {
+  outline: 2px solid theme('colors.accent-primary');
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
