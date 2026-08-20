@@ -23,3 +23,7 @@ Recommendation: Create a typed helper method like `clearStorage()` within the ga
 2026-07-26 - [Realtime WebSocket Room Synchronization & Orphan Host Handshake]
 Issue: Guest players joining a room could experience race conditions where `REQUEST_SYNC` was sent before channel subscription completion or when host presence had dropped without migrating host status, causing guests to get stuck on loading screens.
 Recommendation: Implement two-way handshakes with immediate `sync_state` emission upon `SUBSCRIBED` and presence `join` events, include game-mode-aware state polling in guest retry loops, and implement orphan room host promotion fallbacks when no active host presence is detected.
+
+2026-07-27 - [Dynamic Item Relocation & Real-time State Synchronization in Snakes & Ladders]
+Issue: When special tiles (mines, wormholes) or snakes/ladders are triggered on the board, updating state only locally or relying solely on single position broadcast events (`snakes_dice_roll`) leads to desynchronization of board layout and player freeze status across multiplayer clients.
+Recommendation: Broadcast full `SnakesState` updates via dedicated `snakes_state_update` broadcast events whenever obstacles relocate or player turn freeze counters (`frozenTurns`) change, ensuring all clients share identical board obstacle coordinates and turn skip states.

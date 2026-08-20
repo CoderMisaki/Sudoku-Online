@@ -108,6 +108,7 @@ export default function RoomPage() {
     broadcastNextGame,
     broadcastLeaveRoom,
     broadcastSnakesDiceRoll,
+    broadcastSnakesState,
     isTrulyOffline,
     connectionError,
     reconnect
@@ -786,7 +787,7 @@ export default function RoomPage() {
 
             {/* Render Sesuai Mode Pilihan */}
             {room?.mode === 'snakes_and_ladders' ? (
-              <SnakesAndLaddersBoard broadcastSnakesDiceRoll={broadcastSnakesDiceRoll} />
+              <SnakesAndLaddersBoard broadcastSnakesDiceRoll={broadcastSnakesDiceRoll} broadcastSnakesState={broadcastSnakesState} />
             ) : viewMode === '3D' ? (
               <SudokuBoard3D
                 broadcastMove={broadcastMove}

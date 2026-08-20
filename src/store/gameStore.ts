@@ -1,3 +1,4 @@
+import { generateInitialSnakesState } from "../utils/snakesAndLaddersData";
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Grid, RoomState, Player, ChatMessage } from '../types/game';
@@ -386,14 +387,7 @@ export const useGameStore = create<GameStore>()(
         let newSnakesState = state.snakesState;
 
         if (isSnakesMode) {
-            newSnakesState = {
-                currentTurnUserId: Object.keys(newPlayers)[0] || '',
-                turnOrder: Object.keys(newPlayers),
-                diceValue: null,
-                isRolling: false,
-                playerPositions: Object.keys(newPlayers).reduce((acc, id) => ({ ...acc, [id]: 1 }), {}),
-                winnerId: null
-            };
+          newSnakesState = generateInitialSnakesState(state.room.difficulty || "medium", Object.keys(newPlayers));
         }
         Object.keys(newPlayers).forEach(playerId => {
           newPlayers[playerId] = {
