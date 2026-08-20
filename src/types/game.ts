@@ -58,11 +58,37 @@ export interface SnakeOrLadder {
   to: number;
 }
 
-export interface SnakesAndLaddersState {
-  currentTurnUserId: string;
-  turnOrder: string[];
-  diceValue: number | null;
-  isRolling: boolean;
-  playerPositions: Record<string, number>;
-  winnerId: string | null;
+export interface SnakeItem {
+  id: string;
+  head: number;
+  tail: number;
+  waveStrength: number;
 }
+
+export interface LadderItem {
+  id: string;
+  start: number;
+  end: number;
+}
+
+export interface WormholePair {
+  id: string;
+  blackHole: number; // Titik masuk (Black Hole)
+  whiteHole: number; // Titik keluar (White Hole)
+}
+
+export interface SnakesState {
+  diceValue: number | null;
+  playerPositions: Record<string, number>;
+  currentTurnUserId: string | null;
+  winnerId: string | null;
+  isRolling?: boolean;
+  ladders: LadderItem[];
+  snakes: SnakeItem[];
+  mines: number[]; // Posisi kotak yang berisi ranjau
+  wormholes: WormholePair[]; // Pasangan Blackhole -> Whitehole
+  frozenTurns: Record<string, number>; // Jumlah turn yang harus dilewati pemain
+}
+
+// Retain alias for backward compatibility if needed
+export type SnakesAndLaddersState = SnakesState;
