@@ -471,10 +471,15 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
       resizeObserver.disconnect();
       domElement.removeEventListener('mousemove', onPointerMove);
       domElement.removeEventListener('pointerdown', onPointerDown);
+      domElement.removeEventListener('paste', handlePaste); // Clean up paste listener
 
       tiles.forEach(t => {
         t.texture.dispose();
-        t.materials.forEach(m => m.dispose());
+        // Dispose materials only if they are not shared
+        if (t.materials[2] === t.materials[2]) { // Check if it's the unique top material
+          t.materials[2].dispose();
+        }
+        // If other materials are shared, they are disposed elsewhere or automatically by Three.js when the scene is disposed.
       });
 
       sharedTileGeo.dispose();

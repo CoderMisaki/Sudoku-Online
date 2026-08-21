@@ -142,6 +142,66 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
+  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (!grid || !userId || isStunned) return;
+
+    const pasteData = e.clipboardData.getData('text');
+    const rows = pasteData.trim().split(/\r?\n|\r/).map(row => row.trim());
+
+    if (rows.length !== 9) {
+      toast.error('Data yang ditempelkan harus berupa 9 baris untuk Sudoku.');
+      return;
+    }
+
+    const parsedGrid: (number | null)[][] = [];
+    for (let r = 0; r < 9; r++) {
+      const rowData = rows[r].split('').map(char => {
+        const num = parseInt(char);
+        return (num >= 1 && num <= 9) ? num : null;
+      });
+
+      if (rowData.length !== 9) {
+        toast.error(`Baris ${r + 1} tidak memiliki 9 karakter. Pastikan setiap baris berisi 9 digit.`);
+        return;
+      }
+      parsedGrid.push(rowData);
+    }
+
+    // Apply the pasted grid to the board
+    let movesMade = 0;
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const pastedValue = parsedGrid[r][c];
+        const currentCell = grid[r][c];
+
+        if (pastedValue !== null && currentCell.value === null && !currentCell.isLocked && !currentCell.isCorrect) {
+          // If in competition mode, only allow pasting to *your* board if applicable (not general multiplayer)
+          // For simplicity, assume pasting to your own grid in comp mode is handled by logic elsewhere
+          // For collaborative, race, zen, allow pasting.
+          if (!isCompetition) {
+            const key = `${r}-${c}`;
+            const currentLock = locks[key];
+            if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
+              // Cell is locked by another player, skip
+              continue;
+            }
+          }
+          broadcastMove(r, c, pastedValue);
+          movesMade++;
+        }
+      }
+    }
+
+    if (movesMade > 0) {
+      toast.success(`${movesMade} nilai ditempelkan ke papan!`);
+    } else {
+      toast.info('Tidak ada nilai yang bisa ditempelkan.');
+    }
+
+  }, [grid, userId, isStunned, isCompetition, locks, broadcastMove]);
+
+
   if (!grid) return null;
 
   return (
@@ -150,6 +210,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({
         "w-full aspect-square max-w-[600px] border-[3px] border-foreground bg-foreground grid grid-cols-9 grid-rows-9 gap-px p-1 mx-auto rounded-md shadow-lg overflow-hidden relative select-none mt-2 mb-2 transition-all duration-300",
         { "opacity-50 grayscale": isStunned }
       )}
+      onPaste={handlePaste}
     >
       {grid.map((row, rIndex) =>
         row.map((cell, cIndex) => {
