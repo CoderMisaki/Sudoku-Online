@@ -18,6 +18,59 @@ interface SnakesAndLaddersBoardProps {
   broadcastSnakesDiceRoll?: (diceValue: number, newPosition: number, nextTurnUserId: string, hasWon: boolean) => void;
 }
 
+// Helper untuk menghasilkan jalur ular yang melingkar-lingkar dan bergelombang dinamis
+function generateCurvedSnakePath(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  seed: number = 1
+) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 0.1) return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
+
+  const ux = dx / len;
+  const uy = dy / len;
+  const nx = -uy;
+  const ny = ux;
+
+  // Frekuensi gelombang dan amplitudo berkelok agar tidak pernah lurus
+  const waveCount = Math.max(3, Math.floor(len / 14) * 2 + 1);
+  const maxAmp = Math.max(3.5, Math.min(6.5, len * 0.28));
+  const sign = seed % 2 === 0 ? 1 : -1;
+
+  const points: { x: number; y: number }[] = [];
+  const segments = 24;
+
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const envelope = Math.sin(Math.PI * t); // Halus di ujung kepala dan buntut
+    const wave = Math.sin(t * waveCount * Math.PI) * maxAmp * envelope * sign;
+    points.push({
+      x: start.x + dx * t + nx * wave,
+      y: start.y + dy * t + ny * wave,
+    });
+  }
+
+  // Bangun path bezier yang mulus (Catmull-Rom ke Cubic Bezier)
+  let d = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i === 0 ? 0 : i - 1];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2 >= points.length ? points.length - 1 : i + 2];
+
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+    d += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+  }
+
+  return { d, firstSegmentAngle: Math.atan2(points[1].y - points[0].y, points[1].x - points[0].x) };
+}
+
 export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ broadcastSnakesState }) => {
   const userId = useGameStore((state) => state.userId);
   const room = useGameStore((state) => state.room);
@@ -31,7 +84,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       .map((p) => p.id);
   }, [players]);
 
-  // Inisialisasi State jika belum tersedia
   useEffect(() => {
     if (!snakesState || !snakesState.ladders || snakesState.ladders.length === 0) {
       const initial = generateInitialSnakesState(room?.difficulty || 'medium', activePlayerIds);
@@ -54,7 +106,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const isMyTurn = currentTurn === userId;
   const isGameOver = Boolean(snakesState?.winnerId);
 
-  // Sinkronisasi posisi visual awal
   useEffect(() => {
     const timer = setTimeout(() => {
       setVisualPositions((prev) => {
@@ -72,7 +123,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     return () => clearTimeout(timer);
   }, [activePlayerIds, serverPositions]);
 
-  // Sync animation when other players move
   useEffect(() => {
     if (isAnimatingRef.current) return;
     Object.entries(serverPositions).forEach(([pId, targetPos]) => {
@@ -83,7 +133,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     });
   }, [serverPositions, visualPositions]);
 
-  // Animasi langkah melompat satu per satu
   const animatePath = async (
     targetUserId: string,
     startPos: number,
@@ -124,7 +173,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     if (onComplete) onComplete();
   };
 
-  // Handler Lempar Dadu
   const handleRollDice = () => {
     if (!isMyTurn || isRollingLocal || isGameOver || !userId || isAnimatingRef.current || !snakesState) return;
 
@@ -153,13 +201,9 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           let updatedObstacles: Partial<SnakesState> = {};
           const newFrozen = { ...frozenTurns };
 
-          // 1. Cek Tangga (Hanya aktif jika injak start)
           const ladderHit = snakesState.ladders?.find((l) => l.start === steppedPos);
-          // 2. Cek Ular (HANYA AKTIF JIKA INJAK KEPALA, BUNTUT DIABAIKAN)
           const snakeHit = snakesState.snakes?.find((s) => s.head === steppedPos);
-          // 3. Cek Ranjau
           const mineHit = snakesState.mines?.includes(steppedPos);
-          // 4. Cek Black Hole
           const wormholeHit = snakesState.wormholes?.find((w) => w.blackHole === steppedPos);
 
           const playerName = players[userId]?.username || 'Kamu';
@@ -178,14 +222,13 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             updatedObstacles = relocateTriggeredItem(snakesState, 'wormhole', wormholeHit.id);
           } else if (mineHit) {
             newFrozen[userId] = 3;
-            eventMessage = `💣 ${playerName} menginjak Ranjau! Terjebak 3 turn!`;
+            eventMessage = `💣 ${playerName} terinjak Ranjau Capit! Terjebak 3 turn!`;
             updatedObstacles = relocateTriggeredItem(snakesState, 'mine', steppedPos);
-            toast.error('💥 Kamu menginjak Ranjau! Freeze 3 giliran!');
+            toast.error('💥 Kamu menginjak Ranjau Capit! Freeze 3 giliran!');
           }
 
           const hasWon = finalPos === 100;
 
-          // Hitung giliran berikutnya
           let nextTurnId = userId;
           if (activePlayerIds.length > 1) {
             if (finalDice !== 6 || mineHit) {
@@ -219,7 +262,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     }, 50);
   };
 
-  // Handler Lewati Giliran (Jika Terkena Ranjau)
   const handleSkipTurn = () => {
     if (!isMyTurn || !userId || !snakesState) return;
 
@@ -304,23 +346,77 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         {/* SVG Item Layer */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" viewBox="0 0 100 100">
           <defs>
-            <linearGradient id="snakeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#16a34a" />
-              <stop offset="100%" stopColor="#14532d" />
+            <style>{`
+              @keyframes spin-cw {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+              }
+              @keyframes spin-ccw {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(-360deg); }
+              }
+              @keyframes pulse-jet {
+                0%, 100% { opacity: 0.7; transform: scaleY(1); }
+                50% { opacity: 1; transform: scaleY(1.25); }
+              }
+              .vortex-cw {
+                transform-box: fill-box;
+                transform-origin: center;
+                animation: spin-cw 8s linear infinite;
+              }
+              .vortex-ccw {
+                transform-box: fill-box;
+                transform-origin: center;
+                animation: spin-ccw 6s linear infinite;
+              }
+              .jet-beam {
+                transform-box: fill-box;
+                transform-origin: center;
+                animation: pulse-jet 2s ease-in-out infinite;
+              }
+            `}</style>
+
+            {/* Gradient Ular Sisik */}
+            <linearGradient id="snakeSkinGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#15803d" />
+              <stop offset="40%" stopColor="#22c55e" />
+              <stop offset="70%" stopColor="#16a34a" />
+              <stop offset="100%" stopColor="#052e16" />
             </linearGradient>
-            <radialGradient id="bhGrad">
+
+            {/* Black Hole Accretion Gradient */}
+            <radialGradient id="bhPusaranGrad">
               <stop offset="0%" stopColor="#000000" />
-              <stop offset="70%" stopColor="#581c87" />
-              <stop offset="100%" stopColor="#3b0764" stopOpacity="0" />
+              <stop offset="28%" stopColor="#000000" />
+              <stop offset="48%" stopColor="#ff4500" />
+              <stop offset="72%" stopColor="#c026d3" />
+              <stop offset="90%" stopColor="#581c87" />
+              <stop offset="100%" stopColor="#1e1b4b" stopOpacity="0" />
             </radialGradient>
-            <radialGradient id="whGrad">
+
+            {/* White Hole Energy Gradient */}
+            <radialGradient id="whPusaranGrad">
               <stop offset="0%" stopColor="#ffffff" />
-              <stop offset="60%" stopColor="#38bdf8" />
-              <stop offset="100%" stopColor="#0284c7" stopOpacity="0" />
+              <stop offset="25%" stopColor="#e0f2fe" />
+              <stop offset="50%" stopColor="#38bdf8" />
+              <stop offset="78%" stopColor="#2563eb" />
+              <stop offset="100%" stopColor="#1e3a8a" stopOpacity="0" />
             </radialGradient>
+
+            {/* Gradient Logam Ranjau Baja */}
+            <linearGradient id="trapMetalDark" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#475569" />
+              <stop offset="50%" stopColor="#94a3b8" />
+              <stop offset="100%" stopColor="#1e293b" />
+            </linearGradient>
+            <linearGradient id="trapJawSteel" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="#f8fafc" />
+              <stop offset="40%" stopColor="#cbd5e1" />
+              <stop offset="100%" stopColor="#334155" />
+            </linearGradient>
           </defs>
 
-          {/* 1. TANGGA */}
+          {/* 1. TANGGA (LADDERS) */}
           {snakesState?.ladders?.map((ladder) => {
             const start = getTileCoordinates(ladder.start);
             const end = getTileCoordinates(ladder.end);
@@ -353,57 +449,154 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             );
           })}
 
-          {/* 2. ULAR */}
-          {snakesState?.snakes?.map((snake) => {
+          {/* 2. ULAR MELINGKAR-LINGKAR (Sinuous Wavy Snake) */}
+          {snakesState?.snakes?.map((snake, sIdx) => {
             const head = getTileCoordinates(snake.head);
             const tail = getTileCoordinates(snake.tail);
-            const dx = tail.x - head.x;
-            const dy = tail.y - head.y;
-            const angle = Math.atan2(dy, dx);
-
-            const c1x = head.x + dx * 0.35 + Math.cos(angle + Math.PI / 2) * (snake.waveStrength * 0.8);
-            const c1y = head.y + dy * 0.35 + Math.sin(angle + Math.PI / 2) * (snake.waveStrength * 0.8);
-            const c2x = head.x + dx * 0.7 - Math.cos(angle + Math.PI / 2) * (snake.waveStrength * 0.8);
-            const c2y = head.y + dy * 0.7 - Math.sin(angle + Math.PI / 2) * (snake.waveStrength * 0.8);
+            const pathInfo = generateCurvedSnakePath(head, tail, sIdx + 1);
+            if (typeof pathInfo === 'string') return null;
+            const { d, firstSegmentAngle } = pathInfo;
 
             return (
               <g key={snake.id}>
-                <path d={`M ${head.x} ${head.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${tail.x} ${tail.y}`} fill="none" stroke="url(#snakeGrad)" strokeWidth="1.2" strokeLinecap="round" />
-                <ellipse cx={head.x} cy={head.y} rx="1.0" ry="0.75" transform={`rotate(${(angle * 180) / Math.PI + 180}, ${head.x}, ${head.y})`} fill="#15803d" />
-                <circle cx={head.x - 0.3} cy={head.y - 0.3} r="0.2" fill="#fff" />
-                <circle cx={head.x + 0.3} cy={head.y - 0.3} r="0.2" fill="#fff" />
-                <circle cx={head.x - 0.3} cy={head.y - 0.3} r="0.1" fill="#000" />
-                <circle cx={head.x + 0.3} cy={head.y - 0.3} r="0.1" fill="#000" />
+                {/* Bayangan Tubuh Ular */}
+                <path d={d} fill="none" stroke="rgba(0,0,0,0.25)" strokeWidth="1.6" strokeLinecap="round" transform="translate(0.2, 0.3)" />
+
+                {/* Tubuh Utama Ular Berkelok */}
+                <path d={d} fill="none" stroke="url(#snakeSkinGrad)" strokeWidth="1.4" strokeLinecap="round" />
+
+                {/* Pola Sisik Perut Ular */}
+                <path
+                  d={d}
+                  fill="none"
+                  stroke="#86efac"
+                  strokeWidth="0.5"
+                  strokeDasharray="0.6 1.0"
+                  strokeLinecap="round"
+                  opacity="0.85"
+                />
+
+                {/* Lidah Bercabang Merah di Kepala */}
+                <g transform={`translate(${head.x}, ${head.y}) rotate(${(firstSegmentAngle * 180) / Math.PI + 180})`}>
+                  <path d="M 0.6 0 L 1.5 0 L 2.0 -0.4 M 1.5 0 L 2.0 0.4" fill="none" stroke="#ef4444" strokeWidth="0.2" strokeLinecap="round" />
+                </g>
+
+                {/* Kepala Ular */}
+                <g transform={`translate(${head.x}, ${head.y}) rotate(${(firstSegmentAngle * 180) / Math.PI + 180})`}>
+                  <ellipse cx="0" cy="0" rx="1.1" ry="0.85" fill="#15803d" stroke="#052e16" strokeWidth="0.15" />
+                  {/* Mata Kuning Tajam */}
+                  <circle cx="-0.25" cy="-0.4" r="0.25" fill="#facc15" />
+                  <circle cx="-0.25" cy="0.4" r="0.25" fill="#facc15" />
+                  <ellipse cx="-0.25" cy="-0.4" rx="0.08" ry="0.18" fill="#000000" />
+                  <ellipse cx="-0.25" cy="0.4" rx="0.08" ry="0.18" fill="#000000" />
+                </g>
               </g>
             );
           })}
 
-          {/* 3. RANJAU (MINES) */}
+          {/* 3. RANJAU CAPIT BAJA (Bear Trap Sesuai Gambar 2) */}
           {snakesState?.mines?.map((mineTile, idx) => {
             const pos = getTileCoordinates(mineTile);
             return (
-              <g key={`mine-${idx}`}>
-                <circle cx={pos.x} cy={pos.y} r="2.2" fill="#ef4444" opacity="0.25" className="animate-ping" />
-                <circle cx={pos.x} cy={pos.y} r="1.5" fill="#dc2626" />
-                <circle cx={pos.x} cy={pos.y} r="0.6" fill="#18181b" />
+              <g key={`mine-${idx}`} transform={`translate(${pos.x}, ${pos.y})`}>
+                {/* Lingkaran bahaya lembut */}
+                <circle cx="0" cy="0" r="3.2" fill="#ef4444" opacity="0.12" className="animate-ping" />
+
+                {/* Rahang Baja Bawah / Belakang */}
+                <ellipse cx="0" cy="-0.2" rx="2.8" ry="1.6" fill="none" stroke="url(#trapMetalDark)" strokeWidth="0.5" />
+
+                {/* Gigi Capit Rahang Belakang */}
+                <polygon points="-2.2,-0.4 -2.0,-1.5 -1.7,-0.4" fill="url(#trapJawSteel)" />
+                <polygon points="-1.5,-0.7 -1.2,-1.8 -0.9,-0.7" fill="url(#trapJawSteel)" />
+                <polygon points="-0.6,-0.9 -0.3,-2.0 0.0,-0.9" fill="url(#trapJawSteel)" />
+                <polygon points="0.3,-0.9 0.6,-2.0 0.9,-0.9" fill="url(#trapJawSteel)" />
+                <polygon points="1.2,-0.7 1.5,-1.8 1.8,-0.7" fill="url(#trapJawSteel)" />
+                <polygon points="1.9,-0.4 2.2,-1.5 2.4,-0.4" fill="url(#trapJawSteel)" />
+
+                {/* Palang Rangka Tengah & Engsel Bawah */}
+                <line x1="-2.7" y1="0.1" x2="2.7" y2="0.1" stroke="#334155" strokeWidth="0.4" strokeLinecap="round" />
+                <line x1="0" y1="-1.4" x2="0" y2="1.3" stroke="#475569" strokeWidth="0.35" strokeLinecap="round" />
+
+                {/* Rahang Baja Depan */}
+                <path d="M -2.7 0.1 C -2.2 1.6, 2.2 1.6, 2.7 0.1" fill="none" stroke="url(#trapMetalDark)" strokeWidth="0.6" />
+
+                {/* Gigi Capit Rahang Depan (Menghadap ke Atas) */}
+                <polygon points="-2.4,0.3 -2.2,1.3 -1.9,0.5" fill="url(#trapJawSteel)" />
+                <polygon points="-1.7,0.7 -1.4,1.7 -1.1,0.8" fill="url(#trapJawSteel)" />
+                <polygon points="-0.8,0.9 -0.5,1.9 -0.2,1.0" fill="url(#trapJawSteel)" />
+                <polygon points="0.2,1.0 0.5,1.9 0.8,0.9" fill="url(#trapJawSteel)" />
+                <polygon points="1.1,0.8 1.4,1.7 1.7,0.7" fill="url(#trapJawSteel)" />
+                <polygon points="1.9,0.5 2.2,1.3 2.4,0.3" fill="url(#trapJawSteel)" />
+
+                {/* Pelat Penekan Sensor Bulat di Tengah */}
+                <circle cx="0" cy="0" r="0.9" fill="#94a3b8" stroke="#1e293b" strokeWidth="0.15" />
+                <circle cx="0" cy="0" r="0.55" fill="#dc2626" />
+                {/* Bintik Tekstur Umpan Merah Sesuai Gambar 2 */}
+                <circle cx="-0.2" cy="-0.2" r="0.08" fill="#ffffff" opacity="0.8" />
+                <circle cx="0.2" cy="-0.15" r="0.08" fill="#ffffff" opacity="0.8" />
+                <circle cx="-0.1" cy="0.2" r="0.08" fill="#ffffff" opacity="0.8" />
+                <circle cx="0.2" cy="0.18" r="0.08" fill="#ffffff" opacity="0.8" />
+
+                {/* Rivet Engsel Poros Bawah */}
+                <circle cx="0" cy="1.3" r="0.3" fill="#0f172a" stroke="#64748b" strokeWidth="0.1" />
               </g>
             );
           })}
 
-          {/* 4. BLACK HOLE & WHITE HOLE */}
+          {/* 4. BLACK HOLE & WHITE HOLE (Pusaran/Vortex Kosmik Sesuai Gambar 1) */}
           {snakesState?.wormholes?.map((wh) => {
             const bhPos = getTileCoordinates(wh.blackHole);
             const whPos = getTileCoordinates(wh.whiteHole);
 
             return (
               <g key={wh.id}>
-                {/* Black Hole */}
-                <circle cx={bhPos.x} cy={bhPos.y} r="2.8" fill="url(#bhGrad)" />
-                <circle cx={bhPos.x} cy={bhPos.y} r="1.2" fill="#000000" stroke="#a855f7" strokeWidth="0.2" />
+                {/* === BLACK HOLE (GRAVITY ABSORPTION VORTEX) === */}
+                <g transform={`translate(${bhPos.x}, ${bhPos.y})`}>
+                  {/* Aura Gas & Akresi Luar */}
+                  <circle cx="0" cy="0" r="4.3" fill="url(#bhPusaranGrad)" />
 
-                {/* White Hole */}
-                <circle cx={whPos.x} cy={whPos.y} r="2.8" fill="url(#whGrad)" />
-                <circle cx={whPos.x} cy={whPos.y} r="1.1" fill="#ffffff" stroke="#38bdf8" strokeWidth="0.2" />
+                  {/* Lengan Spiral Pusaran Berputar Searah Jarum Jam */}
+                  <g className="vortex-cw">
+                    <path d="M 0 0 C 1.2 0.4, 2.8 1.8, 3.5 0.5 C 4.0 -0.6, 2.5 -2.2, 0 0" fill="#f97316" opacity="0.55" />
+                    <path d="M 0 0 C -1.2 -0.4, -2.8 -1.8, -3.5 -0.5 C -4.0 0.6, -2.5 2.2, 0 0" fill="#f97316" opacity="0.55" />
+                    <path d="M 0 0 C -0.4 1.2, -1.8 2.8, -0.5 3.5 C 0.6 4.0, 2.2 2.5, 0 0" fill="#c026d3" opacity="0.6" />
+                    <path d="M 0 0 C 0.4 -1.2, 1.8 -2.8, 0.5 -3.5 C -0.6 -4.0, -2.2 -2.5, 0 0" fill="#c026d3" opacity="0.6" />
+                  </g>
+
+                  {/* Cincin Foton Akresi Menyala */}
+                  <circle cx="0" cy="0" r="1.5" fill="none" stroke="#fb923c" strokeWidth="0.35" opacity="0.9" />
+                  <circle cx="0" cy="0" r="1.2" fill="none" stroke="#fde047" strokeWidth="0.15" opacity="0.95" />
+
+                  {/* Singularitas / Event Horizon Hitam Pekat */}
+                  <circle cx="0" cy="0" r="1.0" fill="#000000" stroke="#7c3aed" strokeWidth="0.1" />
+                </g>
+
+                {/* === WHITE HOLE (ENERGY EMISSION RADIANT VORTEX) === */}
+                <g transform={`translate(${whPos.x}, ${whPos.y})`}>
+                  {/* Aura Energi Luar */}
+                  <circle cx="0" cy="0" r="4.3" fill="url(#whPusaranGrad)" />
+
+                  {/* Lengan Spiral Galaksi Berputar Berlawanan Arah Jarum Jam */}
+                  <g className="vortex-ccw">
+                    <path d="M 0 0 C 0.5 1.5, 1.8 3.0, 0.6 3.6 C -0.8 4.2, -2.4 2.2, 0 0" fill="#38bdf8" opacity="0.6" />
+                    <path d="M 0 0 C -0.5 -1.5, -1.8 -3.0, -0.6 -3.6 C 0.8 -4.2, 2.4 -2.2, 0 0" fill="#38bdf8" opacity="0.6" />
+                    <path d="M 0 0 C 1.5 -0.5, 3.0 -1.8, 3.6 -0.6 C 4.2 0.8, 2.2 2.4, 0 0" fill="#60a5fa" opacity="0.5" />
+                    <path d="M 0 0 C -1.5 0.5, -3.0 1.8, -3.6 0.6 C -4.2 -0.8, -2.2 -2.4, 0 0" fill="#60a5fa" opacity="0.5" />
+                  </g>
+
+                  {/* Pancaran Berkas Energi Vertikal (Plasma Energy Jet Sesuai Gambar 1) */}
+                  <g className="jet-beam">
+                    <path d="M -0.3 0 L 0 -4.2 L 0.3 0 L 0 4.2 Z" fill="#e0f2fe" opacity="0.8" />
+                    <line x1="0" y1="-4.5" x2="0" y2="4.5" stroke="#ffffff" strokeWidth="0.25" strokeLinecap="round" />
+                  </g>
+
+                  {/* Cincin Radiasi Cyan */}
+                  <circle cx="0" cy="0" r="1.4" fill="none" stroke="#38bdf8" strokeWidth="0.3" opacity="0.85" />
+
+                  {/* Inti Emisi Putih Terang Menyilaukan */}
+                  <circle cx="0" cy="0" r="0.85" fill="#ffffff" />
+                  <circle cx="0" cy="0" r="0.45" fill="#ffffff" stroke="#bae6fd" strokeWidth="0.1" />
+                </g>
               </g>
             );
           })}
@@ -461,7 +654,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         {/* Tombol Aksi Turn */}
         {myFrozenCount > 0 && isMyTurn ? (
           <Button size="lg" onClick={handleSkipTurn} className="bg-red-600 hover:bg-red-700 text-white gap-2 w-full sm:w-auto">
-            <SkipForward className="w-5 h-5" /> Lewati Giliran (Beku {myFrozenCount} Turn)
+            <SkipForward className="w-5 h-5" /> Lewati Giliran (Terjebak {myFrozenCount} Turn)
           </Button>
         ) : (
           <Button
