@@ -108,6 +108,7 @@ export default function RoomPage() {
     broadcastNextGame,
     broadcastLeaveRoom,
     broadcastSnakesDiceRoll,
+    broadcastSnakesState,
     isTrulyOffline,
     connectionError,
     reconnect
@@ -517,7 +518,7 @@ export default function RoomPage() {
   }
 
   // Tampilan Menunggu Host dengan opsi sinkronisasi ulang
-  if (!grid) {
+  if (!grid && room?.mode !== 'snakes_and_ladders') {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-6 text-center space-y-4">
         <div className="space-y-2">
@@ -786,7 +787,7 @@ export default function RoomPage() {
 
             {/* Render Sesuai Mode Pilihan */}
             {room?.mode === 'snakes_and_ladders' ? (
-              <SnakesAndLaddersBoard broadcastSnakesDiceRoll={broadcastSnakesDiceRoll} />
+              <SnakesAndLaddersBoard broadcastSnakesState={broadcastSnakesState} broadcastSnakesDiceRoll={broadcastSnakesDiceRoll} />
             ) : viewMode === '3D' ? (
               <SudokuBoard3D
                 broadcastMove={broadcastMove}

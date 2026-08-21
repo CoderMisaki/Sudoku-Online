@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
-import { ChatMessage, Grid, RoomState } from '../types/game';
+import { ChatMessage, Grid, RoomState, SnakesState } from '../types/game';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getOrCreateUserId } from '../utils/uuid';
 import toast from 'react-hot-toast';
@@ -49,6 +49,27 @@ export function useRealtime(roomId: string) {
   const [isTrulyOffline, setIsTrulyOffline] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
+
+  // Debounced online/offline listeners to prevent flickering notifications
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsTrulyOffline(false);
+      setConnectionError(null);
+    };
+
+    const handleOffline = () => {
+      setIsTrulyOffline(true);
+      setConnectionError('Koneksi internet perangkat Anda terputus.');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -147,7 +168,7 @@ export function useRealtime(roomId: string) {
     offlineTimeoutRef.current = setTimeout(() => {
       const currentState = useGameStore.getState();
       const hasBoard = currentState.room?.mode === 'snakes_and_ladders' ? Boolean(currentState.snakesState) : Boolean(currentState.grid);
-      if (!hasBoard) {
+      if (!hasBoard && typeof navigator !== 'undefined' && !navigator.onLine) {
         setIsTrulyOffline(true);
         setConnectionError('Room offline atau Host tidak aktif.');
       }
@@ -306,6 +327,11 @@ export function useRealtime(roomId: string) {
           winnerId: payload.hasWon ? payload.userId : null,
         });
       })
+      .on('broadcast', { event: 'snakes_state_update' }, ({ payload }) => {
+        if (payload.snakesState) {
+          useGameStore.getState().updateSnakesState(payload.snakesState);
+        }
+      })
       .subscribe(async (status) => {
         if (!isMountedRef.current) return;
 
@@ -315,6 +341,7 @@ export function useRealtime(roomId: string) {
         if (status === 'SUBSCRIBED') {
           setIsTrulyOffline(false);
           setConnectionError(null);
+          if (offlineTimeoutRef.current) clearTimeout(offlineTimeoutRef.current);
           addLog(`[Presence Track] Mendaftarkan player ${currentUsername} (${currentUserId})`);
 
           try {
@@ -358,9 +385,11 @@ export function useRealtime(roomId: string) {
           if (!hasBoard) {
             requestState();
           }
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          setIsTrulyOffline(true);
-          setConnectionError(`Koneksi realtime ${status.toLowerCase()}.`);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            setIsTrulyOffline(true);
+            setConnectionError('Gagal terhubung ke realtime server.');
+          }
         }
       });
   }, [roomId, addLog, requestState, setRealtimeStatus, triggerAnswerToast]);
@@ -540,6 +569,15 @@ export function useRealtime(roomId: string) {
     });
   }, []);
 
+  const broadcastSnakesState = useCallback((newState: SnakesState) => {
+    useGameStore.getState().updateSnakesState(newState);
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'snakes_state_update',
+      payload: { snakesState: newState },
+    });
+  }, []);
+
   return {
     broadcastMove,
     broadcastNote,
@@ -550,6 +588,7 @@ export function useRealtime(roomId: string) {
     broadcastNextGame,
     broadcastLeaveRoom,
     broadcastSnakesDiceRoll,
+    broadcastSnakesState,
     requestState,
     realtimeStatus,
     isTrulyOffline,

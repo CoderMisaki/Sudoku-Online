@@ -114,7 +114,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({
 
       const isFixed = Boolean(cell.isLocked || cell.isCorrect);
 
-      if (cell.isLocked || cell.isCorrect) {
+      if (isFixed) {
         if (e.key >= '1' && e.key <= '9') {
           toast('Jawaban sudah benar', { icon: '✅', id: 'cell-correct' });
         }

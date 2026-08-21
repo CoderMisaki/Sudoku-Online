@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Grid, RoomState, Player, ChatMessage } from '../types/game';
+import { Grid, RoomState, Player, ChatMessage, SnakesState } from '../types/game';
 import { checkConflicts } from '../utils/sudoku';
+import { generateInitialSnakesState } from '../utils/snakesAndLaddersData';
 
 interface GameStore {
   // Local User State
@@ -27,16 +28,16 @@ interface GameStore {
 
   // UI State
   messages: ChatMessage[];
-  snakesState?: import("../types/game").SnakesAndLaddersState;
+  snakesState?: SnakesState;
   addMessage: (msg: ChatMessage) => void;
   setMessages: (msgs: ChatMessage[]) => void;
 
   selectedCell: { row: number; col: number } | null;
   setSelectedCell: (cell: { row: number; col: number } | null) => void;
   resetGame: () => void;
-    startNextGame: (newGrid: Grid, newSolutionToken: string) => void;
-  updateSnakesState: (state: Partial<import("../types/game").SnakesAndLaddersState>) => void;
-      enterRoom: (roomId: string) => void;
+  startNextGame: (newGrid: Grid, newSolutionToken: string) => void;
+  updateSnakesState: (state: Partial<SnakesState>) => void;
+  enterRoom: (roomId: string) => void;
 }
 
 export const useGameStore = create<GameStore>()(
@@ -100,7 +101,6 @@ export const useGameStore = create<GameStore>()(
       setOptimisticMove: (row, col, value) => set((state) => {
         if (!state.grid) return state;
         const currentCell = state.grid[row][col];
-        // Jangan izinkan edit jika sel bawaan atau sudah dijawab dengan benar
         if (currentCell.isLocked || currentCell.isCorrect) return state;
 
         const newGrid = [...state.grid];
@@ -111,7 +111,6 @@ export const useGameStore = create<GameStore>()(
           isPending: true
         };
 
-        // Auto-clear notes
         const filledVal = value;
         const boxR = Math.floor(row / 3) * 3;
         const boxC = Math.floor(col / 3) * 3;
@@ -144,7 +143,6 @@ export const useGameStore = create<GameStore>()(
         if (!state.grid || !state.room) return state;
 
         const currentCell = state.grid[row][col];
-        // Jika sel sudah terkunci / sudah benar, abaikan perubahan
         if (currentCell.isLocked || currentCell.isCorrect) return state;
 
         const newGrid = [...state.grid];
@@ -190,7 +188,6 @@ export const useGameStore = create<GameStore>()(
         let newRoom = { ...state.room };
 
         if (mode === 'competition') {
-          // Hitung progress berdasarkan sel yang benar dan tidak berkonflik
           let totalNonLocked = 0;
           let correctCount = 0;
           for (let r = 0; r < 9; r++) {
@@ -212,7 +209,6 @@ export const useGameStore = create<GameStore>()(
           let newRank = currentPlayer?.rank ?? null;
 
           if (isComplete && !newRank) {
-            // Hitung berapa banyak player yang sudah selesai sebelumnya
             const existingRanks = Object.values(newRoom.players)
               .map(p => p.rank)
               .filter((r): r is number => typeof r === 'number' && r > 0);
@@ -248,11 +244,9 @@ export const useGameStore = create<GameStore>()(
                 streak = 1;
               }
 
-              // Cap streak at some reasonable visual like 5 or let it go
               const multiplier = streak;
               let newScore = currentScore + (10 * multiplier);
 
-              // Check if completed a block, row, or col
               let blockCompleted = true;
               let rowCompleted = true;
               let colCompleted = true;
@@ -283,7 +277,6 @@ export const useGameStore = create<GameStore>()(
                 };
               }
             } else {
-              // Wrong move in race: reset streak, stun for 3s
               if (newRoom.players[playerId]) {
                 newRoom = {
                   ...newRoom,
@@ -295,7 +288,6 @@ export const useGameStore = create<GameStore>()(
               }
             }
           } else {
-            // normal scoring
             const scoreDiff = isCorrect ? 10 : -5;
             const newScore = currentScore + scoreDiff;
 
@@ -325,15 +317,12 @@ export const useGameStore = create<GameStore>()(
           for (let c = 0; c < 9; c++) {
             if (newGrid[r][c].value === null) {
               const possible = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
-              // check row
               for (let i = 0; i < 9; i++) {
                 if (newGrid[r][i].value !== null && !newGrid[r][i].isWrong && !newGrid[r][i].isConflicting) possible.delete(newGrid[r][i].value as number);
               }
-              // check col
               for (let i = 0; i < 9; i++) {
                 if (newGrid[i][c].value !== null && !newGrid[i][c].isWrong && !newGrid[i][c].isConflicting) possible.delete(newGrid[i][c].value as number);
               }
-              // check box
               const boxR = Math.floor(r / 3) * 3;
               const boxC = Math.floor(c / 3) * 3;
               for (let i = 0; i < 3; i++) {
@@ -374,26 +363,18 @@ export const useGameStore = create<GameStore>()(
       selectedCell: null,
       snakesState: undefined,
       setSelectedCell: (cell) => set({ selectedCell: cell }),
-      updateSnakesState: (updates) => set((state) => ({ snakesState: { ...state.snakesState, ...updates } as import("../types/game").SnakesAndLaddersState })),
+      updateSnakesState: (updates) => set((state) => ({ snakesState: { ...state.snakesState, ...updates } as SnakesState })),
       resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null, snakesState: undefined }),
 
       startNextGame: (newGrid, newSolutionToken) => set((state) => {
         if (!state.room) return state;
 
-        // Reset skor, progress, dan peringkat untuk semua pemain
         const newPlayers = { ...state.room.players };
         const isSnakesMode = state.room.mode === 'snakes_and_ladders';
         let newSnakesState = state.snakesState;
 
         if (isSnakesMode) {
-            newSnakesState = {
-                currentTurnUserId: Object.keys(newPlayers)[0] || '',
-                turnOrder: Object.keys(newPlayers),
-                diceValue: null,
-                isRolling: false,
-                playerPositions: Object.keys(newPlayers).reduce((acc, id) => ({ ...acc, [id]: 1 }), {}),
-                winnerId: null
-            };
+          newSnakesState = generateInitialSnakesState(state.room.difficulty, Object.keys(newPlayers));
         }
         Object.keys(newPlayers).forEach(playerId => {
           newPlayers[playerId] = {
@@ -419,7 +400,6 @@ export const useGameStore = create<GameStore>()(
           solutionToken: newSolutionToken,
           selectedCell: null,
           snakesState: newSnakesState,
-          // PERBAIKAN BUG: Tidak menghapus pesan chat (messages)
         };
       }),
 
