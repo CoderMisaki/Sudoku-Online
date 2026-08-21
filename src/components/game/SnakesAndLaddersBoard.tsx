@@ -448,14 +448,19 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               </linearGradient>
             ))}
 
-            {/* Black Hole & White Hole Gradients */}
-            <radialGradient id="bhPusaranGrad">
+            {/* Gradient Black Hole Pekat */}
+            <radialGradient id="bhDeepBlackGrad">
               <stop offset="0%" stopColor="#000000" />
-              <stop offset="28%" stopColor="#000000" />
-              <stop offset="48%" stopColor="#ff4500" />
-              <stop offset="72%" stopColor="#c026d3" />
-              <stop offset="90%" stopColor="#581c87" />
-              <stop offset="100%" stopColor="#1e1b4b" stopOpacity="0" />
+              <stop offset="45%" stopColor="#000000" />
+              <stop offset="70%" stopColor="#09090b" />
+              <stop offset="88%" stopColor="#18181b" stopOpacity="0.8" />
+              <stop offset="100%" stopColor="#000000" stopOpacity="0" />
+            </radialGradient>
+
+            <radialGradient id="bhAccretionGrad">
+              <stop offset="0%" stopColor="#000000" />
+              <stop offset="50%" stopColor="#27272a" stopOpacity="0.6" />
+              <stop offset="100%" stopColor="#000000" stopOpacity="0" />
             </radialGradient>
 
             <radialGradient id="whPusaranGrad">
@@ -605,17 +610,55 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
             return (
               <g key={wh.id}>
-                {/* Black Hole */}
+                {/* Black Hole (Hitam Pekat Berpusar) */}
                 <g transform={`translate(${bhPos.x}, ${bhPos.y})`}>
-                  <circle cx="0" cy="0" r="4.3" fill="url(#bhPusaranGrad)" />
+                  {/* Lingkaran Gravitasi Gelap Terluar */}
+                  <circle cx="0" cy="0" r="4.6" fill="url(#bhDeepBlackGrad)" />
+
+                  {/* Pusaran Lengan Spiral Searah Jarum Jam */}
                   <g className="vortex-cw">
-                    <path d="M 0 0 C 1.2 0.4, 2.8 1.8, 3.5 0.5 C 4.0 -0.6, 2.5 -2.2, 0 0" fill="#f97316" opacity="0.55" />
-                    <path d="M 0 0 C -1.2 -0.4, -2.8 -1.8, -3.5 -0.5 C -4.0 0.6, -2.5 2.2, 0 0" fill="#f97316" opacity="0.55" />
-                    <path d="M 0 0 C -0.4 1.2, -1.8 2.8, -0.5 3.5 C 0.6 4.0, 2.2 2.5, 0 0" fill="#c026d3" opacity="0.6" />
-                    <path d="M 0 0 C 0.4 -1.2, 1.8 -2.8, 0.5 -3.5 C -0.6 -4.0, -2.2 -2.5, 0 0" fill="#c026d3" opacity="0.6" />
+                    <path
+                      d="M 0 0 C 1.2 0.4, 2.6 2.0, 3.4 0.6 C 4.0 -0.6, 2.2 -2.2, 0 0"
+                      fill="#18181b"
+                      opacity="0.8"
+                    />
+                    <path
+                      d="M 0 0 C -1.2 -0.4, -2.6 -2.0, -3.4 -0.6 C -4.0 0.6, -2.2 2.2, 0 0"
+                      fill="#18181b"
+                      opacity="0.8"
+                    />
+                    <path
+                      d="M 0 0 C -0.4 1.2, -2.0 2.6, -0.6 3.4 C 0.6 4.0, 2.2 2.2, 0 0"
+                      fill="#09090b"
+                      opacity="0.9"
+                    />
+                    <path
+                      d="M 0 0 C 0.4 -1.2, 2.0 -2.6, 0.6 -3.4 C -0.6 -4.0, -2.2 -2.2, 0 0"
+                      fill="#09090b"
+                      opacity="0.9"
+                    />
                   </g>
-                  <circle cx="0" cy="0" r="1.5" fill="none" stroke="#fb923c" strokeWidth="0.35" opacity="0.9" />
-                  <circle cx="0" cy="0" r="1.0" fill="#000000" stroke="#7c3aed" strokeWidth="0.1" />
+
+                  {/* Pusaran Lapis Kedua Berlawanan Arah */}
+                  <g className="vortex-ccw">
+                    <circle cx="0" cy="0" r="2.8" fill="url(#bhAccretionGrad)" />
+                    <path
+                      d="M 0 0 C 0.8 0.8, 1.8 1.8, 2.4 0 C 2.8 -1.2, 1.2 -1.8, 0 0"
+                      fill="#27272a"
+                      opacity="0.6"
+                    />
+                    <path
+                      d="M 0 0 C -0.8 -0.8, -1.8 -1.8, -2.4 0 C -2.8 1.2, -1.2 1.8, 0 0"
+                      fill="#27272a"
+                      opacity="0.6"
+                    />
+                  </g>
+
+                  {/* Cincin Distorsi Lensa Gravitasi */}
+                  <circle cx="0" cy="0" r="1.8" fill="none" stroke="#3f3f46" strokeWidth="0.25" opacity="0.6" />
+
+                  {/* Inti Singularity Hitam Pekat */}
+                  <circle cx="0" cy="0" r="1.3" fill="#000000" stroke="#18181b" strokeWidth="0.3" />
                 </g>
 
                 {/* White Hole */}
