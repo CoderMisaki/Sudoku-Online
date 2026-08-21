@@ -71,6 +71,25 @@ export function useRealtime(roomId: string) {
     };
   }, []);
 
+  // Tambahkan useEffect untuk melepas presence saat tab ditutup
+  useEffect(() => {
+    const handleTabClose = () => {
+      if (channelRef.current) {
+        try {
+          channelRef.current.untrack();
+        } catch {}
+      }
+    };
+
+    window.addEventListener("beforeunload", handleTabClose);
+    window.addEventListener("pagehide", handleTabClose);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleTabClose);
+      window.removeEventListener("pagehide", handleTabClose);
+    };
+  }, []);
+
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();
     const logEntry = `[${timestamp}] ${message}`;
@@ -189,26 +208,37 @@ export function useRealtime(roomId: string) {
         const store = useGameStore.getState();
         if (store.room) {
           const updatedPlayers = { ...store.room.players };
-          Object.keys(state).forEach((key) => {
-            const pres = (state[key] as Array<{ username?: string; status?: string }>)?.[0];
-            if (pres) {
-              if (updatedPlayers[key]) {
-                if (updatedPlayers[key].status !== 'left') {
-                  updatedPlayers[key].status = 'online';
-                }
-              } else {
-                updatedPlayers[key] = {
-                  id: key,
-                  username: pres.username || 'Player',
-                  color: PLAYER_COLORS[Object.keys(updatedPlayers).length % PLAYER_COLORS.length],
-                  isHost: key === store.room?.hostId,
-                  score: 0,
-                  hints: 3,
-                  status: 'online',
-                };
+          const activePresenceKeys = new Set(Object.keys(state));
+
+          // 1. Set status disconnected untuk player yang sudah tidak ada di presence
+          Object.keys(updatedPlayers).forEach((key) => {
+            if (activePresenceKeys.has(key)) {
+              if (updatedPlayers[key].status !== 'left') {
+                updatedPlayers[key].status = 'online';
+              }
+            } else {
+              if (updatedPlayers[key].status !== 'left') {
+                updatedPlayers[key].status = 'disconnected';
               }
             }
           });
+
+          // 2. Daftarkan player baru jika ada yang baru bergabung
+          Object.keys(state).forEach((key) => {
+            const pres = (state[key] as Array<{ username?: string; status?: string }>)?.[0];
+            if (pres && !updatedPlayers[key]) {
+              updatedPlayers[key] = {
+                id: key,
+                username: pres.username || 'Player',
+                color: PLAYER_COLORS[Object.keys(updatedPlayers).length % PLAYER_COLORS.length],
+                isHost: key === store.room?.hostId,
+                score: 0,
+                hints: 3,
+                status: 'online',
+              };
+            }
+          });
+
           store.setRoom({ ...store.room, players: updatedPlayers });
         }
       })
@@ -312,7 +342,14 @@ export function useRealtime(roomId: string) {
         addLog(`[Next Game] Game baru dimulai oleh host.`);
         const store = useGameStore.getState();
         if (payload.room) store.setRoom(payload.room);
-        if (payload.initialGrid && payload.solutionToken) {
+
+        if (payload.room?.mode === 'snakes_and_ladders' && payload.snakesState) {
+          store.updateSnakesState(payload.snakesState);
+        } else if (payload.room?.mode === 'competition') {
+          // Kosongkan grid lama agar memicu pengambilan puzzle baru
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          store.setGameData(null as any, null as any);
+        } else if (payload.initialGrid && payload.solutionToken) {
           store.startNextGame(payload.initialGrid, payload.solutionToken);
         }
       })
@@ -537,13 +574,28 @@ export function useRealtime(roomId: string) {
     });
   }, []);
 
-  const broadcastNextGame = useCallback((initialGrid: Grid | null, solutionToken: string | null, roomData: RoomState) => {
-    channelRef.current?.send({
-      type: 'broadcast',
-      event: 'next_game',
-      payload: { initialGrid, solutionToken, room: roomData },
-    });
-  }, []);
+  const broadcastNextGame = useCallback(
+    (
+      initialGrid: Grid | null,
+      solutionToken: string | null,
+      updatedRoom?: RoomState,
+      snakesState?: SnakesState | null
+    ) => {
+      if (channelRef.current && statusRef.current === 'SUBSCRIBED') {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'next_game',
+          payload: {
+            initialGrid,
+            solutionToken,
+            room: updatedRoom,
+            snakesState,
+          },
+        });
+      }
+    },
+    []
+  );
 
   const broadcastLeaveRoom = useCallback(async () => {
     const currentUid = userIdRef.current || getOrCreateUserId();

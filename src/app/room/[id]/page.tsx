@@ -1,5 +1,7 @@
 "use client";
 
+import { generateInitialSnakesState } from "../../../utils/snakesAndLaddersData";
+
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useGameStore } from '../../../store/gameStore';
@@ -32,7 +34,7 @@ import {
   Grid as GridIcon
 } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
-import { Difficulty, GameMode } from '../../../types/game';
+import { Difficulty, GameMode, RoomState, Player } from '../../../types/game';
 import toast from 'react-hot-toast';
 
 export default function RoomPage() {
@@ -166,43 +168,75 @@ export default function RoomPage() {
     try {
       toast.loading('Mempersiapkan game baru...', { id: 'nextGame' });
 
-      const updatedRoom = {
+      // Reset timer startedAt dan progress setiap player
+      const updatedRoom: RoomState = {
         ...room,
         difficulty: diff,
         mode: gameMode,
-        maxPlayers: maxP
+        maxPlayers: maxP,
+        startedAt: Date.now(),
+        players: Object.fromEntries(
+          Object.entries(room.players).map(([id, p]) => [
+            id,
+            {
+              ...p,
+              score: 0,
+              hints: 3,
+              progress: 0,
+              rank: undefined,
+              cursor: undefined,
+            },
+          ])
+        ),
       };
+
       useGameStore.getState().setRoom(updatedRoom);
 
-      if (gameMode === 'competition') {
-        broadcastNextGame(null, null, updatedRoom);
+      // MODE 1: ULAR TANGGA
+      if (gameMode === 'snakes_and_ladders') {
+        const activeIds = Object.values(updatedRoom.players)
+          .filter((p: Player) => !p.isSpectator && p.status !== 'left')
+          .map((p: Player) => p.id);
+
+        const newSnakesState = generateInitialSnakesState(diff, activeIds);
+        useGameStore.getState().updateSnakesState(newSnakesState);
+
+        broadcastNextGame(null, null, updatedRoom, newSnakesState);
+        toast.success('Game Ular Tangga baru dimulai!', { id: 'nextGame' });
+      }
+      // MODE 2: SUDOKU COMPETITION
+      else if (gameMode === 'competition') {
+        broadcastNextGame(null, null, updatedRoom, null);
         const res = await fetch('/api/game/create-room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ difficulty: diff })
+          body: JSON.stringify({ difficulty: diff }),
         });
         const data = await res.json();
         if (res.ok && data.initialGrid && data.solutionToken) {
           useGameStore.getState().startNextGame(data.initialGrid, data.solutionToken);
-          toast.success('Game baru dimulai!', { id: 'nextGame' });
-        } else {
-          toast.error('Gagal membuat game baru', { id: 'nextGame' });
-        }
-      } else {
-        const res = await fetch('/api/game/create-room', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ difficulty: diff })
-        });
-        const data = await res.json();
-        if (res.ok && data.initialGrid && data.solutionToken) {
-          useGameStore.getState().startNextGame(data.initialGrid, data.solutionToken);
-          broadcastNextGame(data.initialGrid, data.solutionToken, updatedRoom);
-          toast.success('Game baru dimulai!', { id: 'nextGame' });
+          toast.success('Game Sudoku Competition dimulai!', { id: 'nextGame' });
         } else {
           toast.error('Gagal membuat game baru', { id: 'nextGame' });
         }
       }
+      // MODE 3: SUDOKU COLLABORATIVE / CLASSIC / RACE / ZEN
+      else {
+        const res = await fetch('/api/game/create-room', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ difficulty: diff }),
+        });
+        const data = await res.json();
+        if (res.ok && data.initialGrid && data.solutionToken) {
+          useGameStore.getState().startNextGame(data.initialGrid, data.solutionToken);
+          broadcastNextGame(data.initialGrid, data.solutionToken, updatedRoom, null);
+          toast.success('Game Sudoku baru dimulai!', { id: 'nextGame' });
+        } else {
+          toast.error('Gagal membuat game baru', { id: 'nextGame' });
+        }
+      }
+
       setIsNextGameModalOpen(false);
     } catch {
       toast.error('Gagal membuat game baru', { id: 'nextGame' });
