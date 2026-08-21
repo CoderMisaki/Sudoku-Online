@@ -18,7 +18,88 @@ interface SnakesAndLaddersBoardProps {
   broadcastSnakesDiceRoll?: (diceValue: number, newPosition: number, nextTurnUserId: string, hasWon: boolean) => void;
 }
 
-// Helper untuk menghasilkan jalur ular yang melingkar-lingkar dan bergelombang dinamis
+// Koleksi palet warna & karakteristik spesies ular dunia asli
+const SNAKE_SPECIES = [
+  {
+    name: 'Emerald Tree Boa (Ular Hijau Zamrud)',
+    gradientId: 'snakeGrad_emerald',
+    colors: ['#047857', '#10b981', '#34d399', '#064e3b'],
+    scalesColor: '#d1fae5',
+    bellyColor: '#a7f3d0',
+    headColor: '#065f46',
+    eyeIris: '#facc15',
+    eyePupil: '#000000',
+    tongueColor: '#ef4444',
+  },
+  {
+    name: 'Coral Snake (Ular Karang Belang Merah-Kuning)',
+    gradientId: 'snakeGrad_coral',
+    colors: ['#991b1b', '#ef4444', '#f59e0b', '#18181b'],
+    scalesColor: '#fef08a',
+    bellyColor: '#fde047',
+    headColor: '#7f1d1d',
+    eyeIris: '#f97316',
+    eyePupil: '#000000',
+    tongueColor: '#450a0a',
+  },
+  {
+    name: 'Blue Insularis Viper (Viper Biru Komodo)',
+    gradientId: 'snakeGrad_blueViper',
+    colors: ['#0369a1', '#0ea5e9', '#38bdf8', '#082f49'],
+    scalesColor: '#e0f2fe',
+    bellyColor: '#bae6fd',
+    headColor: '#0284c7',
+    eyeIris: '#fde047',
+    eyePupil: '#000000',
+    tongueColor: '#0284c7',
+  },
+  {
+    name: 'Albino Burmese Python (Sanca Albino Kuning-Putih)',
+    gradientId: 'snakeGrad_albino',
+    colors: ['#d97706', '#fbbf24', '#fef08a', '#f8fafc'],
+    scalesColor: '#ffffff',
+    bellyColor: '#fef3c7',
+    headColor: '#f59e0b',
+    eyeIris: '#f43f5e',
+    eyePupil: '#881337',
+    tongueColor: '#fb7185',
+  },
+  {
+    name: 'Black Mamba / Black King Cobra (Kobra Hitam Arang)',
+    gradientId: 'snakeGrad_blackMamba',
+    colors: ['#0f172a', '#334155', '#475569', '#020617'],
+    scalesColor: '#94a3b8',
+    bellyColor: '#64748b',
+    headColor: '#0f172a',
+    eyeIris: '#64748b',
+    eyePupil: '#000000',
+    tongueColor: '#0f172a',
+  },
+  {
+    name: 'Eastern Diamondback Rattlesnake (Ular Derik Gurun)',
+    gradientId: 'snakeGrad_diamondback',
+    colors: ['#78350f', '#b45309', '#d97706', '#451a03'],
+    scalesColor: '#fef3c7',
+    bellyColor: '#fed7aa',
+    headColor: '#78350f',
+    eyeIris: '#fbbf24',
+    eyePupil: '#000000',
+    tongueColor: '#7f1d1d',
+  },
+  {
+    name: 'Brazilian Rainbow Boa (Boa Pelangi Iridescent)',
+    gradientId: 'snakeGrad_rainbow',
+    colors: ['#7c2d12', '#9333ea', '#2563eb', '#047857'],
+    scalesColor: '#f472b6',
+    bellyColor: '#e9d5ff',
+    headColor: '#581c87',
+    eyeIris: '#c084fc',
+    eyePupil: '#000000',
+    tongueColor: '#dc2626',
+  },
+];
+
+// Helper kurva bezier untuk jalur bergelombang natural ular
 function generateCurvedSnakePath(
   start: { x: number; y: number },
   end: { x: number; y: number },
@@ -34,7 +115,6 @@ function generateCurvedSnakePath(
   const nx = -uy;
   const ny = ux;
 
-  // Frekuensi gelombang dan amplitudo berkelok agar tidak pernah lurus
   const waveCount = Math.max(3, Math.floor(len / 14) * 2 + 1);
   const maxAmp = Math.max(3.5, Math.min(6.5, len * 0.28));
   const sign = seed % 2 === 0 ? 1 : -1;
@@ -44,7 +124,7 @@ function generateCurvedSnakePath(
 
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
-    const envelope = Math.sin(Math.PI * t); // Halus di ujung kepala dan buntut
+    const envelope = Math.sin(Math.PI * t);
     const wave = Math.sin(t * waveCount * Math.PI) * maxAmp * envelope * sign;
     points.push({
       x: start.x + dx * t + nx * wave,
@@ -52,7 +132,6 @@ function generateCurvedSnakePath(
     });
   }
 
-  // Bangun path bezier yang mulus (Catmull-Rom ke Cubic Bezier)
   let d = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
   for (let i = 0; i < points.length - 1; i++) {
     const p0 = points[i === 0 ? 0 : i - 1];
@@ -133,6 +212,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     });
   }, [serverPositions, visualPositions]);
 
+  // Animasi lompatan petak per petak (Hop step-by-step)
   const animatePath = async (
     targetUserId: string,
     startPos: number,
@@ -144,28 +224,31 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     isAnimatingRef.current = true;
     let curr = startPos;
 
+    const stepIntervalMs = 240;
+
     if (steppedPos > curr) {
       while (curr < steppedPos) {
         curr++;
         setVisualPositions((prev) => ({ ...prev, [targetUserId]: curr }));
-        await new Promise((r) => setTimeout(r, 180));
+        await new Promise((r) => setTimeout(r, stepIntervalMs));
       }
     } else if (steppedPos < curr) {
       while (curr > steppedPos) {
         curr--;
         setVisualPositions((prev) => ({ ...prev, [targetUserId]: curr }));
-        await new Promise((r) => setTimeout(r, 180));
+        await new Promise((r) => setTimeout(r, stepIntervalMs));
       }
     }
 
     if (eventLabel) {
       setActionStatus(eventLabel);
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 400));
     }
 
+    // Meluncur turun ular atau naik tangga
     if (finalPos !== steppedPos) {
       setVisualPositions((prev) => ({ ...prev, [targetUserId]: finalPos }));
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 600));
     }
 
     setActionStatus(null);
@@ -218,7 +301,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             updatedObstacles = relocateTriggeredItem(snakesState, 'snake', snakeHit.id);
           } else if (wormholeHit) {
             finalPos = wormholeHit.whiteHole;
-            eventMessage = `🌀 ${playerName} masuk Black Hole ${wormholeHit.blackHole} & keluar di White Hole ${finalPos}!`;
+            eventMessage = `🌀 ${playerName} tersedot Black Hole ke kotak ${finalPos}!`;
             updatedObstacles = relocateTriggeredItem(snakesState, 'wormhole', wormholeHit.id);
           } else if (mineHit) {
             newFrozen[userId] = 3;
@@ -347,44 +430,25 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" viewBox="0 0 100 100">
           <defs>
             <style>{`
-              @keyframes spin-cw {
-                from { transform: rotate(0deg); }
-                to { transform: rotate(360deg); }
-              }
-              @keyframes spin-ccw {
-                from { transform: rotate(0deg); }
-                to { transform: rotate(-360deg); }
-              }
-              @keyframes pulse-jet {
-                0%, 100% { opacity: 0.7; transform: scaleY(1); }
-                50% { opacity: 1; transform: scaleY(1.25); }
-              }
-              .vortex-cw {
-                transform-box: fill-box;
-                transform-origin: center;
-                animation: spin-cw 8s linear infinite;
-              }
-              .vortex-ccw {
-                transform-box: fill-box;
-                transform-origin: center;
-                animation: spin-ccw 6s linear infinite;
-              }
-              .jet-beam {
-                transform-box: fill-box;
-                transform-origin: center;
-                animation: pulse-jet 2s ease-in-out infinite;
-              }
+              @keyframes spin-cw { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+              @keyframes spin-ccw { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+              @keyframes pulse-jet { 0%, 100% { opacity: 0.7; transform: scaleY(1); } 50% { opacity: 1; transform: scaleY(1.25); } }
+              .vortex-cw { transform-box: fill-box; transform-origin: center; animation: spin-cw 8s linear infinite; }
+              .vortex-ccw { transform-box: fill-box; transform-origin: center; animation: spin-ccw 6s linear infinite; }
+              .jet-beam { transform-box: fill-box; transform-origin: center; animation: pulse-jet 2s ease-in-out infinite; }
             `}</style>
 
-            {/* Gradient Ular Sisik */}
-            <linearGradient id="snakeSkinGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#15803d" />
-              <stop offset="40%" stopColor="#22c55e" />
-              <stop offset="70%" stopColor="#16a34a" />
-              <stop offset="100%" stopColor="#052e16" />
-            </linearGradient>
+            {/* Gradient Ular Dunia Nyata */}
+            {SNAKE_SPECIES.map((species) => (
+              <linearGradient key={species.gradientId} id={species.gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor={species.colors[0]} />
+                <stop offset="35%" stopColor={species.colors[1]} />
+                <stop offset="70%" stopColor={species.colors[2]} />
+                <stop offset="100%" stopColor={species.colors[3]} />
+              </linearGradient>
+            ))}
 
-            {/* Black Hole Accretion Gradient */}
+            {/* Black Hole & White Hole Gradients */}
             <radialGradient id="bhPusaranGrad">
               <stop offset="0%" stopColor="#000000" />
               <stop offset="28%" stopColor="#000000" />
@@ -394,7 +458,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               <stop offset="100%" stopColor="#1e1b4b" stopOpacity="0" />
             </radialGradient>
 
-            {/* White Hole Energy Gradient */}
             <radialGradient id="whPusaranGrad">
               <stop offset="0%" stopColor="#ffffff" />
               <stop offset="25%" stopColor="#e0f2fe" />
@@ -403,7 +466,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               <stop offset="100%" stopColor="#1e3a8a" stopOpacity="0" />
             </radialGradient>
 
-            {/* Gradient Logam Ranjau Baja */}
+            {/* Trap Gradients */}
             <linearGradient id="trapMetalDark" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stopColor="#475569" />
               <stop offset="50%" stopColor="#94a3b8" />
@@ -449,7 +512,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             );
           })}
 
-          {/* 2. ULAR MELINGKAR-LINGKAR (Sinuous Wavy Snake) */}
+          {/* 2. ULAR DUNIA ASLI BERAGAM SPESIES */}
           {snakesState?.snakes?.map((snake, sIdx) => {
             const head = getTileCoordinates(snake.head);
             const tail = getTileCoordinates(snake.tail);
@@ -457,152 +520,124 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             if (typeof pathInfo === 'string') return null;
             const { d, firstSegmentAngle } = pathInfo;
 
+            // Pilih variasi spesies secara unik per ular
+            const species = SNAKE_SPECIES[sIdx % SNAKE_SPECIES.length];
+
             return (
               <g key={snake.id}>
                 {/* Bayangan Tubuh Ular */}
-                <path d={d} fill="none" stroke="rgba(0,0,0,0.25)" strokeWidth="1.6" strokeLinecap="round" transform="translate(0.2, 0.3)" />
+                <path d={d} fill="none" stroke="rgba(0,0,0,0.28)" strokeWidth="1.6" strokeLinecap="round" transform="translate(0.2, 0.3)" />
 
-                {/* Tubuh Utama Ular Berkelok */}
-                <path d={d} fill="none" stroke="url(#snakeSkinGrad)" strokeWidth="1.4" strokeLinecap="round" />
+                {/* Tubuh Utama Spesies Ular */}
+                <path d={d} fill="none" stroke={`url(#${species.gradientId})`} strokeWidth="1.45" strokeLinecap="round" />
 
-                {/* Pola Sisik Perut Ular */}
+                {/* Pola Sisik & Belang Khas Spesies */}
                 <path
                   d={d}
                   fill="none"
-                  stroke="#86efac"
-                  strokeWidth="0.5"
-                  strokeDasharray="0.6 1.0"
+                  stroke={species.scalesColor}
+                  strokeWidth="0.55"
+                  strokeDasharray="0.6 1.1"
                   strokeLinecap="round"
-                  opacity="0.85"
+                  opacity="0.9"
                 />
 
-                {/* Lidah Bercabang Merah di Kepala */}
+                {/* Garis Kilau Punggung */}
+                <path
+                  d={d}
+                  fill="none"
+                  stroke="#ffffff"
+                  strokeWidth="0.2"
+                  strokeLinecap="round"
+                  opacity="0.35"
+                />
+
+                {/* Lidah Bercabang */}
                 <g transform={`translate(${head.x}, ${head.y}) rotate(${(firstSegmentAngle * 180) / Math.PI + 180})`}>
-                  <path d="M 0.6 0 L 1.5 0 L 2.0 -0.4 M 1.5 0 L 2.0 0.4" fill="none" stroke="#ef4444" strokeWidth="0.2" strokeLinecap="round" />
+                  <path d="M 0.6 0 L 1.6 0 L 2.1 -0.4 M 1.6 0 L 2.1 0.4" fill="none" stroke={species.tongueColor} strokeWidth="0.22" strokeLinecap="round" />
                 </g>
 
                 {/* Kepala Ular */}
                 <g transform={`translate(${head.x}, ${head.y}) rotate(${(firstSegmentAngle * 180) / Math.PI + 180})`}>
-                  <ellipse cx="0" cy="0" rx="1.1" ry="0.85" fill="#15803d" stroke="#052e16" strokeWidth="0.15" />
-                  {/* Mata Kuning Tajam */}
-                  <circle cx="-0.25" cy="-0.4" r="0.25" fill="#facc15" />
-                  <circle cx="-0.25" cy="0.4" r="0.25" fill="#facc15" />
-                  <ellipse cx="-0.25" cy="-0.4" rx="0.08" ry="0.18" fill="#000000" />
-                  <ellipse cx="-0.25" cy="0.4" rx="0.08" ry="0.18" fill="#000000" />
+                  <ellipse cx="0" cy="0" rx="1.15" ry="0.9" fill={species.headColor} stroke="rgba(0,0,0,0.4)" strokeWidth="0.15" />
+                  {/* Mata Reptil Berpupil Slit Vertikal */}
+                  <circle cx="-0.25" cy="-0.4" r="0.28" fill={species.eyeIris} />
+                  <circle cx="-0.25" cy="0.4" r="0.28" fill={species.eyeIris} />
+                  <ellipse cx="-0.25" cy="-0.4" rx="0.08" ry="0.2" fill={species.eyePupil} />
+                  <ellipse cx="-0.25" cy="0.4" rx="0.08" ry="0.2" fill={species.eyePupil} />
                 </g>
               </g>
             );
           })}
 
-          {/* 3. RANJAU CAPIT BAJA (Bear Trap Sesuai Gambar 2) */}
+          {/* 3. RANJAU CAPIT BAJA */}
           {snakesState?.mines?.map((mineTile, idx) => {
             const pos = getTileCoordinates(mineTile);
             return (
               <g key={`mine-${idx}`} transform={`translate(${pos.x}, ${pos.y})`}>
-                {/* Lingkaran bahaya lembut */}
                 <circle cx="0" cy="0" r="3.2" fill="#ef4444" opacity="0.12" className="animate-ping" />
-
-                {/* Rahang Baja Bawah / Belakang */}
                 <ellipse cx="0" cy="-0.2" rx="2.8" ry="1.6" fill="none" stroke="url(#trapMetalDark)" strokeWidth="0.5" />
-
-                {/* Gigi Capit Rahang Belakang */}
                 <polygon points="-2.2,-0.4 -2.0,-1.5 -1.7,-0.4" fill="url(#trapJawSteel)" />
                 <polygon points="-1.5,-0.7 -1.2,-1.8 -0.9,-0.7" fill="url(#trapJawSteel)" />
                 <polygon points="-0.6,-0.9 -0.3,-2.0 0.0,-0.9" fill="url(#trapJawSteel)" />
                 <polygon points="0.3,-0.9 0.6,-2.0 0.9,-0.9" fill="url(#trapJawSteel)" />
                 <polygon points="1.2,-0.7 1.5,-1.8 1.8,-0.7" fill="url(#trapJawSteel)" />
                 <polygon points="1.9,-0.4 2.2,-1.5 2.4,-0.4" fill="url(#trapJawSteel)" />
-
-                {/* Palang Rangka Tengah & Engsel Bawah */}
                 <line x1="-2.7" y1="0.1" x2="2.7" y2="0.1" stroke="#334155" strokeWidth="0.4" strokeLinecap="round" />
                 <line x1="0" y1="-1.4" x2="0" y2="1.3" stroke="#475569" strokeWidth="0.35" strokeLinecap="round" />
-
-                {/* Rahang Baja Depan */}
                 <path d="M -2.7 0.1 C -2.2 1.6, 2.2 1.6, 2.7 0.1" fill="none" stroke="url(#trapMetalDark)" strokeWidth="0.6" />
-
-                {/* Gigi Capit Rahang Depan (Menghadap ke Atas) */}
                 <polygon points="-2.4,0.3 -2.2,1.3 -1.9,0.5" fill="url(#trapJawSteel)" />
                 <polygon points="-1.7,0.7 -1.4,1.7 -1.1,0.8" fill="url(#trapJawSteel)" />
                 <polygon points="-0.8,0.9 -0.5,1.9 -0.2,1.0" fill="url(#trapJawSteel)" />
                 <polygon points="0.2,1.0 0.5,1.9 0.8,0.9" fill="url(#trapJawSteel)" />
                 <polygon points="1.1,0.8 1.4,1.7 1.7,0.7" fill="url(#trapJawSteel)" />
                 <polygon points="1.9,0.5 2.2,1.3 2.4,0.3" fill="url(#trapJawSteel)" />
-
-                {/* Pelat Penekan Sensor Bulat di Tengah */}
                 <circle cx="0" cy="0" r="0.9" fill="#94a3b8" stroke="#1e293b" strokeWidth="0.15" />
                 <circle cx="0" cy="0" r="0.55" fill="#dc2626" />
-                {/* Bintik Tekstur Umpan Merah Sesuai Gambar 2 */}
-                <circle cx="-0.2" cy="-0.2" r="0.08" fill="#ffffff" opacity="0.8" />
-                <circle cx="0.2" cy="-0.15" r="0.08" fill="#ffffff" opacity="0.8" />
-                <circle cx="-0.1" cy="0.2" r="0.08" fill="#ffffff" opacity="0.8" />
-                <circle cx="0.2" cy="0.18" r="0.08" fill="#ffffff" opacity="0.8" />
-
-                {/* Rivet Engsel Poros Bawah */}
-                <circle cx="0" cy="1.3" r="0.3" fill="#0f172a" stroke="#64748b" strokeWidth="0.1" />
               </g>
             );
           })}
 
-          {/* 4. BLACK HOLE & WHITE HOLE (Pusaran/Vortex Kosmik Sesuai Gambar 1) */}
+          {/* 4. BLACK HOLE & WHITE HOLE */}
           {snakesState?.wormholes?.map((wh) => {
             const bhPos = getTileCoordinates(wh.blackHole);
             const whPos = getTileCoordinates(wh.whiteHole);
 
             return (
               <g key={wh.id}>
-                {/* === BLACK HOLE (GRAVITY ABSORPTION VORTEX) === */}
+                {/* Black Hole */}
                 <g transform={`translate(${bhPos.x}, ${bhPos.y})`}>
-                  {/* Aura Gas & Akresi Luar */}
                   <circle cx="0" cy="0" r="4.3" fill="url(#bhPusaranGrad)" />
-
-                  {/* Lengan Spiral Pusaran Berputar Searah Jarum Jam */}
                   <g className="vortex-cw">
                     <path d="M 0 0 C 1.2 0.4, 2.8 1.8, 3.5 0.5 C 4.0 -0.6, 2.5 -2.2, 0 0" fill="#f97316" opacity="0.55" />
                     <path d="M 0 0 C -1.2 -0.4, -2.8 -1.8, -3.5 -0.5 C -4.0 0.6, -2.5 2.2, 0 0" fill="#f97316" opacity="0.55" />
                     <path d="M 0 0 C -0.4 1.2, -1.8 2.8, -0.5 3.5 C 0.6 4.0, 2.2 2.5, 0 0" fill="#c026d3" opacity="0.6" />
                     <path d="M 0 0 C 0.4 -1.2, 1.8 -2.8, 0.5 -3.5 C -0.6 -4.0, -2.2 -2.5, 0 0" fill="#c026d3" opacity="0.6" />
                   </g>
-
-                  {/* Cincin Foton Akresi Menyala */}
                   <circle cx="0" cy="0" r="1.5" fill="none" stroke="#fb923c" strokeWidth="0.35" opacity="0.9" />
-                  <circle cx="0" cy="0" r="1.2" fill="none" stroke="#fde047" strokeWidth="0.15" opacity="0.95" />
-
-                  {/* Singularitas / Event Horizon Hitam Pekat */}
                   <circle cx="0" cy="0" r="1.0" fill="#000000" stroke="#7c3aed" strokeWidth="0.1" />
                 </g>
 
-                {/* === WHITE HOLE (ENERGY EMISSION RADIANT VORTEX) === */}
+                {/* White Hole */}
                 <g transform={`translate(${whPos.x}, ${whPos.y})`}>
-                  {/* Aura Energi Luar */}
                   <circle cx="0" cy="0" r="4.3" fill="url(#whPusaranGrad)" />
-
-                  {/* Lengan Spiral Galaksi Berputar Berlawanan Arah Jarum Jam */}
                   <g className="vortex-ccw">
                     <path d="M 0 0 C 0.5 1.5, 1.8 3.0, 0.6 3.6 C -0.8 4.2, -2.4 2.2, 0 0" fill="#38bdf8" opacity="0.6" />
                     <path d="M 0 0 C -0.5 -1.5, -1.8 -3.0, -0.6 -3.6 C 0.8 -4.2, 2.4 -2.2, 0 0" fill="#38bdf8" opacity="0.6" />
-                    <path d="M 0 0 C 1.5 -0.5, 3.0 -1.8, 3.6 -0.6 C 4.2 0.8, 2.2 2.4, 0 0" fill="#60a5fa" opacity="0.5" />
-                    <path d="M 0 0 C -1.5 0.5, -3.0 1.8, -3.6 0.6 C -4.2 -0.8, -2.2 -2.4, 0 0" fill="#60a5fa" opacity="0.5" />
                   </g>
-
-                  {/* Pancaran Berkas Energi Vertikal (Plasma Energy Jet Sesuai Gambar 1) */}
                   <g className="jet-beam">
                     <path d="M -0.3 0 L 0 -4.2 L 0.3 0 L 0 4.2 Z" fill="#e0f2fe" opacity="0.8" />
                     <line x1="0" y1="-4.5" x2="0" y2="4.5" stroke="#ffffff" strokeWidth="0.25" strokeLinecap="round" />
                   </g>
-
-                  {/* Cincin Radiasi Cyan */}
                   <circle cx="0" cy="0" r="1.4" fill="none" stroke="#38bdf8" strokeWidth="0.3" opacity="0.85" />
-
-                  {/* Inti Emisi Putih Terang Menyilaukan */}
                   <circle cx="0" cy="0" r="0.85" fill="#ffffff" />
-                  <circle cx="0" cy="0" r="0.45" fill="#ffffff" stroke="#bae6fd" strokeWidth="0.1" />
                 </g>
               </g>
             );
           })}
         </svg>
 
-        {/* 5. BIDAK PEMAIN */}
+        {/* 5. BIDAK PEMAIN DENGAN ANIMASI LOMPATAN REALISTIS (HOPPING PARABOLIC ARC) */}
         <div className="absolute inset-0 pointer-events-none z-30">
           {Object.entries(visualPositions).map(([pId, pos]) => {
             const p = players[pId];
@@ -614,17 +649,48 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                 key={pId}
                 className="absolute flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2 pointer-events-none"
                 animate={{ left: `${coords.x}%`, top: `${coords.y}%` }}
-                transition={{ type: 'spring', stiffness: 320, damping: 22 }}
+                transition={{ type: 'spring', stiffness: 360, damping: 24 }}
               >
-                <div className="mb-0.5 px-1 py-0.2 text-[9px] font-bold bg-background/90 text-foreground border border-border rounded-md shadow-sm">
+                {/* Tag Nama Pemain */}
+                <div className="mb-0.5 px-1.5 py-0.2 text-[9px] font-bold bg-background/95 text-foreground border border-border rounded-md shadow-xs whitespace-nowrap">
                   {p.username || 'Player'}
                 </div>
-                <div
-                  className="w-5 h-5 rounded-full border-2 border-background shadow-lg flex items-center justify-center text-[10px] font-black text-white"
-                  style={{ backgroundColor: p.color || '#3b82f6' }}
+
+                {/* Wrapper Bidak Fisik: Efek Lompat Parabola & Squash-and-Stretch */}
+                <motion.div
+                  key={`hop-${pos}`}
+                  animate={{
+                    y: [0, -18, -4, 0],
+                    scaleX: [1, 0.85, 1.15, 1],
+                    scaleY: [1, 1.25, 0.88, 1],
+                  }}
+                  transition={{
+                    duration: 0.23,
+                    ease: [0.25, 1, 0.5, 1],
+                  }}
+                  className="relative flex items-center justify-center"
                 >
-                  {p.username?.charAt(0).toUpperCase()}
-                </div>
+                  <div
+                    className="w-5.5 h-5.5 rounded-full border-2 border-background shadow-lg flex items-center justify-center text-[10px] font-black text-white"
+                    style={{ backgroundColor: p.color || '#3b82f6' }}
+                  >
+                    {p.username?.charAt(0).toUpperCase()}
+                  </div>
+                </motion.div>
+
+                {/* Bayangan Bidak Dinamis (Mengecil & Memudar Saat Melayang di Udara) */}
+                <motion.div
+                  key={`shadow-${pos}`}
+                  animate={{
+                    scale: [1, 0.45, 1.15, 1],
+                    opacity: [0.55, 0.2, 0.65, 0.55],
+                  }}
+                  transition={{
+                    duration: 0.23,
+                    ease: [0.25, 1, 0.5, 1],
+                  }}
+                  className="w-4 h-1.5 bg-black/60 rounded-full blur-[1px] -mt-0.5"
+                />
               </motion.div>
             );
           })}
