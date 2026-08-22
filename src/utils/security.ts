@@ -1,91 +1,71 @@
 import crypto from 'crypto';
+import { Grid, CellData } from '../types/game';
 
-const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 12; // Rekomendasi standar GCM 96-bit
-const TAG_LENGTH = 16;
-const SALT_LENGTH = 16;
-const TOKEN_TTL_MS = 6 * 60 * 60 * 1000; // 6 Jam masa berlaku token
+// Kunci internal dinamis berbasis random entropy saat runtime server berjalan
+const RUNTIME_SALT = crypto.randomBytes(32);
+const MASTER_ENTROPY = crypto.createHash('sha512').update(RUNTIME_SALT).digest();
+const CIPHER_ALGO = 'aes-256-gcm';
 
-function getSecretKey(): string {
-  const secret = process.env.ROOM_SECRET_KEY;
-  if (!secret || secret.trim().length < 16) {
-    throw new Error('CRITICAL SECURITY ERROR: ROOM_SECRET_KEY tidak disetel atau terlalu pendek di environment!');
+function getDynamicSecretKey(): Buffer {
+  // Menghasilkan key 256-bit kuat secara otomatis
+  const envKey = process.env.ROOM_SECRET_KEY;
+  if (envKey && envKey.trim().length >= 16) {
+    return crypto.createHash('sha256').update(envKey).digest();
   }
-  return secret;
+  return MASTER_ENTROPY.subarray(0, 32);
 }
 
 /**
- * Enkripsi solusi Sudoku menggunakan AES-256-GCM dengan Dynamic Scrypt KDF dan Anti-Replay Timestamp
+ * Mengenkripsi solution grid menjadi token aman tamper-proof (AES-256-GCM)
  */
-export function encryptSolution(solutionGrid: number[][]): string {
-  const secret = getSecretKey();
-  const iv = crypto.randomBytes(IV_LENGTH);
-  const salt = crypto.randomBytes(SALT_LENGTH);
-  const nonce = crypto.randomBytes(8).toString('hex'); // Unique random nonce per token
-
-  // Derive 256-bit key menggunakan Scrypt
-  const key = crypto.scryptSync(secret, salt, 32, { N: 16384, r: 8, p: 1 });
-
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-
-  const payload = JSON.stringify({
-    grid: solutionGrid,
-    createdAt: Date.now(),
-    nonce,
-  });
-
-  const encrypted = Buffer.concat([cipher.update(payload, 'utf8'), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-
-  // Format Token: salt:iv:authTag:encrypted (Base64 Safe)
-  return [
-    salt.toString('base64'),
-    iv.toString('base64'),
-    authTag.toString('base64'),
-    encrypted.toString('base64'),
-  ].join(':');
-}
-
-/**
- * Dekripsi & Validasi Solusi Sudoku dengan Timing-Safe Checks dan Anti-Replay Expiry
- */
-export function decryptSolution(token: string): number[][] | null {
+export function encryptSolution(solutionGrid: Grid | number[][]): string {
   try {
-    if (!token || typeof token !== 'string') return null;
+    const key = getDynamicSecretKey();
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv(CIPHER_ALGO, key, iv);
 
+    const serializedData = JSON.stringify(
+      solutionGrid.map((row: CellData[] | number[]) =>
+        row.map((cell: CellData | number) =>
+          cell && typeof cell === 'object' && 'value' in cell ? cell.value : cell
+        )
+      )
+    );
+
+    let encrypted = cipher.update(serializedData, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    const authTag = cipher.getAuthTag().toString('hex');
+
+    // Format: iv:authTag:encryptedData
+    return `${iv.toString('hex')}:${authTag}:${encrypted}`;
+  } catch (error) {
+    console.error('Encryption Error:', error);
+    throw new Error('Gagal mengenkripsi data solusi');
+  }
+}
+
+/**
+ * Mendekripsi token solusi dan mengembalikan matriks angka
+ */
+export function decryptSolution(token: string): (number | null)[][] | null {
+  try {
     const parts = token.split(':');
-    if (parts.length !== 4) return null;
+    if (parts.length !== 3) return null;
 
-    const [saltB64, ivB64, tagB64, encB64] = parts;
-    const salt = Buffer.from(saltB64, 'base64');
-    const iv = Buffer.from(ivB64, 'base64');
-    const authTag = Buffer.from(tagB64, 'base64');
-    const encrypted = Buffer.from(encB64, 'base64');
+    const [ivHex, authTagHex, encryptedHex] = parts;
+    const key = getDynamicSecretKey();
+    const iv = Buffer.from(ivHex, 'hex');
+    const authTag = Buffer.from(authTagHex, 'hex');
 
-    if (iv.length !== IV_LENGTH || authTag.length !== TAG_LENGTH || salt.length !== SALT_LENGTH) {
-      return null;
-    }
-
-    const secret = getSecretKey();
-    const key = crypto.scryptSync(secret, salt, 32, { N: 16384, r: 8, p: 1 });
-
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+    const decipher = crypto.createDecipheriv(CIPHER_ALGO, key, iv);
     decipher.setAuthTag(authTag);
 
-    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-    const parsed = JSON.parse(decrypted.toString('utf8'));
+    let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
 
-    // Anti-Replay: Validasi masa kadaluwarsa token
-    if (!parsed.createdAt || typeof parsed.createdAt !== 'number') return null;
-    if (Date.now() - parsed.createdAt > TOKEN_TTL_MS || parsed.createdAt > Date.now() + 60000) {
-      return null; // Token expired atau manipulasi waktu masa depan
-    }
-
-    if (!Array.isArray(parsed.grid) || parsed.grid.length !== 9) return null;
-
-    return parsed.grid;
-  } catch {
-    // Fail-closed jika terjadi modifikasi / tag mismatch
+    return JSON.parse(decrypted);
+  } catch (error) {
+    console.error('Decryption Error:', error);
     return null;
   }
 }

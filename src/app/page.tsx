@@ -238,7 +238,7 @@ export default function Home() {
           <div className="relative">
             <Input
               label="Kode Room"
-              placeholder="5 Karakter (Contoh: AB12C)"
+              placeholder="Masukan code room..."
               value={joinCode}
               maxLength={5}
               onChange={(e) => {

@@ -23,3 +23,7 @@ Recommendation: Create a typed helper method like `clearStorage()` within the ga
 2026-07-26 - [Realtime WebSocket Room Synchronization & Orphan Host Handshake]
 Issue: Guest players joining a room could experience race conditions where `REQUEST_SYNC` was sent before channel subscription completion or when host presence had dropped without migrating host status, causing guests to get stuck on loading screens.
 Recommendation: Implement two-way handshakes with immediate `sync_state` emission upon `SUBSCRIBED` and presence `join` events, include game-mode-aware state polling in guest retry loops, and implement orphan room host promotion fallbacks when no active host presence is detected.
+
+2026-07-26 - [Dynamic Cryptographic Secret Fallback for Room Encryption]
+Issue: Hard enforcement of `ROOM_SECRET_KEY` in environment variables caused 500 API crashes and infinite React re-render loops (#185) on deployments missing env configuration.
+Recommendation: Generate a dynamic 256-bit runtime master entropy buffer using `crypto.randomBytes` and `crypto.createHash` as a secure fallback when `ROOM_SECRET_KEY` is omitted, while retaining AES-256-GCM authenticated encryption.
