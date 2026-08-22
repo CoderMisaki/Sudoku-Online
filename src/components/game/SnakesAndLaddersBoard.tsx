@@ -157,6 +157,8 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const snakesState = useGameStore((state) => state.snakesState);
   const updateSnakesState = useGameStore((state) => state.updateSnakesState);
 
+  const isSkippingRef = useRef(false);
+
   const activePlayerIds = useMemo(() => {
     return Object.values(players)
       .filter((p) => !p.isSpectator && p.status !== 'left')
@@ -203,17 +205,26 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const currentTurn = snakesState?.currentTurnUserId || activePlayerIds[0];
   const isMyTurn = currentTurn === userId;
 
-  // 2. Auto-skip giliran jika pemain pada turn aktif ternyata sudah finish
+  // 2. Auto-skip giliran jika pemain pada turn aktif ternyata sudah finish (dengan guard isSkippingRef)
   useEffect(() => {
-    if (!snakesState || isGameFullyFinished) return;
-    if (winners.includes(snakesState.currentTurnUserId || '') && unfinishedPlayerIds.length > 0) {
+    if (!snakesState || isGameFullyFinished || isSkippingRef.current) return;
+
+    const currentTurnId = snakesState.currentTurnUserId || '';
+    if (winners.includes(currentTurnId) && unfinishedPlayerIds.length > 0) {
+      isSkippingRef.current = true;
+
       const nextTurnId = unfinishedPlayerIds[0];
       const nextState: SnakesState = {
         ...snakesState,
         currentTurnUserId: nextTurnId,
       };
+
       updateSnakesState(nextState);
       if (broadcastSnakesState) broadcastSnakesState(nextState);
+
+      setTimeout(() => {
+        isSkippingRef.current = false;
+      }, 100);
     }
   }, [snakesState, winners, unfinishedPlayerIds, isGameFullyFinished, updateSnakesState, broadcastSnakesState]);
 
