@@ -22,7 +22,7 @@ export default function Home() {
     (useGameStore as any).persist?.clearStorage?.();
   };
 
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') || '' : ''));
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
 
@@ -34,11 +34,6 @@ export default function Home() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const storedName = localStorage.getItem('sudoku_username') || '';
-    if (storedName) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setUsername(storedName);
-    }
     getOrCreateUserId();
   }, []);
 
@@ -222,7 +217,7 @@ export default function Home() {
           />
 
           <div className="pt-2">
-            <Button type="submit" formMethod="dialog" fullWidth size="lg">
+            <Button type="submit" fullWidth size="lg">
               Masuk Room
             </Button>
           </div>

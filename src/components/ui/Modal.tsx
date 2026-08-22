@@ -1,10 +1,10 @@
-"use client";
-
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { motion, AnimatePresence } from 'framer-motion';
+
+const emptySubscribe = () => () => {};
 
 interface ModalProps {
   isOpen: boolean;
@@ -21,13 +21,11 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   className
 }) => {
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    // defer to avoid nextjs warning
-    const t = setTimeout(() => setMounted(true), 0);
-    return () => clearTimeout(t);
-  }, []);
+  const mounted = useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
 
   useEffect(() => {
     if (isOpen && mounted) {

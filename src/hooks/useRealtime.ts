@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
 import { Grid } from "../types/game";
@@ -13,16 +13,19 @@ export function useRealtime(roomId: string) {
   const userId = useGameStore((state) => state.userId);
   const username = useGameStore((state) => state.username);
 
-  // Expose an active locks state
+  // Expose an active locks state and ref for stable access
   const [locks, setLocks] = useState<Record<string, { userId: string, expiresAt: number }>>({});
+  const locksRef = useRef<Record<string, { userId: string, expiresAt: number }>>({});
 
+  useEffect(() => {
+    locksRef.current = locks;
+  }, [locks]);
 
   // Status koneksi WebSocket
   const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED'>('CONNECTING');
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   useEffect(() => {
-
     if (!roomId || !userId || !username) return;
 
     const channel = supabase.channel(`room:${roomId}`, {
@@ -56,21 +59,25 @@ export function useRealtime(roomId: string) {
           const newPlayers = { ...store.room.players };
           let changed = false;
 
-          newPresences.forEach((p) => {
+          (newPresences as Array<{ user_id?: string; username?: string }>).forEach((p) => {
             const pid = p.user_id;
+            if (!pid) return;
             if (!newPlayers[pid]) {
               newPlayers[pid] = {
                 id: pid,
                 username: p.username || 'Player',
                 color: PLAYER_COLORS[Object.keys(newPlayers).length % PLAYER_COLORS.length],
-                isHost: false,
+                isHost: pid === store.room?.hostId,
                 score: 0,
                 hints: 3,
                 status: 'online'
               };
               changed = true;
             } else if (newPlayers[pid].status !== 'online') {
-              newPlayers[pid].status = 'online';
+              newPlayers[pid] = {
+                ...newPlayers[pid],
+                status: 'online'
+              };
               changed = true;
             }
           });
@@ -89,11 +96,15 @@ export function useRealtime(roomId: string) {
           let changed = false;
           let hostLeft = false;
 
-          leftPresences.forEach((p) => {
-            if (newPlayers[p.user_id]) {
-              newPlayers[p.user_id].status = 'offline';
+          (leftPresences as Array<{ user_id?: string }>).forEach((p) => {
+            const pid = p.user_id;
+            if (pid && newPlayers[pid]) {
+              newPlayers[pid] = {
+                ...newPlayers[pid],
+                status: 'offline'
+              };
               changed = true;
-              if (store.room && store.room.hostId === p.user_id) {
+              if (store.room && store.room.hostId === pid) {
                 hostLeft = true;
               }
             }
@@ -102,18 +113,22 @@ export function useRealtime(roomId: string) {
           if (changed) {
             let newHostId = store.room.hostId;
             if (hostLeft) {
-              // Find the first online player to be the new host
               const onlinePlayers = Object.values(newPlayers).filter(p => p.status === 'online');
               if (onlinePlayers.length > 0) {
                 newHostId = onlinePlayers[0].id;
-                newPlayers[newHostId].isHost = true;
+                Object.keys(newPlayers).forEach(pid => {
+                  newPlayers[pid] = {
+                    ...newPlayers[pid],
+                    isHost: pid === newHostId
+                  };
+                });
               }
             }
 
             const updatedRoom = { ...store.room, players: newPlayers, hostId: newHostId };
             store.setRoom(updatedRoom);
             if (newHostId === userId) {
-                syncHostState();
+              syncHostState();
             }
           }
         }
@@ -165,10 +180,13 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'note' }, ({ payload }) => {
         if (typeof payload.row !== "number" || typeof payload.col !== "number" || typeof payload.note !== "number") return;
+        if (payload.row < 0 || payload.row > 8 || payload.col < 0 || payload.col > 8) return;
+        if (!Number.isInteger(payload.note) || payload.note < 1 || payload.note > 9) return;
         useGameStore.getState().toggleNote(payload.row, payload.col, payload.note);
       })
       .on('broadcast', { event: 'move' }, async ({ payload }) => {
         if (typeof payload.row !== "number" || typeof payload.col !== "number") return;
+        if (payload.row < 0 || payload.row > 8 || payload.col < 0 || payload.col > 8) return;
 
         const store = useGameStore.getState();
         // Independently verify the move if it's from another user and not null
@@ -270,11 +288,12 @@ export function useRealtime(roomId: string) {
     const interval = setInterval(() => {
       setLocks(prev => {
         const now = Date.now();
-        const next = { ...prev };
         let changed = false;
-        for (const [key, lock] of Object.entries(next)) {
-          if (lock.expiresAt < now) {
-            delete next[key];
+        const next: Record<string, { userId: string, expiresAt: number }> = {};
+        for (const [key, lock] of Object.entries(prev)) {
+          if (lock.expiresAt >= now) {
+            next[key] = lock;
+          } else {
             changed = true;
           }
         }
@@ -292,42 +311,44 @@ export function useRealtime(roomId: string) {
     };
   }, [roomId, userId, username]);
 
-
-  const broadcastCursor = (row: number, col: number) => {
-    if (!channelRef.current || !userId) return;
+  const broadcastCursor = useCallback((row: number, col: number) => {
+    const currentUserId = useGameStore.getState().userId;
+    if (!channelRef.current || !currentUserId) return;
     channelRef.current.send({
       type: 'broadcast',
       event: 'cursor',
-      payload: { userId, row, col },
+      payload: { userId: currentUserId, row, col },
     });
-  };
+  }, []);
 
-  const lockCell = (row: number, col: number) => {
-    if (!channelRef.current || !userId) return;
+  const lockCell = useCallback((row: number, col: number) => {
+    const currentUserId = useGameStore.getState().userId;
+    if (!channelRef.current || !currentUserId) return false;
     const key = `${row}-${col}`;
-    const currentLock = locks[key];
+    const currentLock = locksRef.current[key];
 
     // Don't broadcast if already locked by someone else
-    if (currentLock && currentLock.userId !== userId && currentLock.expiresAt > Date.now()) {
+    if (currentLock && currentLock.userId !== currentUserId && currentLock.expiresAt > Date.now()) {
       return false; // Could not lock
     }
 
     channelRef.current.send({
       type: 'broadcast',
       event: 'cell_lock',
-      payload: { userId, row, col },
+      payload: { userId: currentUserId, row, col },
     });
 
     // Optimistic lock
     setLocks(prev => ({
       ...prev,
-      [key]: { userId, expiresAt: Date.now() + 5000 }
+      [key]: { userId: currentUserId, expiresAt: Date.now() + 5000 }
     }));
     return true; // Locked successfully
-  };
+  }, []);
 
-  const broadcastMove = async (row: number, col: number, value: number | null) => {
-    if (!channelRef.current || !userId) return;
+  const broadcastMove = useCallback(async (row: number, col: number, value: number | null, options?: { silent?: boolean }) => {
+    const currentUserId = useGameStore.getState().userId;
+    if (!channelRef.current || !currentUserId) return;
 
     // 1. Proteksi Anti-Bot (Rate Limiting)
     if (!moveRateLimiter.checkAllowed()) return;
@@ -356,9 +377,9 @@ export function useRealtime(roomId: string) {
     }
 
     // 3. Update State Lokal & Disiarkan Hasil Resmi ke Seluruh Pemain
-    store.updateCellWithValidation(row, col, value, userId, isCorrect);
+    store.updateCellWithValidation(row, col, value, currentUserId, isCorrect);
 
-    if (value !== null) {
+    if (value !== null && !options?.silent) {
       if (isCorrect) {
         toast.success('Jawaban benar ✅', { duration: 1500 });
       } else {
@@ -369,24 +390,26 @@ export function useRealtime(roomId: string) {
     channelRef.current.send({
       type: 'broadcast',
       event: 'move',
-      payload: { userId, row, col, value, isCorrect },
+      payload: { userId: currentUserId, row, col, value, isCorrect },
     });
-  };
+  }, []);
 
-  const broadcastNote = (row: number, col: number, note: number) => {
-    if (!channelRef.current || !userId) return;
+  const broadcastNote = useCallback((row: number, col: number, note: number) => {
+    const currentUserId = useGameStore.getState().userId;
+    if (!channelRef.current || !currentUserId) return;
 
     useGameStore.getState().toggleNote(row, col, note);
 
     channelRef.current.send({
       type: 'broadcast',
       event: 'note',
-      payload: { userId, row, col, note },
+      payload: { userId: currentUserId, row, col, note },
     });
-  };
+  }, []);
 
-  const broadcastNextGame = (newGrid: Grid, newSolutionToken: string) => {
-    if (!channelRef.current || !userId) return;
+  const broadcastNextGame = useCallback((newGrid: Grid, newSolutionToken: string) => {
+    const currentUserId = useGameStore.getState().userId;
+    if (!channelRef.current || !currentUserId) return;
 
     useGameStore.getState().startNextGame(newGrid, newSolutionToken);
 
@@ -395,26 +418,29 @@ export function useRealtime(roomId: string) {
       event: 'next_game',
       payload: { grid: newGrid, solutionToken: newSolutionToken },
     });
-  };
+  }, []);
 
-  const broadcastChat = (text: string) => {
-    if (!channelRef.current || !userId || !username) return;
+  const broadcastChat = useCallback((text: string) => {
+    const currentState = useGameStore.getState();
+    const currentUserId = currentState.userId;
+    const currentUsername = currentState.username;
+    if (!channelRef.current || !currentUserId || !currentUsername) return;
     const msg: ChatMessage = {
       id: Math.random().toString(36).substring(2, 9),
-      userId,
-      username,
+      userId: currentUserId,
+      username: currentUsername,
       text,
       timestamp: Date.now()
     };
 
     // Update lokal instan + broadcast serentak
-    useGameStore.getState().addMessage(msg);
+    currentState.addMessage(msg);
     channelRef.current.send({
       type: 'broadcast',
       event: 'chat',
       payload: msg,
     });
-  };
+  }, []);
 
   return { broadcastCursor, broadcastMove, broadcastNote, lockCell, locks, broadcastChat, broadcastNextGame, realtimeStatus, connectionError };
 }

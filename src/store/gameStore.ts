@@ -48,7 +48,7 @@ export const useGameStore = create<GameStore>()(
       room: null,
       setRoom: (room) => set({ room }),
       updatePlayer: (playerId, data) => set((state) => {
-        if (!state.room) return state;
+        if (!state.room || !state.room.players[playerId]) return state;
         return {
           room: {
             ...state.room,
@@ -70,6 +70,7 @@ export const useGameStore = create<GameStore>()(
 
       updateCellWithValidation: (row, col, value, playerId, isCorrect) => set((state) => {
         if (!state.grid || !state.room) return state;
+        if (row < 0 || row > 8 || col < 0 || col > 8 || !state.grid[row]) return state;
 
         const currentCell = state.grid[row][col];
         if (currentCell.isLocked || currentCell.value === value) return state;
@@ -94,10 +95,10 @@ export const useGameStore = create<GameStore>()(
 
         // Perhitungan Skor Resmi Terverifikasi
         let newRoom = { ...state.room };
-        if (value !== null && mode !== 'zen') {
+        if (value !== null && mode !== 'zen' && state.room.players[playerId]) {
           const currentScore = state.room.players[playerId]?.score || 0;
           const scoreDiff = isCorrect ? 10 : -5;
-          const newScore = currentScore + scoreDiff;
+          const newScore = Math.max(0, currentScore + scoreDiff);
 
           newRoom = {
             ...state.room,
@@ -116,16 +117,14 @@ export const useGameStore = create<GameStore>()(
 
       toggleNote: (row, col, note) => set((state) => {
         if (!state.grid) return state;
+        if (row < 0 || row > 8 || col < 0 || col > 8 || !state.grid[row]) return state;
         const newGrid = [...state.grid];
         newGrid[row] = [...newGrid[row]];
 
         const currentNotes = newGrid[row][col].notes;
         const hasNote = currentNotes.includes(note);
 
-        let updatedNotes = hasNote ? currentNotes.filter(n => n !== note) : [...currentNotes, note].sort();
-        if (updatedNotes.length > 5) {
-          updatedNotes = updatedNotes.slice(0, 5);
-        }
+        const updatedNotes = hasNote ? currentNotes.filter(n => n !== note) : [...currentNotes, note].sort();
         newGrid[row][col] = {
           ...newGrid[row][col],
           notes: updatedNotes
@@ -150,6 +149,8 @@ export const useGameStore = create<GameStore>()(
           };
         });
 
+        const validatedGrid = checkConflicts(newGrid);
+
         return {
           room: {
             ...state.room,
@@ -157,15 +158,20 @@ export const useGameStore = create<GameStore>()(
             startedAt: Date.now(), // Reset timer
             status: 'playing'
           },
-          grid: newGrid,
+          grid: validatedGrid,
           solutionToken: newSolutionToken,
-          selectedCell: null,
-          messages: [] // Optional: clear messages, but keeping might be fine. Let's keep messages, it's nice for chat history. Wait, user said "reset ulang lagi seperti main baru". Usually chat can be kept. Let's clear it just in case. Or let's not clear chat, it breaks communication. Actually I will leave messages alone.
+          selectedCell: null
         };
       }),
       enterRoom: (roomId) => {
         const state = get();
         if (state.room?.id === roomId) return;
+        // Idempotent: only update when there is actually stale state to clear,
+        // otherwise every call creates new references (e.g. messages: []) and
+        // can trigger cascading re-renders.
+        if (state.room === null && state.grid === null && state.solutionToken === null && state.messages.length === 0 && state.selectedCell === null) {
+          return;
+        }
         set({
           room: null,
           grid: null,

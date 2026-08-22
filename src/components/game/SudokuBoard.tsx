@@ -2,10 +2,7 @@
 
 import React, { useCallback, useEffect } from 'react';
 import { useGameStore } from '../../store/gameStore';
-import { isValidMove } from '../../utils/sudoku';
 import { cn } from '../../utils/cn';
-
-import toast from 'react-hot-toast';
 
 interface SudokuBoardProps {
   broadcastMove: (row: number, col: number, value: number | null) => void;
@@ -56,6 +53,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
     }
 
     if (e.key >= '1' && e.key <= '9') {
+      e.preventDefault();
       const val = parseInt(e.key);
       if (!cell.isLocked) {
         if (isEraserMode && cell.value === null) {
@@ -69,16 +67,21 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
         }
       }
     } else if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault();
       if (!cell.isLocked) {
         broadcastMove(row, col, null);
       }
     } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
       handleCellClick(Math.max(0, row - 1), col);
     } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
       handleCellClick(Math.min(8, row + 1), col);
     } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
       handleCellClick(row, Math.max(0, col - 1));
     } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
       handleCellClick(row, Math.min(8, col + 1));
     }
   }, [selectedCell, grid, userId, locks, broadcastMove, broadcastNote, handleCellClick, isPencilMode, isEraserMode]);
@@ -137,8 +140,7 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({ broadcastMove, broadca
                   "bg-red-500/30": isError && !isSelected,
 
                   // Highlight angka kembar: gunakan ring/outline pink, BUKAN merubah warna teks saja
-                  "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected && !isError,
-                  "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected && isError,
+                  "ring-2 ring-pink-400 ring-inset": isSameValue && !isSelected,
                   "ring-2 ring-white ring-inset": isSameValue && isSelected,
 
                   // Warna teks angka (pastikan terbaca jelas)

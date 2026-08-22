@@ -4,7 +4,6 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useGameStore } from '../../../store/gameStore';
 import { useRealtime } from '../../../hooks/useRealtime';
-import { isValidMove } from '../../../utils/sudoku';
 import { getOrCreateUserId } from '../../../utils/uuid';
 import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
@@ -15,7 +14,6 @@ import { isSupabaseEnvValid } from '../../../services/supabase';
 import { Difficulty, GameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
 
-
 export default function RoomPage() {
   const params = useParams();
   const roomId = (params?.id as string) || '';
@@ -24,24 +22,24 @@ export default function RoomPage() {
   const userId = useGameStore(state => state.userId);
   const username = useGameStore(state => state.username);
   const room = useGameStore(state => state.room);
-  const setRoom = useGameStore(state => state.setRoom);
-  const enterRoom = useGameStore(state => state.enterRoom);
   const grid = useGameStore(state => state.grid);
   const resetGame = useGameStore(state => state.resetGame);
-  const setGameData = useGameStore(state => state.setGameData);
-  const setUserInfo = useGameStore(state => state.setUserInfo);
   const selectedCell = useGameStore(state => state.selectedCell);
   const messages = useGameStore(state => state.messages);
-  const player = useGameStore(state => state.room?.players[userId || '']);
+  const player = useGameStore(state => (userId && state.room?.players ? state.room.players[userId] : undefined));
   const hintsRemaining = player?.hints ?? 3;
 
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('sudoku_theme') as 'light' | 'dark' | 'system') || 'system';
+    }
+    return 'system';
+  });
   const [isPencilMode, setIsPencilMode] = useState(false);
   const [isEraserMode, setIsEraserMode] = useState(false);
-
 
   const applyTheme = useCallback((newTheme: 'light' | 'dark' | 'system') => {
     if (newTheme === 'dark') {
@@ -56,18 +54,15 @@ export default function RoomPage() {
   }, []);
 
   useEffect(() => {
-    const storedTheme = localStorage.getItem('sudoku_theme') as 'light' | 'dark' | 'system' || 'system';
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setTheme(storedTheme);
-    applyTheme(storedTheme);
-  }, [applyTheme]);
+    applyTheme(theme);
+  }, [theme, applyTheme]);
 
   const toggleTheme = () => {
     const newTheme = theme === 'dark' ? 'light' : 'dark';
     setTheme(newTheme);
     localStorage.setItem('sudoku_theme', newTheme);
-    applyTheme(newTheme);
   };
+
   const { broadcastMove, broadcastNote, broadcastCursor, lockCell, locks, broadcastChat, broadcastNextGame, realtimeStatus, connectionError } = useRealtime(roomId);
   const [chatInput, setChatInput] = useState('');
   const isGameCompleted = React.useMemo(() => {
@@ -97,19 +92,21 @@ export default function RoomPage() {
       } else {
         toast.error('Gagal membuat game baru', { id: 'nextGame' });
       }
-    } catch (e) {
+    } catch {
       toast.error('Gagal membuat game baru', { id: 'nextGame' });
     }
   };
+
   const [newMsgNotif, setNewMsgNotif] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const prevLastMsgIdRef = useRef<string | null>(null);
+  const isInitialMessagesMountRef = useRef(true);
 
   useEffect(() => {
     // Check if user is scrolled near bottom
     const chatContainer = chatEndRef.current?.parentElement;
     if (chatContainer) {
-      // Don't auto-scroll on every render, only when near bottom to prevent screen jumping
       const isNearBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 150;
       if (isNearBottom) {
         requestAnimationFrame(() => {
@@ -117,24 +114,32 @@ export default function RoomPage() {
         });
       }
     } else {
-       requestAnimationFrame(() => {
-          chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-       });
+      requestAnimationFrame(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      });
     }
 
-    // Check if new message is from others and not initial load
     if (messages.length > 0) {
       const lastMsg = messages[messages.length - 1];
-      // Only show notif if it's not our own message
-      if (lastMsg.userId !== userId) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setNewMsgNotif(true);
-        const timer = setTimeout(() => setNewMsgNotif(false), 1500);
-        return () => clearTimeout(timer);
+      if (isInitialMessagesMountRef.current) {
+        isInitialMessagesMountRef.current = false;
+        prevLastMsgIdRef.current = lastMsg.id;
+        return;
+      }
+
+      if (lastMsg.id !== prevLastMsgIdRef.current) {
+        prevLastMsgIdRef.current = lastMsg.id;
+        if (lastMsg.userId !== userId) {
+          const t1 = setTimeout(() => setNewMsgNotif(true), 0);
+          const t2 = setTimeout(() => setNewMsgNotif(false), 1500);
+          return () => {
+            clearTimeout(t1);
+            clearTimeout(t2);
+          };
+        }
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages]);
+  }, [messages, userId]);
 
   // Perhitungan timer real-time berdasarkan room.startedAt
   useEffect(() => {
@@ -167,18 +172,13 @@ export default function RoomPage() {
         textarea.style.height = '40px';
       }
 
-      // Force scroll to bottom when user sends a message
       requestAnimationFrame(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
       });
     }
   };
 
-
-
-  // Initialize Realtime
-
-
+  // Initialize room state for this roomId
   useEffect(() => {
     if (!roomId) return;
 
@@ -191,12 +191,13 @@ export default function RoomPage() {
       return;
     }
 
-    if (!userId) {
-      setUserInfo(storedUserId, storedUsername);
+    const store = useGameStore.getState();
+
+    if (store.userId !== storedUserId || store.username !== storedUsername) {
+      store.setUserInfo(storedUserId, storedUsername);
     }
 
-    // Ensure we enter the right room and clear stale state if different
-    enterRoom(roomId);
+    store.enterRoom(roomId);
 
     let isHostFromConfig = false;
     let difficulty: Difficulty = 'medium';
@@ -208,7 +209,6 @@ export default function RoomPage() {
     if (tempConfigStr) {
       try {
         const config = JSON.parse(tempConfigStr);
-
         isHostFromConfig = Boolean(config.isHost);
 
         if (isHostFromConfig) {
@@ -228,62 +228,66 @@ export default function RoomPage() {
 
     const isHostFromStorage = existingRoom?.hostId === storedUserId;
     const isHostFromSession = sessionStorage.getItem(`sudoku_host_room_${roomId}`) === '1';
-
     const isHost = isHostFromConfig || isHostFromStorage || isHostFromSession;
 
-    // Host makes a new puzzle only if there is no room for this roomId
-    if (!existingRoom && isHost) {
-      currentState.setRoom({
-        id: roomId,
-        code: roomId,
-        hostId: storedUserId,
-        difficulty,
-        mode,
-        maxPlayers,
-        status: 'playing',
-        players: {
-          [storedUserId]: {
-            id: storedUserId,
-            username: storedUsername,
-            color: '#3b82f6',
-            isHost: true,
-            score: 0,
-            hints: 3,
-            status: 'online',
+    let cancelled = false;
+
+    if (isHost) {
+      if (!existingRoom || existingRoom.id !== roomId) {
+        currentState.setRoom({
+          id: roomId,
+          code: roomId,
+          hostId: storedUserId,
+          difficulty,
+          mode,
+          maxPlayers,
+          status: 'playing',
+          players: {
+            [storedUserId]: {
+              id: storedUserId,
+              username: storedUsername,
+              color: '#3b82f6',
+              isHost: true,
+              score: 0,
+              hints: 3,
+              status: 'online',
+            },
           },
-        },
-        createdAt: Date.now(),
-        startedAt: Date.now(),
-      });
+          createdAt: Date.now(),
+          startedAt: Date.now(),
+        });
+      }
 
-      fetch('/api/game/create-room', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ difficulty }),
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.initialGrid && data.solutionToken) {
-          currentState.setGameData(data.initialGrid, data.solutionToken);
-        }
-      })
-      .catch(err => console.error('Failed to initialize room data:', err));
+      if (!currentState.grid) {
+        fetch('/api/game/create-room', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ difficulty }),
+        })
+          .then(res => res.json())
+          .then(data => {
+            if (!cancelled && data.initialGrid && data.solutionToken) {
+              useGameStore.getState().setGameData(data.initialGrid, data.solutionToken);
+              setLoading(false);
+            }
+          })
+          .catch(err => {
+            console.error('Failed to initialize room data:', err);
+            if (!cancelled) setLoading(false);
+          });
 
+        return () => {
+          cancelled = true;
+        };
+      }
     }
 
-    const t = setTimeout(() => setLoading(false), 0);
-
-    return () => clearTimeout(t);
-  }, [
-    roomId,
-    router,
-    userId,
-    room,
-    setRoom,
-    setGameData,
-    setUserInfo,
-    enterRoom,
-  ]);
+    const timer = setTimeout(() => setLoading(false), 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [roomId, router]);
 
   const copyRoomCode = () => {
     navigator.clipboard.writeText(roomId);
@@ -297,15 +301,14 @@ export default function RoomPage() {
     router.push('/');
   };
 
-
   const handleHint = useCallback(async () => {
     if (!userId || !selectedCell) {
       toast.error('Pilih kotak kosong terlebih dahulu untuk menggunakan hint!');
       return;
     }
     const store = useGameStore.getState();
-    const player = store.room?.players[userId];
-    if (!player || player.hints <= 0) return;
+    const currentPlayer = store.room?.players[userId];
+    if (!currentPlayer || currentPlayer.hints <= 0) return;
     if (store.grid && store.grid[selectedCell.row][selectedCell.col].isLocked) return;
 
     if (store.solutionToken) {
@@ -317,8 +320,12 @@ export default function RoomPage() {
         });
         const data = await res.json();
         if (data.value !== undefined) {
-          broadcastMove(selectedCell.row, selectedCell.col, data.value);
-          store.updatePlayer(userId, { hints: player.hints - 1 });
+          const latest = useGameStore.getState();
+          const latestPlayer = latest.room?.players[userId];
+          if (!latestPlayer || latestPlayer.hints <= 0) return;
+
+          broadcastMove(selectedCell.row, selectedCell.col, data.value, { silent: true });
+          latest.updatePlayer(userId, { hints: latestPlayer.hints - 1 });
           toast.success('Hint digunakan untuk 1 kotak!');
         }
       } catch (e) {
@@ -326,8 +333,6 @@ export default function RoomPage() {
       }
     }
   }, [userId, selectedCell, broadcastMove]);
-
-
 
   const handleNumpadClick = useCallback((num: number) => {
     if (!selectedCell || !userId) return;
@@ -343,9 +348,8 @@ export default function RoomPage() {
     if (currentGrid && currentGrid[row][col].isLocked) return;
 
     if (isEraserMode && currentGrid && currentGrid[row][col].value === null) {
-      // Check if note exists, if yes broadcast to remove
       if (currentGrid[row][col].notes.includes(num)) {
-         broadcastNote(row, col, num);
+        broadcastNote(row, col, num);
       }
     } else if (isPencilMode && currentGrid && currentGrid[row][col].value === null) {
       broadcastNote(row, col, num);
@@ -370,13 +374,10 @@ export default function RoomPage() {
     const currentGrid = useGameStore.getState().grid;
     if (currentGrid && currentGrid[row][col].isLocked) return;
 
-    // Broadcast null to clear cell value if it has a value
     if (currentGrid && currentGrid[row][col].value !== null) {
       broadcastMove(row, col, null);
     }
   }, [isEraserMode, selectedCell, userId, broadcastMove, locks]);
-
-
 
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center bg-background text-foreground">Loading room...</div>;
@@ -394,7 +395,6 @@ export default function RoomPage() {
       </div>
     );
   }
-
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
@@ -462,18 +462,18 @@ export default function RoomPage() {
               </span>
             </div>
             <div className="p-3 overflow-y-auto flex-1 space-y-2 text-xs sm:text-sm">
-              {Object.values(room?.players || {}).map(player => (
-                <div key={player.id} className="flex items-center justify-between">
+              {Object.values(room?.players || {}).map(p => (
+                <div key={p.id} className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div
                       className="w-2.5 h-2.5 rounded-full"
-                      style={{ backgroundColor: player.color }}
+                      style={{ backgroundColor: p.color }}
                     />
                     <span className="font-medium">
-                      {player.username} {player.isHost && <span className="text-secondary">(Host)</span>}
+                      {p.username} {p.isHost && <span className="text-secondary">(Host)</span>}
                     </span>
                   </div>
-                  <span className="font-mono">{player.score}</span>
+                  <span className="font-mono">{p.score}</span>
                 </div>
               ))}
             </div>
@@ -572,7 +572,6 @@ export default function RoomPage() {
             {/* Controls */}
             <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
               <div className="flex gap-2">
-
                 <Button variant="outline" size="sm" onClick={handleHint} disabled={hintsRemaining <= 0}>
                   <Lightbulb className="w-4 h-4 mr-2" /> Hint ({hintsRemaining})
                 </Button>
@@ -582,7 +581,6 @@ export default function RoomPage() {
                 <Button variant={isEraserMode ? "primary" : "outline"} size="sm" onClick={handleEraserClick}>
                   <Eraser className="w-4 h-4 mr-2" /> Eraser
                 </Button>
-
               </div>
               <div className="flex flex-wrap justify-center gap-2">
                 {/* Number Pad for Mobile/Mouse users */}
@@ -601,7 +599,7 @@ export default function RoomPage() {
         </div>
       </main>
 
-            <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Settings">
+      <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Settings">
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium">Tema Gelap (Dark Mode)</span>
