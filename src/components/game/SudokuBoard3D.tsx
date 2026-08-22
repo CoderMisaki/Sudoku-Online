@@ -216,6 +216,11 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
     }
   }, [grid, isStunned, isCompetition, locks, userId, setSelectedCell, broadcastCursor, lockCell]);
 
+  const handleCellClickRef = useRef(handleCellClick);
+  useEffect(() => {
+    handleCellClickRef.current = handleCellClick;
+  }, [handleCellClick]);
+
   // Handle Keyboard Navigasi & Input
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const target = e.target as HTMLElement | null;
@@ -407,7 +412,7 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
       if (intersects.length > 0) {
         const hitMesh = intersects[0].object as THREE.Mesh;
         const { row, col } = hitMesh.userData;
-        handleCellClick(row, col);
+        handleCellClickRef.current(row, col);
       }
     };
 
@@ -487,7 +492,7 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
         container.removeChild(domElement);
       }
     };
-  }, [handleCellClick, selectedCell, updateTileTexture]);
+  }, []);
 
   return (
     <div

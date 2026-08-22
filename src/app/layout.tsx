@@ -44,7 +44,8 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-              <script
+      <body className="min-h-full flex flex-col">
+        <script
           dangerouslySetInnerHTML={{
             __html: `
               try {
@@ -55,17 +56,19 @@ export default function RootLayout({
                 }
               } catch (_) {}
 
-                if ('serviceWorker' in navigator) {
-                  window.addEventListener('load', () => {
-                    navigator.serviceWorker.register('/sw.js').catch((err) => {
-                      console.error('ServiceWorker registration failed:', err);
-                    });
+              if ('serviceWorker' in navigator) {
+                window.addEventListener('load', () => {
+                  navigator.serviceWorker.register('/sw.js').catch((err) => {
+                    console.error('ServiceWorker registration failed:', err);
                   });
-                }
+                });
+              }
             `,
           }}
         />
-      <body className="min-h-full flex flex-col">{children}<Toaster /></body>
+        {children}
+        <Toaster />
+      </body>
     </html>
   );
 }

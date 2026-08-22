@@ -236,13 +236,21 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
   useEffect(() => {
     if (isAnimatingRef.current) return;
-    Object.entries(serverPositions).forEach(([pId, targetPos]) => {
-      const currentPos = visualPositions[pId] || 1;
-      if (currentPos !== targetPos && !isAnimatingRef.current) {
-        setVisualPositions((prev) => ({ ...prev, [pId]: targetPos }));
-      }
+
+    setVisualPositions((prev) => {
+      let hasDifference = false;
+      const updated = { ...prev };
+
+      Object.entries(serverPositions).forEach(([pId, targetPos]) => {
+        if (updated[pId] !== targetPos) {
+          updated[pId] = targetPos;
+          hasDifference = true;
+        }
+      });
+
+      return hasDifference ? updated : prev;
     });
-  }, [serverPositions, visualPositions]);
+  }, [serverPositions]);
 
   // Animasi lompatan petak per petak (Hop step-by-step)
   const animatePath = async (
