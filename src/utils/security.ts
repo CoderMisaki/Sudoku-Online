@@ -1,75 +1,53 @@
 import crypto from 'crypto';
-import { Grid, CellData } from '../types/game';
 
-let runtimeSecret: string | null = null;
-
-export function getSecretKey(): string {
-  const secret = process.env.ROOM_SECRET_KEY;
-  if (secret && secret.trim().length >= 16) {
-    return secret;
-  }
-
-  // Fallback dynamic jika env tidak disetel (mencegah crash API 500)
-  if (!runtimeSecret) {
-    runtimeSecret = crypto.randomBytes(32).toString('hex');
-    console.warn('[Security] ROOM_SECRET_KEY tidak ditemukan, menggunakan runtime fallback.');
-  }
-  return runtimeSecret;
-}
-
+// Master key hardcoded 256-bit (SHA-256 digest)
+const HARDCODED_MASTER_SECRET = 'SUDOKU_SECRET_KEY_AES256GCM_SECURE_TOKEN_2026_MASTER';
+const MASTER_KEY = crypto.createHash('sha256').update(HARDCODED_MASTER_SECRET).digest();
 const ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 12;
 
-export function encryptSolution(solutionGrid: Grid | number[][]): string {
+export function encryptSolution(solutionGrid: number[][]): string {
   try {
-    const secret = getSecretKey();
-    const key = crypto.createHash('sha256').update(secret).digest();
-    const iv = crypto.randomBytes(12);
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv(ALGORITHM, MASTER_KEY, iv);
 
-    const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-    const textData = JSON.stringify(
-      solutionGrid.map((row: CellData[] | number[]) =>
-        row.map((cell: CellData | number) =>
-          cell && typeof cell === 'object' && 'value' in cell ? cell.value : cell
-        )
-      )
-    );
+    const payload = JSON.stringify({
+      solution: solutionGrid,
+      timestamp: Date.now(),
+    });
 
-    let encrypted = cipher.update(textData, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
+    const encrypted = Buffer.concat([cipher.update(payload, 'utf8'), cipher.final()]);
+    const authTag = cipher.getAuthTag();
 
-    const authTag = cipher.getAuthTag().toString('hex');
-
-    // Format: iv:encryptedData:authTag
-    return `${iv.toString('hex')}:${encrypted}:${authTag}`;
+    // Format: iv:authTag:ciphertext
+    return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
   } catch (error) {
-    console.error('[Security] Gagal mengenkripsi solution:', error);
-    throw error;
+    console.error('Enkripsi puzzle gagal:', error);
+    throw new Error('Gagal mengenkripsi solusi puzzle');
   }
 }
 
-export function decryptSolution(token: string): (number | null)[][] | null {
+export function decryptSolution(token: string): number[][] | null {
   try {
-    if (!token) return null;
-
-    const secret = getSecretKey();
-    const key = crypto.createHash('sha256').update(secret).digest();
-
     const parts = token.split(':');
     if (parts.length !== 3) return null;
 
-    const [ivHex, encryptedHex, authTagHex] = parts;
+    const [ivHex, authTagHex, encryptedHex] = parts;
     const iv = Buffer.from(ivHex, 'hex');
     const authTag = Buffer.from(authTagHex, 'hex');
+    const encrypted = Buffer.from(encryptedHex, 'hex');
 
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+    if (iv.length !== IV_LENGTH || authTag.length !== 16) return null;
+
+    const decipher = crypto.createDecipheriv(ALGORITHM, MASTER_KEY, iv);
     decipher.setAuthTag(authTag);
 
-    let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    const parsed = JSON.parse(decrypted.toString('utf8'));
 
-    return JSON.parse(decrypted);
+    return parsed.solution as number[][];
   } catch (error) {
-    console.error('[Security] Gagal mendeskripsi token:', error);
+    console.warn('Dekripsi token solusi ditolak/tidak valid:', error);
     return null;
   }
 }

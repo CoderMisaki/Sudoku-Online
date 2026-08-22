@@ -12,11 +12,11 @@ const createRoomSchema = z.object({
 export async function POST(request: Request) {
   try {
     if (!validateSameOrigin(request)) {
-      return NextResponse.json({ error: 'Akses ditolak (Cross-Origin Request Blocked)' }, { status: 403 });
+      return NextResponse.json({ error: 'Akses ditolak (Cross-Origin Blocked)' }, { status: 403 });
     }
 
     const ip = getClientIp(request);
-    if (!checkServerRateLimit(`create:${ip}`, 20, 60000)) {
+    if (!checkServerRateLimit(`create:${ip}`, 30, 60000)) {
       return NextResponse.json({ error: 'Terlalu banyak permintaan room. Tunggu sebentar.' }, { status: 429 });
     }
 
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
         difficulty = validation.data.difficulty as Difficulty;
       }
     } catch {
-      // Body kosong/invalid tetap fallback ke default difficulty
+      // Fallback ke default bila body kosong
     }
 
     const { initialGrid, solutionGrid } = generatePuzzle(difficulty);

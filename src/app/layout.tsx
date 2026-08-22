@@ -23,11 +23,6 @@ export const metadata: Metadata = {
   title: "Sudoku Multiplayer",
   description: "Play real-time multiplayer Sudoku!",
   manifest: "/manifest.json",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "black-translucent",
-    title: "Sudoku",
-  },
   icons: {
     icon: "/icon-192.png",
     apple: "/icon-192.png",
@@ -43,9 +38,11 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
         <script
+          id="theme-initializer"
           dangerouslySetInnerHTML={{
             __html: `
               try {
@@ -58,9 +55,7 @@ export default function RootLayout({
 
               if ('serviceWorker' in navigator) {
                 window.addEventListener('load', () => {
-                  navigator.serviceWorker.register('/sw.js').catch((err) => {
-                    console.error('ServiceWorker registration failed:', err);
-                  });
+                  navigator.serviceWorker.register('/sw.js').catch(() => {});
                 });
               }
             `,

@@ -167,11 +167,9 @@ export default function RoomPage() {
         })
         .catch((err) => {
           console.error("Failed to fetch competition puzzle:", err);
-          toast.error('Gagal memuat puzzle competition');
         });
     }
-  }, [room?.mode, grid, solutionToken, loading, setGameData]);
-
+  }, [room?.mode, grid, solutionToken, loading, setGameData, room?.difficulty]);
   const handleOpenNextGameModal = () => {
     if (!room) return;
     setNextDifficulty(room.difficulty || 'medium');
