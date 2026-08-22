@@ -138,38 +138,42 @@ export default function RoomPage() {
 
   const solutionToken = useGameStore(state => state.solutionToken);
 
-  const hasAttemptedFetchRef = useRef(false);
+  const isFetchingPuzzleRef = useRef(false);
 
   useEffect(() => {
     if (
-      room &&
-      room.mode === "competition" &&
-      (!grid || !solutionToken) &&
+      room?.mode === "competition" &&
+      !grid &&
+      !solutionToken &&
       !loading &&
-      !hasAttemptedFetchRef.current
+      !isFetchingPuzzleRef.current
     ) {
-      hasAttemptedFetchRef.current = true;
+      isFetchingPuzzleRef.current = true;
+
       fetch("/api/game/create-room", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ difficulty: room.difficulty || "medium" }),
       })
         .then((res) => {
-          if (!res.ok) throw new Error('API Error');
+          if (!res.ok) throw new Error("API Error");
           return res.json();
         })
         .then((data) => {
           if (data.initialGrid && data.solutionToken) {
             setGameData(data.initialGrid, data.solutionToken);
           } else {
-            toast.error(data.error || 'Gagal memuat puzzle competition');
+            toast.error(data.error || "Gagal memuat puzzle competition");
           }
         })
         .catch((err) => {
           console.error("Failed to fetch competition puzzle:", err);
+        })
+        .finally(() => {
+          isFetchingPuzzleRef.current = false;
         });
     }
-  }, [room?.mode, grid, solutionToken, loading, setGameData, room?.difficulty]);
+  }, [room?.mode, room?.difficulty, grid, solutionToken, loading, setGameData]);
   const handleOpenNextGameModal = () => {
     if (!room) return;
     setNextDifficulty(room.difficulty || 'medium');
@@ -411,7 +415,7 @@ export default function RoomPage() {
           setLoading(false);
         });
     } else {
-      setLoading(false);
+      setTimeout(() => setLoading(false), 0);
     }
   }, [roomId, router]);
 
