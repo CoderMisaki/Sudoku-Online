@@ -140,16 +140,17 @@ export default function RoomPage() {
 
   const solutionToken = useGameStore(state => state.solutionToken);
 
-  // Otomatis minta soal jika mode Competition dan papan pemain atau token masih kosong
+  const hasAttemptedFetchRef = useRef(false);
+
   useEffect(() => {
     if (
       room &&
       room.mode === "competition" &&
       (!grid || !solutionToken) &&
       !loading &&
-      !isFetchingPuzzleRef.current
+      !hasAttemptedFetchRef.current
     ) {
-      isFetchingPuzzleRef.current = true;
+      hasAttemptedFetchRef.current = true;
       fetch("/api/game/create-room", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -161,12 +162,9 @@ export default function RoomPage() {
             setGameData(data.initialGrid, data.solutionToken);
           }
         })
-        .catch((err) => console.error("Failed to fetch competition puzzle:", err))
-        .finally(() => {
-          isFetchingPuzzleRef.current = false;
-        });
+        .catch((err) => console.error("Failed to fetch competition puzzle:", err));
     }
-  }, [room, room?.mode, room?.difficulty, grid, solutionToken, loading, setGameData]);
+  }, [room?.mode, grid, solutionToken, loading, setGameData]);
 
   const handleOpenNextGameModal = () => {
     if (!room) return;
