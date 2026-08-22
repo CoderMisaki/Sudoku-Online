@@ -48,16 +48,16 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
   const userId = useGameStore(state => state.userId);
 
   const isCompetition = room?.mode === 'competition';
-  const nowRef = useRef(Date.now());
+  const [now, setNow] = React.useState(0);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      nowRef.current = Date.now();
+      setNow(Date.now());
     }, 200);
     return () => clearInterval(interval);
   }, []);
 
-  const isStunned = Boolean(room?.mode === 'race' && userId && (room?.players[userId]?.stunnedUntil ?? 0) > nowRef.current);
+  const isStunned = Boolean(room?.mode === 'race' && userId && (room?.players[userId]?.stunnedUntil ?? 0) > now);
 
   const tilesRef = useRef<TileMeta[]>([]);
   const hoveredCellRef = useRef<{ row: number; col: number } | null>(null);

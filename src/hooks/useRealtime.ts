@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
-import { ChatMessage, Grid, RoomState, SnakesState } from '../types/game';
+import { ChatMessage, Grid, RoomState, SnakesState, Player } from '../types/game';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getOrCreateUserId } from '../utils/uuid';
 import toast from 'react-hot-toast';
@@ -204,42 +204,69 @@ export function useRealtime(roomId: string) {
 
     channel
       .on('presence', { event: 'sync' }, () => {
-        const state = channel.presenceState();
-        const store = useGameStore.getState();
-        if (store.room) {
-          const updatedPlayers = { ...store.room.players };
-          const activePresenceKeys = new Set(Object.keys(state));
+        const presenceState = channel.presenceState();
+        const currentRoom = useGameStore.getState().room;
+        if (!currentRoom) return;
 
-          // 1. Set status disconnected untuk player yang sudah tidak ada di presence
-          Object.keys(updatedPlayers).forEach((key) => {
-            if (activePresenceKeys.has(key)) {
-              if (updatedPlayers[key].status !== 'left') {
-                updatedPlayers[key].status = 'online';
-              }
-            } else {
-              if (updatedPlayers[key].status !== 'left') {
-                updatedPlayers[key].status = 'disconnected';
-              }
-            }
-          });
+        const newPlayersState = { ...currentRoom.players };
+        let hasChanges = false;
 
-          // 2. Daftarkan player baru jika ada yang baru bergabung
-          Object.keys(state).forEach((key) => {
-            const pres = (state[key] as Array<{ username?: string; status?: string }>)?.[0];
-            if (pres && !updatedPlayers[key]) {
-              updatedPlayers[key] = {
-                id: key,
-                username: pres.username || 'Player',
-                color: PLAYER_COLORS[Object.keys(updatedPlayers).length % PLAYER_COLORS.length],
-                isHost: key === store.room?.hostId,
-                score: 0,
-                hints: 3,
-                status: 'online',
+        const activePresenceKeys = new Set(Object.keys(presenceState));
+
+        // 1. Set status disconnected / online untuk player yang terdaftar
+        Object.keys(newPlayersState).forEach((key) => {
+          const isOnline = activePresenceKeys.has(key);
+          const currentStatus = newPlayersState[key].status;
+          if (currentStatus === 'left') return;
+
+          const targetStatus = isOnline ? 'online' : 'disconnected';
+          if (currentStatus !== targetStatus) {
+            newPlayersState[key] = {
+              ...newPlayersState[key],
+              status: targetStatus,
+            };
+            hasChanges = true;
+          }
+        });
+
+        // 2. Periksa presence untuk pendaftaran player baru / update username
+        Object.entries(presenceState).forEach(([id, presences]) => {
+          const latestPresence = (presences as Array<{ username?: string; status?: string }>)?.[0];
+          if (!latestPresence) return;
+
+          const existingPlayer = newPlayersState[id];
+          if (!existingPlayer) {
+            newPlayersState[id] = {
+              id,
+              username: latestPresence.username || 'Player',
+              color: PLAYER_COLORS[Object.keys(newPlayersState).length % PLAYER_COLORS.length],
+              isHost: id === currentRoom.hostId,
+              score: 0,
+              hints: 3,
+              status: 'online',
+            };
+            hasChanges = true;
+          } else {
+            const desiredUsername = latestPresence.username || existingPlayer.username;
+            const desiredStatus: 'online' | 'offline' | 'disconnected' | 'left' = existingPlayer.status === 'left' ? 'left' : ((latestPresence.status as Player['status']) || 'online');
+
+            if (existingPlayer.username !== desiredUsername || existingPlayer.status !== desiredStatus) {
+              newPlayersState[id] = {
+                ...existingPlayer,
+                username: desiredUsername,
+                status: desiredStatus,
               };
+              hasChanges = true;
             }
-          });
+          }
+        });
 
-          store.setRoom({ ...store.room, players: updatedPlayers });
+        // Hanya trigger update Zustand jika data memang berbeda
+        if (hasChanges) {
+          useGameStore.getState().setRoom({
+            ...currentRoom,
+            players: newPlayersState,
+          });
         }
       })
       .on('presence', { event: 'join' }, ({ key, newPresences }) => {
