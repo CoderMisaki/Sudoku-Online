@@ -154,13 +154,21 @@ export default function RoomPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ difficulty: room.difficulty || "medium" }),
       })
-        .then((res) => res.json())
+        .then((res) => {
+          if (!res.ok) throw new Error('API Error');
+          return res.json();
+        })
         .then((data) => {
           if (data.initialGrid && data.solutionToken) {
             setGameData(data.initialGrid, data.solutionToken);
+          } else {
+            toast.error(data.error || 'Gagal memuat puzzle competition');
           }
         })
-        .catch((err) => console.error("Failed to fetch competition puzzle:", err));
+        .catch((err) => {
+          console.error("Failed to fetch competition puzzle:", err);
+          toast.error('Gagal memuat puzzle competition');
+        });
     }
   }, [room?.mode, grid, solutionToken, loading, setGameData]);
 
@@ -360,7 +368,7 @@ export default function RoomPage() {
     if (isHost) {
       useGameStore.getState().setRoom({
         id: roomId,
-        code: roomId,
+ code: roomId,
         hostId: storedUserId,
         difficulty,
         mode,
@@ -386,7 +394,10 @@ export default function RoomPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ difficulty }),
       })
-        .then((res) => res.json())
+        .then((res) => {
+          if (!res.ok) throw new Error('API Error');
+          return res.json();
+        })
         .then((data) => {
           if (data.initialGrid && data.solutionToken) {
             useGameStore.getState().setGameData(data.initialGrid, data.solutionToken);
@@ -396,7 +407,7 @@ export default function RoomPage() {
         })
         .catch((err) => {
           console.error('[Room Init] Gagal membuat game:', err);
-          toast.error('Gagal memuat puzzle');
+          toast.error('Gagal memuat puzzle. Pastikan SERVER berjalan normal.');
         })
         .finally(() => {
           setLoading(false);

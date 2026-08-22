@@ -8,8 +8,11 @@ export function getSecretKey(): string {
   if (secret && secret.trim().length >= 16) {
     return secret;
   }
+
+  // Fallback dynamic jika env tidak disetel (mencegah crash API 500)
   if (!runtimeSecret) {
     runtimeSecret = crypto.randomBytes(32).toString('hex');
+    console.warn('[Security] ROOM_SECRET_KEY tidak ditemukan, menggunakan runtime fallback.');
   }
   return runtimeSecret;
 }
