@@ -6,7 +6,7 @@ import { checkServerRateLimit, validateSameOrigin, getClientIp } from '../../../
 import { Difficulty } from '../../../../types/game';
 
 const createRoomSchema = z.object({
-  difficulty: z.enum(['easy', 'medium', 'hard', 'expert', 'evil']),
+  difficulty: z.enum(['easy', 'medium', 'hard', 'expert', 'evil']).default('medium'),
 });
 
 export async function POST(request: Request) {
@@ -16,28 +16,31 @@ export async function POST(request: Request) {
     }
 
     const ip = getClientIp(request);
-    // Maksimal 12 room per 1 menit per IP
-    if (!checkServerRateLimit(`create:${ip}`, 12, 60000)) {
-      return NextResponse.json({ error: 'Terlalu banyak membuat room. Tunggu sebentar.' }, { status: 429 });
+    if (!checkServerRateLimit(`create:${ip}`, 20, 60000)) {
+      return NextResponse.json({ error: 'Terlalu banyak permintaan room. Tunggu sebentar.' }, { status: 429 });
     }
 
-    const body = await request.json();
-    const validation = createRoomSchema.safeParse(body);
-
-    if (!validation.success) {
-      return NextResponse.json({ error: 'Tingkat kesulitan tidak valid' }, { status: 400 });
+    let difficulty: Difficulty = 'medium';
+    try {
+      const body = await request.json();
+      const validation = createRoomSchema.safeParse(body);
+      if (validation.success) {
+        difficulty = validation.data.difficulty as Difficulty;
+      }
+    } catch {
+      // Body kosong/invalid tetap fallback ke default difficulty
     }
 
-    const { difficulty } = validation.data;
-    const { initialGrid, solutionGrid } = generatePuzzle(difficulty as Difficulty);
+    const { initialGrid, solutionGrid } = generatePuzzle(difficulty);
     const solutionToken = encryptSolution(solutionGrid);
 
     return NextResponse.json({
+      success: true,
       initialGrid,
       solutionToken,
     });
   } catch (error) {
     console.error('Create Room Error:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json({ error: 'Gagal membuat puzzle baru' }, { status: 500 });
   }
 }
