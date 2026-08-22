@@ -118,10 +118,13 @@ export default function RoomPage() {
 
   const [chatInput, setChatInput] = useState('');
 
+  const snakesWinners = useGameStore(state => state.snakesState?.winners || []);
   const snakesWinnerId = useGameStore(state => state.snakesState?.winnerId);
-  const isGameCompleted = React.useMemo(() => {
+
+  // Munculkan Next Game jika ada minimal 1 juara (Ular Tangga) atau puzzle selesai (Sudoku)
+  const canTriggerNextGame = React.useMemo(() => {
     if (room?.mode === 'snakes_and_ladders') {
-      return Boolean(snakesWinnerId);
+      return snakesWinners.length > 0 || Boolean(snakesWinnerId);
     }
     if (!grid) return false;
     for (let r = 0; r < 9; r++) {
@@ -131,7 +134,7 @@ export default function RoomPage() {
       }
     }
     return true;
-  }, [grid, room?.mode, snakesWinnerId]);
+  }, [grid, room?.mode, snakesWinners.length, snakesWinnerId]);
 
   const solutionToken = useGameStore(state => state.solutionToken);
 
@@ -774,14 +777,16 @@ export default function RoomPage() {
             <div className="w-full flex justify-between items-end">
               <div>
                 <h2 className="text-2xl font-bold">{room?.difficulty?.toUpperCase() || 'MEDIUM'}</h2>
-                {isGameCompleted && player?.isHost && (
-                  <Button onClick={handleOpenNextGameModal} className="mt-2 bg-green-600 hover:bg-green-700 text-white">
+                {canTriggerNextGame && player?.isHost && (
+                  <Button onClick={handleOpenNextGameModal} className="mt-2 bg-green-600 hover:bg-green-700 text-white animate-pulse">
                     Next Game
                   </Button>
                 )}
-                {isGameCompleted && !player?.isHost && (
-                  <div className="mt-2 text-sm text-green-500 font-medium animate-pulse">
-                    Game selesai! Menunggu host...
+                {canTriggerNextGame && !player?.isHost && (
+                  <div className="mt-2 text-sm text-green-500 font-medium">
+                    {room?.mode === 'snakes_and_ladders' && snakesWinners.length > 0
+                      ? `Juara 1 telah keluar! Menunggu host untuk Next Game...`
+                      : `Game selesai! Menunggu host...`}
                   </div>
                 )}
                 <p className="text-secondary text-sm">Mode: {room?.mode || 'collaborative'}</p>
