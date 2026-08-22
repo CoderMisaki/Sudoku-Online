@@ -60,6 +60,8 @@ export default function RoomPage() {
   const [loading, setLoading] = useState(true);
   const [isLeaving, setIsLeaving] = useState(false);
   const initHostRef = useRef(false);
+  const retryCountRef = useRef(0);
+  const isFetchingPuzzleRef = useRef(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [isPencilMode, setIsPencilMode] = useState(false);
@@ -137,8 +139,6 @@ export default function RoomPage() {
   }, [grid, room?.mode, snakesWinners.length, snakesWinnerId]);
 
   const solutionToken = useGameStore(state => state.solutionToken);
-
-  const isFetchingPuzzleRef = useRef(false);
 
   // Otomatis minta soal jika mode Competition dan papan pemain atau token masih kosong
   useEffect(() => {
@@ -340,34 +340,31 @@ export default function RoomPage() {
     setUserInfo(storedUserId, storedUsername);
     enterRoom(roomId);
 
-    let isHostFromConfig = false;
     let difficulty: Difficulty = 'medium';
     let mode: GameMode = 'collaborative';
     let maxPlayers = 4;
+    let isHost = sessionStorage.getItem(`sudoku_host_room_${roomId}`) === '1';
 
     const roomConfigStr = sessionStorage.getItem(`sudoku_room_config_${roomId}`);
     if (roomConfigStr) {
       try {
         const config = JSON.parse(roomConfigStr);
-        isHostFromConfig = Boolean(config.isHost);
-        if (isHostFromConfig) {
+        if (config.isHost) {
+          isHost = true;
           difficulty = (config.difficulty as Difficulty) || 'medium';
           mode = (config.mode as GameMode) || 'collaborative';
           maxPlayers = config.maxPlayers || 4;
         }
-      } catch (error) {
-        console.error('Failed to parse room config', error);
+      } catch (e) {
+        console.error('Error parsing room config:', e);
       }
     }
 
-    const currentState = useGameStore.getState();
-    const isHostFromSession = sessionStorage.getItem(`sudoku_host_room_${roomId}`) === '1';
-    const isHost = isHostFromConfig || isHostFromSession;
-
+    // Inisialisasi Host dan Fetch Data Room dengan Smart Retry
     if (isHost && !initHostRef.current) {
       initHostRef.current = true;
 
-      currentState.setRoom({
+      useGameStore.getState().setRoom({
         id: roomId,
         code: roomId,
         hostId: storedUserId,
@@ -390,22 +387,39 @@ export default function RoomPage() {
         startedAt: Date.now(),
       });
 
-      fetch('/api/game/create-room', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ difficulty }),
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.initialGrid && data.solutionToken) {
-          currentState.setGameData(data.initialGrid, data.solutionToken);
-        }
-      })
-      .catch(err => console.error('Failed to initialize room data:', err));
-    }
+      const fetchInitialGame = async (attempt = 1) => {
+        try {
+          isFetchingPuzzleRef.current = true;
+          const res = await fetch('/api/game/create-room', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ difficulty }),
+          });
 
-    const t = setTimeout(() => setLoading(false), 0);
-    return () => clearTimeout(t);
+          const data = await res.json();
+          if (res.ok && data.initialGrid && data.solutionToken) {
+            useGameStore.getState().setGameData(data.initialGrid, data.solutionToken);
+            retryCountRef.current = 0;
+          } else {
+            throw new Error(data.error || 'Invalid puzzle payload');
+          }
+        } catch (err) {
+          console.warn(`[Room Init] Gagal membuat game (Percobaan ${attempt}/3):`, err);
+          if (attempt < 3) {
+            setTimeout(() => fetchInitialGame(attempt + 1), attempt * 1000);
+          } else {
+            toast.error('Gagal memuat puzzle. Silakan sinkronkan ulang.');
+          }
+        } finally {
+          isFetchingPuzzleRef.current = false;
+          setLoading(false);
+        }
+      };
+
+      fetchInitialGame();
+    } else {
+      setLoading(false);
+    }
   }, [roomId, router, setUserInfo, enterRoom]);
 
   const copyRoomCode = () => {
