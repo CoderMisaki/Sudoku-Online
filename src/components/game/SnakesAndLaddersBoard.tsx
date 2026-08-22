@@ -181,9 +181,41 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const frozenTurns = useMemo(() => snakesState?.frozenTurns || {}, [snakesState?.frozenTurns]);
   const myFrozenCount = userId ? frozenTurns[userId] || 0 : 0;
 
+  // 1. Ambil daftar pemenang dan pemain yang belum finish
+  const winners = useMemo(() => {
+    if (snakesState?.winners && snakesState.winners.length > 0) {
+      return snakesState.winners;
+    }
+    return snakesState?.winnerId ? [snakesState.winnerId] : [];
+  }, [snakesState]);
+
+  const unfinishedPlayerIds = useMemo(() => {
+    return activePlayerIds.filter(id => !winners.includes(id));
+  }, [activePlayerIds, winners]);
+
+  const isGameFullyFinished = useMemo(() => {
+    if (activePlayerIds.length <= 1) return winners.length >= 1;
+    return unfinishedPlayerIds.length <= 1;
+  }, [activePlayerIds.length, unfinishedPlayerIds.length, winners.length]);
+
+  const isAlreadyFinished = Boolean(userId && winners.includes(userId));
+
   const currentTurn = snakesState?.currentTurnUserId || activePlayerIds[0];
   const isMyTurn = currentTurn === userId;
-  const isGameOver = Boolean(snakesState?.winnerId);
+
+  // 2. Auto-skip giliran jika pemain pada turn aktif ternyata sudah finish
+  useEffect(() => {
+    if (!snakesState || isGameFullyFinished) return;
+    if (winners.includes(snakesState.currentTurnUserId || '') && unfinishedPlayerIds.length > 0) {
+      const nextTurnId = unfinishedPlayerIds[0];
+      const nextState: SnakesState = {
+        ...snakesState,
+        currentTurnUserId: nextTurnId,
+      };
+      updateSnakesState(nextState);
+      if (broadcastSnakesState) broadcastSnakesState(nextState);
+    }
+  }, [snakesState, winners, unfinishedPlayerIds, isGameFullyFinished, updateSnakesState, broadcastSnakesState]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -257,7 +289,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   };
 
   const handleRollDice = () => {
-    if (!isMyTurn || isRollingLocal || isGameOver || !userId || isAnimatingRef.current || !snakesState) return;
+    if (!isMyTurn || isRollingLocal || isGameFullyFinished || !userId || isAnimatingRef.current || !snakesState || isAlreadyFinished) return;
 
     setIsRollingLocal(true);
     let counter = 0;
@@ -311,12 +343,32 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           }
 
           const hasWon = finalPos === 100;
+          const newWinners = [...winners];
 
+          if (hasWon && !newWinners.includes(userId)) {
+            newWinners.push(userId);
+            const myRank = newWinners.length;
+            const medal = myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : '🥉';
+            toast.success(`${medal} Kamu Finish di Juara ${myRank}!`, { duration: 3500 });
+          }
+
+          // Cek sisa pemain yang belum finish
+          const remainingUnfinished = activePlayerIds.filter(id => !newWinners.includes(id));
+
+          // Jika tersisa 1 pemain saja, pemain tersebut otomatis menjadi peringkat terakhir
+          if (activePlayerIds.length > 1 && remainingUnfinished.length === 1 && !newWinners.includes(remainingUnfinished[0])) {
+            newWinners.push(remainingUnfinished[0]);
+          }
+
+          // Tentukan giliran berikutnya ke pemain yang belum finish
           let nextTurnId = userId;
-          if (activePlayerIds.length > 1) {
-            if (finalDice !== 6 || mineHit) {
-              const currentIdx = activePlayerIds.indexOf(userId);
-              nextTurnId = activePlayerIds[(currentIdx + 1) % activePlayerIds.length];
+          if (remainingUnfinished.length > 0) {
+            if (hasWon) {
+              nextTurnId = remainingUnfinished[0];
+            } else if (finalDice !== 6 || mineHit) {
+              const currentIdxInUnfinished = remainingUnfinished.indexOf(userId);
+              const nextIdx = (currentIdxInUnfinished + 1) % remainingUnfinished.length;
+              nextTurnId = remainingUnfinished[nextIdx];
             } else {
               toast.success('🎲 Angka 6! Lempar dadu sekali lagi!');
             }
@@ -332,7 +384,8 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                 [userId]: finalPos,
               },
               currentTurnUserId: nextTurnId,
-              winnerId: hasWon ? userId : snakesState.winnerId,
+              winnerId: newWinners[0] || snakesState.winnerId,
+              winners: newWinners,
               frozenTurns: newFrozen,
             };
             updateSnakesState(nextState);
@@ -351,8 +404,12 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     const remaining = Math.max(0, myFrozenCount - 1);
     const updatedFrozen = { ...frozenTurns, [userId]: remaining };
 
-    const currentIdx = activePlayerIds.indexOf(userId);
-    const nextTurnId = activePlayerIds[(currentIdx + 1) % activePlayerIds.length];
+    let nextTurnId = userId;
+    if (unfinishedPlayerIds.length > 0) {
+      const currentIdx = unfinishedPlayerIds.indexOf(userId);
+      const nextIdx = (currentIdx + 1) % unfinishedPlayerIds.length;
+      nextTurnId = unfinishedPlayerIds[nextIdx];
+    }
 
     toast(`Kamu melewatkan giliran (Sisa hukuman: ${remaining} turn)`, { icon: '⏳' });
 
@@ -370,11 +427,11 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   return (
     <div className="flex flex-col items-center gap-4 w-full max-w-2xl mx-auto select-none">
       {/* Banner Pemenang */}
-      {isGameOver && (
+      {winners.length > 0 && (
         <div className="bg-foreground text-background px-5 py-3 rounded-2xl flex items-center gap-3 w-full justify-center shadow-xl animate-bounce">
           <Trophy className="w-6 h-6 text-amber-400" />
           <span className="font-bold text-sm sm:text-base">
-            🎉 {players[snakesState?.winnerId || '']?.username || 'Pemain'} Menang & Mencapai Kotak 100!
+            🎉 {players[winners[0]]?.username || 'Pemain'} Menang & Mencapai Kotak 100!
           </span>
         </div>
       )}
@@ -740,6 +797,26 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         </div>
       </div>
 
+      {/* Status Podium / Juara */}
+      {winners.length > 0 && (
+        <div className="bg-card border border-border p-3 rounded-xl w-full text-xs sm:text-sm flex flex-col gap-1.5 shadow-sm">
+          <span className="font-bold text-foreground">🏆 Papan Peringkat Finish:</span>
+          <div className="flex flex-wrap gap-2">
+            {winners.map((wId, idx) => (
+              <span key={wId} className="px-2.5 py-1 bg-secondary/15 rounded-lg font-medium">
+                {idx === 0 ? '🥇 Juara 1: ' : idx === 1 ? '🥈 Juara 2: ' : idx === 2 ? '🥉 Juara 3: ' : `Rank ${idx + 1}: `}
+                {players[wId]?.username || 'Player'}
+              </span>
+            ))}
+          </div>
+          {!isGameFullyFinished && (
+            <span className="text-secondary text-[11px] italic">
+              Permainan masih berlanjut untuk sisa {unfinishedPlayerIds.length} pemain...
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Kontrol & Turn Status */}
       <div className="flex flex-col sm:flex-row items-center gap-4 bg-card p-4 rounded-2xl border border-border shadow-md w-full justify-between">
         <div className="flex items-center gap-4">
@@ -760,8 +837,12 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           </div>
         </div>
 
-        {/* Tombol Aksi Turn */}
-        {myFrozenCount > 0 && isMyTurn ? (
+        {/* Bagian Tombol Dadu */}
+        {isAlreadyFinished ? (
+          <div className="bg-green-600/15 text-green-600 dark:text-green-400 font-bold px-4 py-2.5 rounded-xl text-center w-full sm:w-auto">
+            🎉 Kamu sudah Finish (Juara {winners.indexOf(userId!) + 1})! Menunggu pemain lainnya...
+          </div>
+        ) : myFrozenCount > 0 && isMyTurn ? (
           <Button size="lg" onClick={handleSkipTurn} className="bg-red-600 hover:bg-red-700 text-white gap-2 w-full sm:w-auto">
             <SkipForward className="w-5 h-5" /> Lewati Giliran (Terjebak {myFrozenCount} Turn)
           </Button>
@@ -769,7 +850,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           <Button
             size="lg"
             onClick={handleRollDice}
-            disabled={!isMyTurn || isRollingLocal || isGameOver}
+            disabled={!isMyTurn || isRollingLocal || isGameFullyFinished}
             className="gap-2 w-full sm:w-auto"
           >
             <Dices className={`w-5 h-5 ${isRollingLocal ? 'animate-spin' : ''}`} />

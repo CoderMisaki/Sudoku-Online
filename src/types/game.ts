@@ -82,6 +82,7 @@ export interface SnakesState {
   playerPositions: Record<string, number>;
   currentTurnUserId: string | null;
   winnerId: string | null;
+  winners?: string[]; // Urutan ID pemain yang sudah finish (Juara 1, Juara 2, dst.)
   isRolling?: boolean;
   ladders: LadderItem[];
   snakes: SnakeItem[];
