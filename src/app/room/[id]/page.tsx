@@ -59,9 +59,7 @@ export default function RoomPage() {
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isLeaving, setIsLeaving] = useState(false);
-  const initHostRef = useRef(false);
-  const retryCountRef = useRef(0);
-  const isFetchingPuzzleRef = useRef(false);
+  const isInitializedRef = useRef(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [isPencilMode, setIsPencilMode] = useState(false);
@@ -325,7 +323,8 @@ export default function RoomPage() {
   };
 
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId || isInitializedRef.current) return;
+    isInitializedRef.current = true;
 
     const storedUserId = getOrCreateUserId();
     const storedUsername = typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') : null;
@@ -335,8 +334,8 @@ export default function RoomPage() {
       return;
     }
 
-    setUserInfo(storedUserId, storedUsername);
-    enterRoom(roomId);
+    useGameStore.getState().setUserInfo(storedUserId, storedUsername);
+    useGameStore.getState().enterRoom(roomId);
 
     let difficulty: Difficulty = 'medium';
     let mode: GameMode = 'collaborative';
@@ -358,10 +357,7 @@ export default function RoomPage() {
       }
     }
 
-    // Inisialisasi Host dan Fetch Data Room dengan Smart Retry
-    if (isHost && !initHostRef.current) {
-      initHostRef.current = true;
-
+    if (isHost) {
       useGameStore.getState().setRoom({
         id: roomId,
         code: roomId,
@@ -385,40 +381,30 @@ export default function RoomPage() {
         startedAt: Date.now(),
       });
 
-      const fetchInitialGame = async (attempt = 1) => {
-        try {
-          isFetchingPuzzleRef.current = true;
-          const res = await fetch('/api/game/create-room', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ difficulty }),
-          });
-
-          const data = await res.json();
-          if (res.ok && data.initialGrid && data.solutionToken) {
+      fetch('/api/game/create-room', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ difficulty }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.initialGrid && data.solutionToken) {
             useGameStore.getState().setGameData(data.initialGrid, data.solutionToken);
-            retryCountRef.current = 0;
           } else {
-            throw new Error(data.error || 'Invalid puzzle payload');
+            toast.error(data.error || 'Gagal memuat puzzle');
           }
-        } catch (err) {
-          console.warn(`[Room Init] Gagal membuat game (Percobaan ${attempt}/3):`, err);
-          if (attempt < 3) {
-            setTimeout(() => fetchInitialGame(attempt + 1), attempt * 1000);
-          } else {
-            toast.error('Gagal memuat puzzle. Silakan sinkronkan ulang.');
-          }
-        } finally {
-          isFetchingPuzzleRef.current = false;
+        })
+        .catch((err) => {
+          console.error('[Room Init] Gagal membuat game:', err);
+          toast.error('Gagal memuat puzzle');
+        })
+        .finally(() => {
           setLoading(false);
-        }
-      };
-
-      fetchInitialGame();
+        });
     } else {
       setLoading(false);
     }
-  }, [roomId, router, setUserInfo, enterRoom]);
+  }, [roomId, router]);
 
   const copyRoomCode = () => {
     navigator.clipboard.writeText(roomId);

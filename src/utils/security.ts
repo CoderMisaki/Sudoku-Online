@@ -1,29 +1,17 @@
 import crypto from 'crypto';
 import { Grid, CellData } from '../types/game';
 
-// 1. Inisialisasi Master Fallback Key di level memori server runtime
-let runtimeMasterSecret: string | null = null;
-
-function getRuntimeFallbackSecret(): string {
-  if (!runtimeMasterSecret) {
-    // Generate 256-bit entropy buffer aman
-    runtimeMasterSecret = crypto.randomBytes(32).toString('hex');
-  }
-  return runtimeMasterSecret;
-}
+let runtimeSecret: string | null = null;
 
 export function getSecretKey(): string {
-  // Alur: Fallback Master Ready -> Cek ENV -> Jika Error/Invalid -> Balik ke Fallback
-  try {
-    const envSecret = process.env.ROOM_SECRET_KEY;
-    if (envSecret && envSecret.trim().length >= 16) {
-      return envSecret.trim();
-    }
-  } catch (err) {
-    console.warn('[Security] Gagal membaca ROOM_SECRET_KEY dari env, beralih ke dynamic fallback.', err);
+  const secret = process.env.ROOM_SECRET_KEY;
+  if (secret && secret.trim().length >= 16) {
+    return secret;
   }
-
-  return getRuntimeFallbackSecret();
+  if (!runtimeSecret) {
+    runtimeSecret = crypto.randomBytes(32).toString('hex');
+  }
+  return runtimeSecret;
 }
 
 const ALGORITHM = 'aes-256-gcm';
