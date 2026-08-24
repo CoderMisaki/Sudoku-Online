@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGameStore } from '@/store/gameStore';
 import { Button } from '@/components/ui/Button';
@@ -18,88 +18,59 @@ interface SnakesAndLaddersBoardProps {
   broadcastSnakesDiceRoll?: (diceValue: number, newPosition: number, nextTurnUserId: string, hasWon: boolean) => void;
 }
 
-// Koleksi palet warna & karakteristik spesies ular dunia asli
 const SNAKE_SPECIES = [
   {
-    name: 'Emerald Tree Boa (Ular Hijau Zamrud)',
+    name: 'Emerald Tree Boa',
     gradientId: 'snakeGrad_emerald',
     colors: ['#047857', '#10b981', '#34d399', '#064e3b'],
     scalesColor: '#d1fae5',
-    bellyColor: '#a7f3d0',
     headColor: '#065f46',
     eyeIris: '#facc15',
     eyePupil: '#000000',
     tongueColor: '#ef4444',
   },
   {
-    name: 'Coral Snake (Ular Karang Belang Merah-Kuning)',
+    name: 'Coral Snake',
     gradientId: 'snakeGrad_coral',
     colors: ['#991b1b', '#ef4444', '#f59e0b', '#18181b'],
     scalesColor: '#fef08a',
-    bellyColor: '#fde047',
     headColor: '#7f1d1d',
     eyeIris: '#f97316',
     eyePupil: '#000000',
     tongueColor: '#450a0a',
   },
   {
-    name: 'Blue Insularis Viper (Viper Biru Komodo)',
+    name: 'Blue Insularis Viper',
     gradientId: 'snakeGrad_blueViper',
     colors: ['#0369a1', '#0ea5e9', '#38bdf8', '#082f49'],
     scalesColor: '#e0f2fe',
-    bellyColor: '#bae6fd',
     headColor: '#0284c7',
     eyeIris: '#fde047',
     eyePupil: '#000000',
     tongueColor: '#0284c7',
   },
   {
-    name: 'Albino Burmese Python (Sanca Albino Kuning-Putih)',
+    name: 'Albino Burmese Python',
     gradientId: 'snakeGrad_albino',
     colors: ['#d97706', '#fbbf24', '#fef08a', '#f8fafc'],
     scalesColor: '#ffffff',
-    bellyColor: '#fef3c7',
     headColor: '#f59e0b',
     eyeIris: '#f43f5e',
     eyePupil: '#881337',
     tongueColor: '#fb7185',
   },
   {
-    name: 'Black Mamba / Black King Cobra (Kobra Hitam Arang)',
+    name: 'Black Mamba',
     gradientId: 'snakeGrad_blackMamba',
     colors: ['#0f172a', '#334155', '#475569', '#020617'],
     scalesColor: '#94a3b8',
-    bellyColor: '#64748b',
     headColor: '#0f172a',
     eyeIris: '#64748b',
     eyePupil: '#000000',
     tongueColor: '#0f172a',
   },
-  {
-    name: 'Eastern Diamondback Rattlesnake (Ular Derik Gurun)',
-    gradientId: 'snakeGrad_diamondback',
-    colors: ['#78350f', '#b45309', '#d97706', '#451a03'],
-    scalesColor: '#fef3c7',
-    bellyColor: '#fed7aa',
-    headColor: '#78350f',
-    eyeIris: '#fbbf24',
-    eyePupil: '#000000',
-    tongueColor: '#7f1d1d',
-  },
-  {
-    name: 'Brazilian Rainbow Boa (Boa Pelangi Iridescent)',
-    gradientId: 'snakeGrad_rainbow',
-    colors: ['#7c2d12', '#9333ea', '#2563eb', '#047857'],
-    scalesColor: '#f472b6',
-    bellyColor: '#e9d5ff',
-    headColor: '#581c87',
-    eyeIris: '#c084fc',
-    eyePupil: '#000000',
-    tongueColor: '#dc2626',
-  },
 ];
 
-// Helper kurva bezier untuk jalur bergelombang natural ular
 function generateCurvedSnakePath(
   start: { x: number; y: number },
   end: { x: number; y: number },
@@ -161,8 +132,10 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const players = room?.players || EMPTY_PLAYERS;
   const snakesState = useGameStore((state) => state.snakesState);
   const updateSnakesState = useGameStore((state) => state.updateSnakesState);
+  const updatePlayer = useGameStore((state) => state.updatePlayer);
 
   const isSkippingRef = useRef(false);
+  const isInitializedRef = useRef(false);
 
   const activePlayerIdsKey = useMemo(() => {
     return Object.values(players)
@@ -177,8 +150,11 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
   useEffect(() => {
     if (!snakesState || !snakesState.ladders || snakesState.ladders.length === 0) {
-      const initial = generateInitialSnakesState(room?.difficulty || 'medium', activePlayerIds);
-      updateSnakesState(initial);
+      if (!isInitializedRef.current && activePlayerIds.length > 0) {
+        isInitializedRef.current = true;
+        const initial = generateInitialSnakesState(room?.difficulty || 'medium', activePlayerIds);
+        updateSnakesState(initial);
+      }
     }
   }, [snakesState, room?.difficulty, activePlayerIds, updateSnakesState]);
 
@@ -188,12 +164,12 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
   const [visualPositions, setVisualPositions] = useState<Record<string, number>>({});
   const isAnimatingRef = useRef(false);
+  const lastProcessedPosRef = useRef<Record<string, number>>({});
 
   const serverPositions = snakesState?.playerPositions ?? EMPTY_POSITIONS;
   const frozenTurns = snakesState?.frozenTurns ?? EMPTY_FROZEN;
   const myFrozenCount = userId ? frozenTurns[userId] || 0 : 0;
 
-  // 1. Ambil daftar pemenang dan pemain yang belum finish
   const winners = useMemo(() => {
     if (snakesState?.winners && snakesState.winners.length > 0) {
       return snakesState.winners;
@@ -202,80 +178,20 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   }, [snakesState]);
 
   const unfinishedPlayerIds = useMemo(() => {
-    return activePlayerIds.filter(id => !winners.includes(id));
+    return activePlayerIds.filter((id) => !winners.includes(id));
   }, [activePlayerIds, winners]);
 
   const isGameFullyFinished = useMemo(() => {
     if (activePlayerIds.length <= 1) return winners.length >= 1;
-    return unfinishedPlayerIds.length <= 1;
+    return unfinishedPlayerIds.length === 0 || winners.length === activePlayerIds.length;
   }, [activePlayerIds.length, unfinishedPlayerIds.length, winners.length]);
 
   const isAlreadyFinished = Boolean(userId && winners.includes(userId));
-
   const currentTurn = snakesState?.currentTurnUserId || activePlayerIds[0];
   const isMyTurn = currentTurn === userId;
 
-  // 2. Auto-skip giliran jika pemain pada turn aktif ternyata sudah finish (dengan guard isSkippingRef)
-  useEffect(() => {
-    if (!snakesState || isGameFullyFinished || isSkippingRef.current) return;
-
-    const currentTurnId = snakesState.currentTurnUserId || '';
-    const isAuthority = room?.hostId === userId || currentTurnId === userId;
-    if (isAuthority && winners.includes(currentTurnId) && unfinishedPlayerIds.length > 0) {
-      isSkippingRef.current = true;
-
-      const nextTurnId = unfinishedPlayerIds[0];
-      const nextState: SnakesState = {
-        ...snakesState,
-        currentTurnUserId: nextTurnId,
-      };
-
-      updateSnakesState(nextState);
-      if (broadcastSnakesState) broadcastSnakesState(nextState);
-
-      setTimeout(() => {
-        isSkippingRef.current = false;
-      }, 100);
-    }
-  }, [snakesState, winners, unfinishedPlayerIds, isGameFullyFinished, updateSnakesState, broadcastSnakesState, room?.hostId, userId]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setVisualPositions((prev) => {
-        const updated = { ...prev };
-        let changed = false;
-        activePlayerIds.forEach((pId) => {
-          if (updated[pId] === undefined) {
-            updated[pId] = serverPositions[pId] || 1;
-            changed = true;
-          }
-        });
-        return changed ? updated : prev;
-      });
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [activePlayerIds, serverPositions]);
-
-  useEffect(() => {
-    if (isAnimatingRef.current) return;
-
-    setVisualPositions((prev) => {
-      let hasDifference = false;
-      const updated = { ...prev };
-
-      Object.entries(serverPositions).forEach(([pId, targetPos]) => {
-        if (updated[pId] !== targetPos) {
-          updated[pId] = targetPos;
-          hasDifference = true;
-        }
-      });
-
-      return hasDifference ? updated : prev;
-    });
-  }, [serverPositions]);
-
-  // Animasi lompatan petak per petak (Hop step-by-step)
-  const animatePath = async (
+  // Animasi langkah yang lebih lambat & smooth (380ms per langkah)
+  const animatePath = useCallback(async (
     targetUserId: string,
     startPos: number,
     steppedPos: number,
@@ -285,8 +201,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   ) => {
     isAnimatingRef.current = true;
     let curr = startPos;
-
-    const stepIntervalMs = 240;
+    const stepIntervalMs = 380; // Dipelanin agar jelas dilihat semua pemain
 
     if (steppedPos > curr) {
       while (curr < steppedPos) {
@@ -304,19 +219,79 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
     if (eventLabel) {
       setActionStatus(eventLabel);
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 600));
     }
 
     // Meluncur turun ular atau naik tangga
     if (finalPos !== steppedPos) {
       setVisualPositions((prev) => ({ ...prev, [targetUserId]: finalPos }));
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 700));
     }
 
+    lastProcessedPosRef.current[targetUserId] = finalPos;
     setActionStatus(null);
     isAnimatingRef.current = false;
     if (onComplete) onComplete();
-  };
+  }, []);
+
+  // Sinkronisasi animasi saat pemain lain melangkah
+  useEffect(() => {
+    if (isAnimatingRef.current) return;
+
+    Object.entries(serverPositions).forEach(([pId, targetPos]) => {
+      const currentVisual = visualPositions[pId] || lastProcessedPosRef.current[pId] || 1;
+
+      // Jika posisi server berbeda dan ini adalah aksi dari pemain lain
+      if (targetPos !== currentVisual && pId !== userId) {
+        let steppedPos = targetPos;
+        const ladderHit = snakesState?.ladders?.find((l) => l.end === targetPos);
+        const snakeHit = snakesState?.snakes?.find((s) => s.tail === targetPos);
+        const wormholeHit = snakesState?.wormholes?.find((w) => w.whiteHole === targetPos);
+
+        let eventMsg = '';
+        const pName = players[pId]?.username || 'Player';
+
+        if (ladderHit) {
+          steppedPos = ladderHit.start;
+          eventMsg = `🪜 ${pName} menaiki tangga ke kotak ${targetPos}!`;
+        } else if (snakeHit) {
+          steppedPos = snakeHit.head;
+          eventMsg = `🐍 ${pName} dimakan ular turun ke kotak ${targetPos}!`;
+        } else if (wormholeHit) {
+          steppedPos = wormholeHit.blackHole;
+          eventMsg = `🌀 ${pName} tersedot lubang ke kotak ${targetPos}!`;
+        }
+
+        animatePath(pId, currentVisual, steppedPos, targetPos, eventMsg);
+      } else if (visualPositions[pId] === undefined) {
+        setVisualPositions((prev) => ({ ...prev, [pId]: targetPos }));
+        lastProcessedPosRef.current[pId] = targetPos;
+      }
+    });
+  }, [serverPositions, visualPositions, userId, snakesState, players, animatePath]);
+
+  // Auto skip giliran jika pemain saat ini sudah selesai
+  useEffect(() => {
+    if (!snakesState || isGameFullyFinished || isSkippingRef.current) return;
+
+    const currentTurnId = snakesState.currentTurnUserId || '';
+    const isAuthority = room?.hostId === userId || currentTurnId === userId;
+    if (isAuthority && winners.includes(currentTurnId) && unfinishedPlayerIds.length > 0) {
+      isSkippingRef.current = true;
+      const nextTurnId = unfinishedPlayerIds[0];
+      const nextState: SnakesState = {
+        ...snakesState,
+        currentTurnUserId: nextTurnId,
+      };
+
+      updateSnakesState(nextState);
+      if (broadcastSnakesState) broadcastSnakesState(nextState);
+
+      setTimeout(() => {
+        isSkippingRef.current = false;
+      }, 100);
+    }
+  }, [snakesState, winners, unfinishedPlayerIds, isGameFullyFinished, updateSnakesState, broadcastSnakesState, room?.hostId, userId]);
 
   const handleRollDice = () => {
     if (!isMyTurn || isRollingLocal || isGameFullyFinished || !userId || isAnimatingRef.current || !snakesState || isAlreadyFinished) return;
@@ -380,17 +355,15 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             const myRank = newWinners.length;
             const medal = myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : '🥉';
             toast.success(`${medal} Kamu Finish di Juara ${myRank}!`, { duration: 3500 });
+
+            // Tambahkan skor akumulatif
+            const earnedScore = myRank === 1 ? 100 : myRank === 2 ? 60 : 30;
+            const currentScore = players[userId]?.score || 0;
+            updatePlayer(userId, { score: currentScore + earnedScore, rank: myRank });
           }
 
-          // Cek sisa pemain yang belum finish
-          const remainingUnfinished = activePlayerIds.filter(id => !newWinners.includes(id));
+          const remainingUnfinished = activePlayerIds.filter((id) => !newWinners.includes(id));
 
-          // Jika tersisa 1 pemain saja, pemain tersebut otomatis menjadi peringkat terakhir
-          if (activePlayerIds.length > 1 && remainingUnfinished.length === 1 && !newWinners.includes(remainingUnfinished[0])) {
-            newWinners.push(remainingUnfinished[0]);
-          }
-
-          // Tentukan giliran berikutnya ke pemain yang belum finish
           let nextTurnId = userId;
           if (remainingUnfinished.length > 0) {
             if (hasWon) {
@@ -456,7 +429,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
   return (
     <div className="flex flex-col items-center gap-4 w-full max-w-2xl mx-auto select-none">
-      {/* Banner Pemenang */}
       {winners.length > 0 && (
         <div className="bg-foreground text-background px-5 py-3 rounded-2xl flex items-center gap-3 w-full justify-center shadow-xl animate-bounce">
           <Trophy className="w-6 h-6 text-amber-400" />
@@ -466,7 +438,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         </div>
       )}
 
-      {/* Status Aksi Terinjak */}
       <AnimatePresence>
         {actionStatus && (
           <motion.div
@@ -480,9 +451,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         )}
       </AnimatePresence>
 
-      {/* Papan 10x10 Ular Tangga */}
       <div className="relative w-full aspect-square border-2 border-border bg-card rounded-2xl shadow-xl p-1 overflow-hidden">
-        {/* Grid Nomor */}
         <div className="grid grid-cols-10 grid-rows-10 w-full h-full gap-0.5">
           {Array.from({ length: 100 }, (_, i) => {
             const rowFromTop = Math.floor(i / 10);
@@ -513,19 +482,8 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           })}
         </div>
 
-        {/* SVG Item Layer */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" viewBox="0 0 100 100">
           <defs>
-            <style>{`
-              @keyframes spin-cw { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-              @keyframes spin-ccw { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
-              @keyframes pulse-jet { 0%, 100% { opacity: 0.7; transform: scaleY(1); } 50% { opacity: 1; transform: scaleY(1.25); } }
-              .vortex-cw { transform-box: fill-box; transform-origin: center; animation: spin-cw 8s linear infinite; }
-              .vortex-ccw { transform-box: fill-box; transform-origin: center; animation: spin-ccw 6s linear infinite; }
-              .jet-beam { transform-box: fill-box; transform-origin: center; animation: pulse-jet 2s ease-in-out infinite; }
-            `}</style>
-
-            {/* Gradient Ular Dunia Nyata */}
             {SNAKE_SPECIES.map((species) => (
               <linearGradient key={species.gradientId} id={species.gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stopColor={species.colors[0]} />
@@ -534,44 +492,8 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                 <stop offset="100%" stopColor={species.colors[3]} />
               </linearGradient>
             ))}
-
-            {/* Gradient Black Hole Pekat */}
-            <radialGradient id="bhDeepBlackGrad">
-              <stop offset="0%" stopColor="#000000" />
-              <stop offset="45%" stopColor="#000000" />
-              <stop offset="70%" stopColor="#09090b" />
-              <stop offset="88%" stopColor="#18181b" stopOpacity="0.8" />
-              <stop offset="100%" stopColor="#000000" stopOpacity="0" />
-            </radialGradient>
-
-            <radialGradient id="bhAccretionGrad">
-              <stop offset="0%" stopColor="#000000" />
-              <stop offset="50%" stopColor="#27272a" stopOpacity="0.6" />
-              <stop offset="100%" stopColor="#000000" stopOpacity="0" />
-            </radialGradient>
-
-            <radialGradient id="whPusaranGrad">
-              <stop offset="0%" stopColor="#ffffff" />
-              <stop offset="25%" stopColor="#e0f2fe" />
-              <stop offset="50%" stopColor="#38bdf8" />
-              <stop offset="78%" stopColor="#2563eb" />
-              <stop offset="100%" stopColor="#1e3a8a" stopOpacity="0" />
-            </radialGradient>
-
-            {/* Trap Gradients */}
-            <linearGradient id="trapMetalDark" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#475569" />
-              <stop offset="50%" stopColor="#94a3b8" />
-              <stop offset="100%" stopColor="#1e293b" />
-            </linearGradient>
-            <linearGradient id="trapJawSteel" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor="#f8fafc" />
-              <stop offset="40%" stopColor="#cbd5e1" />
-              <stop offset="100%" stopColor="#334155" />
-            </linearGradient>
           </defs>
 
-          {/* 1. TANGGA (LADDERS) */}
           {snakesState?.ladders?.map((ladder) => {
             const start = getTileCoordinates(ladder.start);
             const end = getTileCoordinates(ladder.end);
@@ -604,170 +526,29 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             );
           })}
 
-          {/* 2. ULAR DUNIA ASLI BERAGAM SPESIES */}
           {snakesState?.snakes?.map((snake, sIdx) => {
             const head = getTileCoordinates(snake.head);
             const tail = getTileCoordinates(snake.tail);
             const pathInfo = generateCurvedSnakePath(head, tail, sIdx + 1);
             if (typeof pathInfo === 'string') return null;
             const { d, firstSegmentAngle } = pathInfo;
-
-            // Pilih variasi spesies secara unik per ular
             const species = SNAKE_SPECIES[sIdx % SNAKE_SPECIES.length];
 
             return (
               <g key={snake.id}>
-                {/* Bayangan Tubuh Ular */}
                 <path d={d} fill="none" stroke="rgba(0,0,0,0.28)" strokeWidth="1.6" strokeLinecap="round" transform="translate(0.2, 0.3)" />
-
-                {/* Tubuh Utama Spesies Ular */}
                 <path d={d} fill="none" stroke={`url(#${species.gradientId})`} strokeWidth="1.45" strokeLinecap="round" />
-
-                {/* Pola Sisik & Belang Khas Spesies */}
-                <path
-                  d={d}
-                  fill="none"
-                  stroke={species.scalesColor}
-                  strokeWidth="0.55"
-                  strokeDasharray="0.6 1.1"
-                  strokeLinecap="round"
-                  opacity="0.9"
-                />
-
-                {/* Garis Kilau Punggung */}
-                <path
-                  d={d}
-                  fill="none"
-                  stroke="#ffffff"
-                  strokeWidth="0.2"
-                  strokeLinecap="round"
-                  opacity="0.35"
-                />
-
-                {/* Lidah Bercabang */}
-                <g transform={`translate(${head.x}, ${head.y}) rotate(${(firstSegmentAngle * 180) / Math.PI + 180})`}>
-                  <path d="M 0.6 0 L 1.6 0 L 2.1 -0.4 M 1.6 0 L 2.1 0.4" fill="none" stroke={species.tongueColor} strokeWidth="0.22" strokeLinecap="round" />
-                </g>
-
-                {/* Kepala Ular */}
+                <path d={d} fill="none" stroke={species.scalesColor} strokeWidth="0.55" strokeDasharray="0.6 1.1" strokeLinecap="round" opacity="0.9" />
                 <g transform={`translate(${head.x}, ${head.y}) rotate(${(firstSegmentAngle * 180) / Math.PI + 180})`}>
                   <ellipse cx="0" cy="0" rx="1.15" ry="0.9" fill={species.headColor} stroke="rgba(0,0,0,0.4)" strokeWidth="0.15" />
-                  {/* Mata Reptil Berpupil Slit Vertikal */}
                   <circle cx="-0.25" cy="-0.4" r="0.28" fill={species.eyeIris} />
                   <circle cx="-0.25" cy="0.4" r="0.28" fill={species.eyeIris} />
-                  <ellipse cx="-0.25" cy="-0.4" rx="0.08" ry="0.2" fill={species.eyePupil} />
-                  <ellipse cx="-0.25" cy="0.4" rx="0.08" ry="0.2" fill={species.eyePupil} />
-                </g>
-              </g>
-            );
-          })}
-
-          {/* 3. RANJAU CAPIT BAJA */}
-          {snakesState?.mines?.map((mineTile, idx) => {
-            const pos = getTileCoordinates(mineTile);
-            return (
-              <g key={`mine-${idx}`} transform={`translate(${pos.x}, ${pos.y})`}>
-                <circle cx="0" cy="0" r="3.2" fill="#ef4444" opacity="0.12" className="animate-ping" />
-                <ellipse cx="0" cy="-0.2" rx="2.8" ry="1.6" fill="none" stroke="url(#trapMetalDark)" strokeWidth="0.5" />
-                <polygon points="-2.2,-0.4 -2.0,-1.5 -1.7,-0.4" fill="url(#trapJawSteel)" />
-                <polygon points="-1.5,-0.7 -1.2,-1.8 -0.9,-0.7" fill="url(#trapJawSteel)" />
-                <polygon points="-0.6,-0.9 -0.3,-2.0 0.0,-0.9" fill="url(#trapJawSteel)" />
-                <polygon points="0.3,-0.9 0.6,-2.0 0.9,-0.9" fill="url(#trapJawSteel)" />
-                <polygon points="1.2,-0.7 1.5,-1.8 1.8,-0.7" fill="url(#trapJawSteel)" />
-                <polygon points="1.9,-0.4 2.2,-1.5 2.4,-0.4" fill="url(#trapJawSteel)" />
-                <line x1="-2.7" y1="0.1" x2="2.7" y2="0.1" stroke="#334155" strokeWidth="0.4" strokeLinecap="round" />
-                <line x1="0" y1="-1.4" x2="0" y2="1.3" stroke="#475569" strokeWidth="0.35" strokeLinecap="round" />
-                <path d="M -2.7 0.1 C -2.2 1.6, 2.2 1.6, 2.7 0.1" fill="none" stroke="url(#trapMetalDark)" strokeWidth="0.6" />
-                <polygon points="-2.4,0.3 -2.2,1.3 -1.9,0.5" fill="url(#trapJawSteel)" />
-                <polygon points="-1.7,0.7 -1.4,1.7 -1.1,0.8" fill="url(#trapJawSteel)" />
-                <polygon points="-0.8,0.9 -0.5,1.9 -0.2,1.0" fill="url(#trapJawSteel)" />
-                <polygon points="0.2,1.0 0.5,1.9 0.8,0.9" fill="url(#trapJawSteel)" />
-                <polygon points="1.1,0.8 1.4,1.7 1.7,0.7" fill="url(#trapJawSteel)" />
-                <polygon points="1.9,0.5 2.2,1.3 2.4,0.3" fill="url(#trapJawSteel)" />
-                <circle cx="0" cy="0" r="0.9" fill="#94a3b8" stroke="#1e293b" strokeWidth="0.15" />
-                <circle cx="0" cy="0" r="0.55" fill="#dc2626" />
-              </g>
-            );
-          })}
-
-          {/* 4. BLACK HOLE & WHITE HOLE */}
-          {snakesState?.wormholes?.map((wh) => {
-            const bhPos = getTileCoordinates(wh.blackHole);
-            const whPos = getTileCoordinates(wh.whiteHole);
-
-            return (
-              <g key={wh.id}>
-                {/* Black Hole (Hitam Pekat Berpusar) */}
-                <g transform={`translate(${bhPos.x}, ${bhPos.y})`}>
-                  {/* Lingkaran Gravitasi Gelap Terluar */}
-                  <circle cx="0" cy="0" r="4.6" fill="url(#bhDeepBlackGrad)" />
-
-                  {/* Pusaran Lengan Spiral Searah Jarum Jam */}
-                  <g className="vortex-cw">
-                    <path
-                      d="M 0 0 C 1.2 0.4, 2.6 2.0, 3.4 0.6 C 4.0 -0.6, 2.2 -2.2, 0 0"
-                      fill="#18181b"
-                      opacity="0.8"
-                    />
-                    <path
-                      d="M 0 0 C -1.2 -0.4, -2.6 -2.0, -3.4 -0.6 C -4.0 0.6, -2.2 2.2, 0 0"
-                      fill="#18181b"
-                      opacity="0.8"
-                    />
-                    <path
-                      d="M 0 0 C -0.4 1.2, -2.0 2.6, -0.6 3.4 C 0.6 4.0, 2.2 2.2, 0 0"
-                      fill="#09090b"
-                      opacity="0.9"
-                    />
-                    <path
-                      d="M 0 0 C 0.4 -1.2, 2.0 -2.6, 0.6 -3.4 C -0.6 -4.0, -2.2 -2.2, 0 0"
-                      fill="#09090b"
-                      opacity="0.9"
-                    />
-                  </g>
-
-                  {/* Pusaran Lapis Kedua Berlawanan Arah */}
-                  <g className="vortex-ccw">
-                    <circle cx="0" cy="0" r="2.8" fill="url(#bhAccretionGrad)" />
-                    <path
-                      d="M 0 0 C 0.8 0.8, 1.8 1.8, 2.4 0 C 2.8 -1.2, 1.2 -1.8, 0 0"
-                      fill="#27272a"
-                      opacity="0.6"
-                    />
-                    <path
-                      d="M 0 0 C -0.8 -0.8, -1.8 -1.8, -2.4 0 C -2.8 1.2, -1.2 1.8, 0 0"
-                      fill="#27272a"
-                      opacity="0.6"
-                    />
-                  </g>
-
-                  {/* Cincin Distorsi Lensa Gravitasi */}
-                  <circle cx="0" cy="0" r="1.8" fill="none" stroke="#3f3f46" strokeWidth="0.25" opacity="0.6" />
-
-                  {/* Inti Singularity Hitam Pekat */}
-                  <circle cx="0" cy="0" r="1.3" fill="#000000" stroke="#18181b" strokeWidth="0.3" />
-                </g>
-
-                {/* White Hole */}
-                <g transform={`translate(${whPos.x}, ${whPos.y})`}>
-                  <circle cx="0" cy="0" r="4.3" fill="url(#whPusaranGrad)" />
-                  <g className="vortex-ccw">
-                    <path d="M 0 0 C 0.5 1.5, 1.8 3.0, 0.6 3.6 C -0.8 4.2, -2.4 2.2, 0 0" fill="#38bdf8" opacity="0.6" />
-                    <path d="M 0 0 C -0.5 -1.5, -1.8 -3.0, -0.6 -3.6 C 0.8 -4.2, 2.4 -2.2, 0 0" fill="#38bdf8" opacity="0.6" />
-                  </g>
-                  <g className="jet-beam">
-                    <path d="M -0.3 0 L 0 -4.2 L 0.3 0 L 0 4.2 Z" fill="#e0f2fe" opacity="0.8" />
-                    <line x1="0" y1="-4.5" x2="0" y2="4.5" stroke="#ffffff" strokeWidth="0.25" strokeLinecap="round" />
-                  </g>
-                  <circle cx="0" cy="0" r="1.4" fill="none" stroke="#38bdf8" strokeWidth="0.3" opacity="0.85" />
-                  <circle cx="0" cy="0" r="0.85" fill="#ffffff" />
                 </g>
               </g>
             );
           })}
         </svg>
 
-        {/* 5. BIDAK PEMAIN DENGAN ANIMASI LOMPATAN REALISTIS (HOPPING PARABOLIC ARC) */}
         <div className="absolute inset-0 pointer-events-none z-30">
           {Object.entries(visualPositions).map(([pId, pos]) => {
             const p = players[pId];
@@ -779,23 +560,21 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                 key={pId}
                 className="absolute flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2 pointer-events-none"
                 animate={{ left: `${coords.x}%`, top: `${coords.y}%` }}
-                transition={{ type: 'spring', stiffness: 360, damping: 24 }}
+                transition={{ type: 'spring', stiffness: 280, damping: 22 }}
               >
-                {/* Tag Nama Pemain */}
                 <div className="mb-0.5 px-1.5 py-0.2 text-[9px] font-bold bg-background/95 text-foreground border border-border rounded-md shadow-xs whitespace-nowrap">
                   {p.username || 'Player'}
                 </div>
 
-                {/* Wrapper Bidak Fisik: Efek Lompat Parabola & Squash-and-Stretch */}
                 <motion.div
                   key={`hop-${pos}`}
                   animate={{
-                    y: [0, -18, -4, 0],
-                    scaleX: [1, 0.85, 1.15, 1],
-                    scaleY: [1, 1.25, 0.88, 1],
+                    y: [0, -16, -3, 0],
+                    scaleX: [1, 0.88, 1.12, 1],
+                    scaleY: [1, 1.2, 0.9, 1],
                   }}
                   transition={{
-                    duration: 0.23,
+                    duration: 0.35,
                     ease: [0.25, 1, 0.5, 1],
                   }}
                   className="relative flex items-center justify-center"
@@ -807,27 +586,12 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                     {p.username?.charAt(0).toUpperCase()}
                   </div>
                 </motion.div>
-
-                {/* Bayangan Bidak Dinamis (Mengecil & Memudar Saat Melayang di Udara) */}
-                <motion.div
-                  key={`shadow-${pos}`}
-                  animate={{
-                    scale: [1, 0.45, 1.15, 1],
-                    opacity: [0.55, 0.2, 0.65, 0.55],
-                  }}
-                  transition={{
-                    duration: 0.23,
-                    ease: [0.25, 1, 0.5, 1],
-                  }}
-                  className="w-4 h-1.5 bg-black/60 rounded-full blur-[1px] -mt-0.5"
-                />
               </motion.div>
             );
           })}
         </div>
       </div>
 
-      {/* Status Podium / Juara */}
       {winners.length > 0 && (
         <div className="bg-card border border-border p-3 rounded-xl w-full text-xs sm:text-sm flex flex-col gap-1.5 shadow-sm">
           <span className="font-bold text-foreground">🏆 Papan Peringkat Finish:</span>
@@ -839,15 +603,9 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               </span>
             ))}
           </div>
-          {!isGameFullyFinished && (
-            <span className="text-secondary text-[11px] italic">
-              Permainan masih berlanjut untuk sisa {unfinishedPlayerIds.length} pemain...
-            </span>
-          )}
         </div>
       )}
 
-      {/* Kontrol & Turn Status */}
       <div className="flex flex-col sm:flex-row items-center gap-4 bg-card p-4 rounded-2xl border border-border shadow-md w-full justify-between">
         <div className="flex items-center gap-4">
           <div className="text-center font-mono w-16 bg-secondary/10 py-1.5 rounded-xl border border-border">
@@ -867,10 +625,9 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           </div>
         </div>
 
-        {/* Bagian Tombol Dadu */}
         {isAlreadyFinished ? (
           <div className="bg-green-600/15 text-green-600 dark:text-green-400 font-bold px-4 py-2.5 rounded-xl text-center w-full sm:w-auto">
-            🎉 Kamu sudah Finish (Juara {winners.indexOf(userId!) + 1})! Menunggu pemain lainnya...
+            🎉 Kamu sudah Finish (Juara {winners.indexOf(userId!) + 1})!
           </div>
         ) : myFrozenCount > 0 && isMyTurn ? (
           <Button size="lg" onClick={handleSkipTurn} className="bg-red-600 hover:bg-red-700 text-white gap-2 w-full sm:w-auto">
