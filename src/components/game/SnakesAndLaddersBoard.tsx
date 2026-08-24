@@ -20,7 +20,7 @@ interface SnakesAndLaddersBoardProps {
 
 const SNAKE_SPECIES = [
   {
-    name: 'Emerald Tree Boa',
+    name: 'Emerald Tree Boa (Ular Hijau Zamrud)',
     gradientId: 'snakeGrad_emerald',
     colors: ['#047857', '#10b981', '#34d399', '#064e3b'],
     scalesColor: '#d1fae5',
@@ -30,7 +30,7 @@ const SNAKE_SPECIES = [
     tongueColor: '#ef4444',
   },
   {
-    name: 'Coral Snake',
+    name: 'Coral Snake (Ular Karang Belang Merah-Kuning)',
     gradientId: 'snakeGrad_coral',
     colors: ['#991b1b', '#ef4444', '#f59e0b', '#18181b'],
     scalesColor: '#fef08a',
@@ -40,7 +40,7 @@ const SNAKE_SPECIES = [
     tongueColor: '#450a0a',
   },
   {
-    name: 'Blue Insularis Viper',
+    name: 'Blue Insularis Viper (Viper Biru Komodo)',
     gradientId: 'snakeGrad_blueViper',
     colors: ['#0369a1', '#0ea5e9', '#38bdf8', '#082f49'],
     scalesColor: '#e0f2fe',
@@ -50,7 +50,7 @@ const SNAKE_SPECIES = [
     tongueColor: '#0284c7',
   },
   {
-    name: 'Albino Burmese Python',
+    name: 'Albino Burmese Python (Sanca Albino Kuning-Putih)',
     gradientId: 'snakeGrad_albino',
     colors: ['#d97706', '#fbbf24', '#fef08a', '#f8fafc'],
     scalesColor: '#ffffff',
@@ -60,7 +60,7 @@ const SNAKE_SPECIES = [
     tongueColor: '#fb7185',
   },
   {
-    name: 'Black Mamba',
+    name: 'Black Mamba (Kobra Hitam Arang)',
     gradientId: 'snakeGrad_blackMamba',
     colors: ['#0f172a', '#334155', '#475569', '#020617'],
     scalesColor: '#94a3b8',
@@ -191,7 +191,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     if (snakesState?.playerPositions) {
       const isNewGame = (!snakesState.winners || snakesState.winners.length === 0) && !snakesState.winnerId;
       if (isNewGame) {
-        // Use queueMicrotask to avoid synchronous setState inside effect lint warning
         queueMicrotask(() => {
           setVisualPositions(snakesState.playerPositions);
           lastProcessedPosRef.current = { ...snakesState.playerPositions };
@@ -207,7 +206,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const currentTurn = snakesState?.currentTurnUserId || activePlayerIds[0];
   const isMyTurn = currentTurn === userId;
 
-  // Animasi langkah yang lebih lambat & smooth (380ms per langkah)
+  // Animasi langkah smooth (380ms per langkah)
   const animatePath = useCallback(async (
     targetUserId: string,
     startPos: number,
@@ -218,7 +217,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   ) => {
     isAnimatingRef.current = true;
     let curr = startPos;
-    const stepIntervalMs = 380; // Dipelanin agar jelas dilihat semua pemain
+    const stepIntervalMs = 380;
 
     if (steppedPos > curr) {
       while (curr < steppedPos) {
@@ -239,7 +238,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       await new Promise((r) => setTimeout(r, 600));
     }
 
-    // Meluncur turun ular atau naik tangga
     if (finalPos !== steppedPos) {
       setVisualPositions((prev) => ({ ...prev, [targetUserId]: finalPos }));
       await new Promise((r) => setTimeout(r, 700));
@@ -258,7 +256,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     Object.entries(serverPositions).forEach(([pId, targetPos]) => {
       const currentVisual = visualPositions[pId] || lastProcessedPosRef.current[pId] || 1;
 
-      // Jika posisi server berbeda dan ini adalah aksi dari pemain lain
       if (targetPos !== currentVisual && pId !== userId) {
         let steppedPos = targetPos;
         const ladderHit = snakesState?.ladders?.find((l) => l.end === targetPos);
@@ -373,7 +370,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             const medal = myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : '🥉';
             toast.success(`${medal} Kamu Finish di Juara ${myRank}!`, { duration: 3500 });
 
-            // Tambahkan skor akumulatif
             const earnedScore = myRank === 1 ? 100 : myRank === 2 ? 60 : 30;
             const currentScore = players[userId]?.score || 0;
             updatePlayer(userId, { score: currentScore + earnedScore, rank: myRank });
@@ -499,8 +495,19 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           })}
         </div>
 
+        {/* SVG Item Layer */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" viewBox="0 0 100 100">
           <defs>
+            <style>{`
+              @keyframes spin-cw { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+              @keyframes spin-ccw { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+              @keyframes pulse-jet { 0%, 100% { opacity: 0.7; transform: scaleY(1); } 50% { opacity: 1; transform: scaleY(1.25); } }
+              .vortex-cw { transform-box: fill-box; transform-origin: center; animation: spin-cw 8s linear infinite; }
+              .vortex-ccw { transform-box: fill-box; transform-origin: center; animation: spin-ccw 6s linear infinite; }
+              .jet-beam { transform-box: fill-box; transform-origin: center; animation: pulse-jet 2s ease-in-out infinite; }
+            `}</style>
+
+            {/* Gradient Ular Dunia Nyata */}
             {SNAKE_SPECIES.map((species) => (
               <linearGradient key={species.gradientId} id={species.gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stopColor={species.colors[0]} />
@@ -509,8 +516,44 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                 <stop offset="100%" stopColor={species.colors[3]} />
               </linearGradient>
             ))}
+
+            {/* Gradient Black Hole Pekat */}
+            <radialGradient id="bhDeepBlackGrad">
+              <stop offset="0%" stopColor="#000000" />
+              <stop offset="45%" stopColor="#000000" />
+              <stop offset="70%" stopColor="#09090b" />
+              <stop offset="88%" stopColor="#18181b" stopOpacity="0.8" />
+              <stop offset="100%" stopColor="#000000" stopOpacity="0" />
+            </radialGradient>
+
+            <radialGradient id="bhAccretionGrad">
+              <stop offset="0%" stopColor="#000000" />
+              <stop offset="50%" stopColor="#27272a" stopOpacity="0.6" />
+              <stop offset="100%" stopColor="#000000" stopOpacity="0" />
+            </radialGradient>
+
+            <radialGradient id="whPusaranGrad">
+              <stop offset="0%" stopColor="#ffffff" />
+              <stop offset="25%" stopColor="#e0f2fe" />
+              <stop offset="50%" stopColor="#38bdf8" />
+              <stop offset="78%" stopColor="#2563eb" />
+              <stop offset="100%" stopColor="#1e3a8a" stopOpacity="0" />
+            </radialGradient>
+
+            {/* Trap Gradients */}
+            <linearGradient id="trapMetalDark" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#475569" />
+              <stop offset="50%" stopColor="#94a3b8" />
+              <stop offset="100%" stopColor="#1e293b" />
+            </linearGradient>
+            <linearGradient id="trapJawSteel" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="#f8fafc" />
+              <stop offset="40%" stopColor="#cbd5e1" />
+              <stop offset="100%" stopColor="#334155" />
+            </linearGradient>
           </defs>
 
+          {/* 1. TANGGA (LADDERS) */}
           {snakesState?.ladders?.map((ladder) => {
             const start = getTileCoordinates(ladder.start);
             const end = getTileCoordinates(ladder.end);
@@ -543,6 +586,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             );
           })}
 
+          {/* 2. ULAR DUNIA ASLI BERAGAM SPESIES */}
           {snakesState?.snakes?.map((snake, sIdx) => {
             const head = getTileCoordinates(snake.head);
             const tail = getTileCoordinates(snake.tail);
@@ -564,8 +608,104 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               </g>
             );
           })}
+
+          {/* 3. RANJAU CAPIT BAJA */}
+          {snakesState?.mines?.map((mineTile, idx) => {
+            const pos = getTileCoordinates(mineTile);
+            return (
+              <g key={`mine-${idx}`} transform={`translate(${pos.x}, ${pos.y})`}>
+                <circle cx="0" cy="0" r="3.2" fill="#ef4444" opacity="0.12" className="animate-ping" />
+                <ellipse cx="0" cy="-0.2" rx="2.8" ry="1.6" fill="none" stroke="url(#trapMetalDark)" strokeWidth="0.5" />
+                <polygon points="-2.2,-0.4 -2.0,-1.5 -1.7,-0.4" fill="url(#trapJawSteel)" />
+                <polygon points="-1.5,-0.7 -1.2,-1.8 -0.9,-0.7" fill="url(#trapJawSteel)" />
+                <polygon points="-0.6,-0.9 -0.3,-2.0 0.0,-0.9" fill="url(#trapJawSteel)" />
+                <polygon points="0.3,-0.9 0.6,-2.0 0.9,-0.9" fill="url(#trapJawSteel)" />
+                <polygon points="1.2,-0.7 1.5,-1.8 1.8,-0.7" fill="url(#trapJawSteel)" />
+                <polygon points="1.9,-0.4 2.2,-1.5 2.4,-0.4" fill="url(#trapJawSteel)" />
+                <line x1="-2.7" y1="0.1" x2="2.7" y2="0.1" stroke="#334155" strokeWidth="0.4" strokeLinecap="round" />
+                <line x1="0" y1="-1.4" x2="0" y2="1.3" stroke="#475569" strokeWidth="0.35" strokeLinecap="round" />
+                <path d="M -2.7 0.1 C -2.2 1.6, 2.2 1.6, 2.7 0.1" fill="none" stroke="url(#trapMetalDark)" strokeWidth="0.6" />
+                <polygon points="-2.4,0.3 -2.2,1.3 -1.9,0.5" fill="url(#trapJawSteel)" />
+                <polygon points="-1.7,0.7 -1.4,1.7 -1.1,0.8" fill="url(#trapJawSteel)" />
+                <polygon points="-0.8,0.9 -0.5,1.9 -0.2,1.0" fill="url(#trapJawSteel)" />
+                <polygon points="0.2,1.0 0.5,1.9 0.8,0.9" fill="url(#trapJawSteel)" />
+                <polygon points="1.1,0.8 1.4,1.7 1.7,0.7" fill="url(#trapJawSteel)" />
+                <polygon points="1.9,0.5 2.2,1.3 2.4,0.3" fill="url(#trapJawSteel)" />
+                <circle cx="0" cy="0" r="0.9" fill="#94a3b8" stroke="#1e293b" strokeWidth="0.15" />
+                <circle cx="0" cy="0" r="0.55" fill="#dc2626" />
+              </g>
+            );
+          })}
+
+          {/* 4. BLACK HOLE & WHITE HOLE */}
+          {snakesState?.wormholes?.map((wh) => {
+            const bhPos = getTileCoordinates(wh.blackHole);
+            const whPos = getTileCoordinates(wh.whiteHole);
+
+            return (
+              <g key={wh.id}>
+                {/* Black Hole */}
+                <g transform={`translate(${bhPos.x}, ${bhPos.y})`}>
+                  <circle cx="0" cy="0" r="4.6" fill="url(#bhDeepBlackGrad)" />
+                  <g className="vortex-cw">
+                    <path
+                      d="M 0 0 C 1.2 0.4, 2.6 2.0, 3.4 0.6 C 4.0 -0.6, 2.2 -2.2, 0 0"
+                      fill="#18181b"
+                      opacity="0.8"
+                    />
+                    <path
+                      d="M 0 0 C -1.2 -0.4, -2.6 -2.0, -3.4 -0.6 C -4.0 0.6, -2.2 2.2, 0 0"
+                      fill="#18181b"
+                      opacity="0.8"
+                    />
+                    <path
+                      d="M 0 0 C -0.4 1.2, -2.0 2.6, -0.6 3.4 C 0.6 4.0, 2.2 2.2, 0 0"
+                      fill="#09090b"
+                      opacity="0.9"
+                    />
+                    <path
+                      d="M 0 0 C 0.4 -1.2, 2.0 -2.6, 0.6 -3.4 C -0.6 -4.0, -2.2 -2.2, 0 0"
+                      fill="#09090b"
+                      opacity="0.9"
+                    />
+                  </g>
+                  <g className="vortex-ccw">
+                    <circle cx="0" cy="0" r="2.8" fill="url(#bhAccretionGrad)" />
+                    <path
+                      d="M 0 0 C 0.8 0.8, 1.8 1.8, 2.4 0 C 2.8 -1.2, 1.2 -1.8, 0 0"
+                      fill="#27272a"
+                      opacity="0.6"
+                    />
+                    <path
+                      d="M 0 0 C -0.8 -0.8, -1.8 -1.8, -2.4 0 C -2.8 1.2, -1.2 1.8, 0 0"
+                      fill="#27272a"
+                      opacity="0.6"
+                    />
+                  </g>
+                  <circle cx="0" cy="0" r="1.8" fill="none" stroke="#3f3f46" strokeWidth="0.25" opacity="0.6" />
+                  <circle cx="0" cy="0" r="1.3" fill="#000000" stroke="#18181b" strokeWidth="0.3" />
+                </g>
+
+                {/* White Hole */}
+                <g transform={`translate(${whPos.x}, ${whPos.y})`}>
+                  <circle cx="0" cy="0" r="4.3" fill="url(#whPusaranGrad)" />
+                  <g className="vortex-ccw">
+                    <path d="M 0 0 C 0.5 1.5, 1.8 3.0, 0.6 3.6 C -0.8 4.2, -2.4 2.2, 0 0" fill="#38bdf8" opacity="0.6" />
+                    <path d="M 0 0 C -0.5 -1.5, -1.8 -3.0, -0.6 -3.6 C 0.8 -4.2, 2.4 -2.2, 0 0" fill="#38bdf8" opacity="0.6" />
+                  </g>
+                  <g className="jet-beam">
+                    <path d="M -0.3 0 L 0 -4.2 L 0.3 0 L 0 4.2 Z" fill="#e0f2fe" opacity="0.8" />
+                    <line x1="0" y1="-4.5" x2="0" y2="4.5" stroke="#ffffff" strokeWidth="0.25" strokeLinecap="round" />
+                  </g>
+                  <circle cx="0" cy="0" r="1.4" fill="none" stroke="#38bdf8" strokeWidth="0.3" opacity="0.85" />
+                  <circle cx="0" cy="0" r="0.85" fill="#ffffff" />
+                </g>
+              </g>
+            );
+          })}
         </svg>
 
+        {/* 5. Bidak Pemain */}
         <div className="absolute inset-0 pointer-events-none z-30">
           {Object.entries(visualPositions).map(([pId, pos]) => {
             const p = players[pId];
