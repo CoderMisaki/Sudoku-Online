@@ -218,6 +218,11 @@ export default function RoomPage() {
           .map((p: Player) => p.id);
 
         const newSnakesState = generateInitialSnakesState(diff, activeIds);
+        newSnakesState.winners = [];
+        newSnakesState.winnerId = null;
+        newSnakesState.frozenTurns = {};
+        newSnakesState.currentTurnUserId = activeIds[0] || '';
+
         useGameStore.getState().updateSnakesState(newSnakesState);
 
         broadcastNextGame(null, null, updatedRoom, newSnakesState);
@@ -799,7 +804,7 @@ export default function RoomPage() {
               <div>
                 <h2 className="text-2xl font-bold">{room?.difficulty?.toUpperCase() || 'MEDIUM'}</h2>
                 {canTriggerNextGame && player?.isHost && (
-                  <Button onClick={handleOpenNextGameModal} className="mt-2 bg-green-600 hover:bg-green-700 text-white animate-pulse">
+                  <Button onClick={handleOpenNextGameModal} className="mt-2 bg-green-600 hover:bg-green-700 text-white shadow-md">
                     Next Game
                   </Button>
                 )}
