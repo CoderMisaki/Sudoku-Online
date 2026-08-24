@@ -1,0 +1,54 @@
+
+> my-app@0.1.0 dev
+> next dev
+
+▲ Next.js 16.2.12 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.0.2:3000
+✓ Ready in 534ms
+
+○ Compiling / ...
+ GET / 200 in 6.0s (next.js: 5.4s, application-code: 570ms)
+[browser] Cannot render a sync or defer <script> outside the main document without knowing its order. Try adding async="" or moving it into the root <head> tag.
+[browser] Cannot render a sync or defer <script> outside the main document without knowing its order. Try adding async="" or moving it into the root <head> tag.
+[browser] In HTML, <script> cannot be a child of <html>.
+This will cause a hydration error.
+
+  ...
+    <HotReload globalError={[...]} webSocket={WebSocket} staticIndicatorState={{pathname:null, ...}}>
+      <AppDevOverlayErrorBoundary globalError={[...]}>
+        <ReplaySsrOnlyErrors>
+        <DevRootHTTPAccessFallbackBoundary>
+          <HTTPAccessFallbackBoundary notFound={<NotAllowedRootHTTPFallbackError>}>
+            <HTTPAccessFallbackErrorBoundary pathname="/" notFound={<NotAllowedRootHTTPFallbackError>} ...>
+              <RedirectBoundary>
+                <RedirectErrorBoundary router={{...}}>
+                  <Head>
+                  <__next_root_layout_boundary__>
+                    <SegmentViewNode type="layout" pagePath="src/layout...">
+                      <SegmentTrieNode>
+                      <link>
+                      <script>
+                      <script>
+                      <RootLayout>
+>                       <html
+>                         lang="en"
+>                         className="geist_a71539c9-module__T19VSG__variable geist_mono_8d43a2aa-module__8Li5zG__varia..."
+>                       >
+>                         <script dangerouslySetInnerHTML={{__html:"\n        ..."}}>
+                          ...
+                  ...
+
+ GET /room/3GW8HG 200 in 3.8s (next.js: 3.7s, application-code: 99ms)
+Create Room Error: Error: CRITICAL SECURITY ERROR: ROOM_SECRET_KEY tidak disetel atau terlalu pendek di environment!
+    at getSecretKey (src/utils/security.ts:12:11)
+    at encryptSolution (src/utils/security.ts:21:18)
+    at POST (src/app/api/game/create-room/route.ts:33:42)
+  10 |   const secret = process.env.ROOM_SECRET_KEY;
+  11 |   if (!secret || secret.trim().length < 16) {
+> 12 |     throw new Error('CRITICAL SECURITY ERROR: ROOM_SECRET_KEY tidak disetel atau terlalu p...
+     |           ^
+  13 |   }
+  14 |   return secret;
+  15 | }
+ POST /api/game/create-room 500 in 1980ms (next.js: 1550ms, application-code: 430ms)
