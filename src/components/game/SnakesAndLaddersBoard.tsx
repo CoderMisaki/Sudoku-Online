@@ -10,12 +10,20 @@ import {
   generateInitialSnakesState,
   relocateTriggeredItem,
 } from '@/utils/snakesAndLaddersData';
-import { SnakesState, Player } from '@/types/game';
+import { SnakesState, Player, SnakeItem as Snake, WormholePair as Wormhole } from '@/types/game';
 import toast from 'react-hot-toast';
 
 interface SnakesAndLaddersBoardProps {
   broadcastSnakesState?: (newState: SnakesState) => void;
   broadcastSnakesDiceRoll?: (diceValue: number, newPosition: number, nextTurnUserId: string, hasWon: boolean) => void;
+}
+
+interface TokenAnimOverride {
+  x?: number;
+  y?: number;
+  scale?: number;
+  rotate?: number;
+  opacity?: number;
 }
 
 const SNAKE_SPECIES = [
@@ -26,18 +34,14 @@ const SNAKE_SPECIES = [
     scalesColor: '#d1fae5',
     headColor: '#065f46',
     eyeIris: '#facc15',
-    eyePupil: '#000000',
-    tongueColor: '#ef4444',
   },
   {
-    name: 'Coral Snake (Ular Karang Belang Merah-Kuning)',
+    name: 'Coral Snake (Ular Karang Belang)',
     gradientId: 'snakeGrad_coral',
     colors: ['#991b1b', '#ef4444', '#f59e0b', '#18181b'],
     scalesColor: '#fef08a',
     headColor: '#7f1d1d',
     eyeIris: '#f97316',
-    eyePupil: '#000000',
-    tongueColor: '#450a0a',
   },
   {
     name: 'Blue Insularis Viper (Viper Biru Komodo)',
@@ -46,18 +50,14 @@ const SNAKE_SPECIES = [
     scalesColor: '#e0f2fe',
     headColor: '#0284c7',
     eyeIris: '#fde047',
-    eyePupil: '#000000',
-    tongueColor: '#0284c7',
   },
   {
-    name: 'Albino Burmese Python (Sanca Albino Kuning-Putih)',
+    name: 'Albino Burmese Python (Sanca Albino)',
     gradientId: 'snakeGrad_albino',
     colors: ['#d97706', '#fbbf24', '#fef08a', '#f8fafc'],
     scalesColor: '#ffffff',
     headColor: '#f59e0b',
     eyeIris: '#f43f5e',
-    eyePupil: '#881337',
-    tongueColor: '#fb7185',
   },
   {
     name: 'Black Mamba (Kobra Hitam Arang)',
@@ -66,20 +66,20 @@ const SNAKE_SPECIES = [
     scalesColor: '#94a3b8',
     headColor: '#0f172a',
     eyeIris: '#64748b',
-    eyePupil: '#000000',
-    tongueColor: '#0f172a',
   },
 ];
 
-function generateCurvedSnakePath(
+// Helper kalkulasi titik koordinat kurva melingkar ular
+function getSnakePoints(
   start: { x: number; y: number },
   end: { x: number; y: number },
-  seed: number = 1
-) {
+  seed: number = 1,
+  numSegments: number = 24
+): { x: number; y: number }[] {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 0.1) return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
+  if (len < 0.1) return [{ x: start.x, y: start.y }, { x: end.x, y: end.y }];
 
   const ux = dx / len;
   const uy = dy / len;
@@ -91,10 +91,8 @@ function generateCurvedSnakePath(
   const sign = seed % 2 === 0 ? 1 : -1;
 
   const points: { x: number; y: number }[] = [];
-  const segments = 24;
-
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
+  for (let i = 0; i <= numSegments; i++) {
+    const t = i / numSegments;
     const envelope = Math.sin(Math.PI * t);
     const wave = Math.sin(t * waveCount * Math.PI) * maxAmp * envelope * sign;
     points.push({
@@ -102,7 +100,15 @@ function generateCurvedSnakePath(
       y: start.y + dy * t + ny * wave,
     });
   }
+  return points;
+}
 
+function generateCurvedSnakePath(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  seed: number = 1
+) {
+  const points = getSnakePoints(start, end, seed, 24);
   let d = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
   for (let i = 0; i < points.length - 1; i++) {
     const p0 = points[i === 0 ? 0 : i - 1];
@@ -162,7 +168,12 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const [isRollingLocal, setIsRollingLocal] = useState(false);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
 
+  // Animasi Bidak & Item Berubah Tempat
   const [visualPositions, setVisualPositions] = useState<Record<string, number>>({});
+  const [tokenOverrides, setTokenOverrides] = useState<Record<string, TokenAnimOverride>>({});
+  const [disappearingSnakeId, setDisappearingSnakeId] = useState<string | null>(null);
+  const [relocatingWormholeId, setRelocatingWormholeId] = useState<string | null>(null);
+
   const isAnimatingRef = useRef(false);
   const lastProcessedPosRef = useRef<Record<string, number>>({});
 
@@ -186,7 +197,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     return unfinishedPlayerIds.length === 0 || winners.length === activePlayerIds.length;
   }, [activePlayerIds.length, unfinishedPlayerIds.length, winners.length]);
 
-  // Reset visual posisi dan flag saat ronde baru dimulai (winners kosong)
   useEffect(() => {
     if (snakesState?.playerPositions) {
       const isNewGame = (!snakesState.winners || snakesState.winners.length === 0) && !snakesState.winnerId;
@@ -194,6 +204,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         queueMicrotask(() => {
           setVisualPositions(snakesState.playerPositions);
           lastProcessedPosRef.current = { ...snakesState.playerPositions };
+          setTokenOverrides({});
           isAnimatingRef.current = false;
           setIsRollingLocal(false);
           setActionStatus(null);
@@ -206,19 +217,25 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const currentTurn = snakesState?.currentTurnUserId || activePlayerIds[0];
   const isMyTurn = currentTurn === userId;
 
-  // Animasi langkah smooth (380ms per langkah)
+  // Pipeline Animasi Lengkap: Jalan Biasa -> Melingkar Ular / Masuk Blackhole -> Relokasi
   const animatePath = useCallback(async (
     targetUserId: string,
     startPos: number,
     steppedPos: number,
     finalPos: number,
+    specialHit: {
+      type?: 'snake' | 'wormhole' | 'ladder' | 'mine';
+      snakeObj?: Snake;
+      wormholeObj?: Wormhole;
+    },
     eventLabel?: string,
     onComplete?: () => void
   ) => {
     isAnimatingRef.current = true;
     let curr = startPos;
-    const stepIntervalMs = 380;
+    const stepIntervalMs = 340;
 
+    // 1. Bergerak lurus kotak demi kotak
     if (steppedPos > curr) {
       while (curr < steppedPos) {
         curr++;
@@ -235,48 +252,146 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
     if (eventLabel) {
       setActionStatus(eventLabel);
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 450));
     }
 
-    if (finalPos !== steppedPos) {
+    // 2. SKENARIO DIMAKAN ULAR (Melingkar-lingkar sepanjang badan ular)
+    if (specialHit.type === 'snake' && specialHit.snakeObj && snakesState) {
+      const sObj = specialHit.snakeObj;
+      const headCoords = getTileCoordinates(sObj.head);
+      const tailCoords = getTileCoordinates(sObj.tail);
+      const snakeIdx = snakesState.snakes.findIndex((s) => s.id === sObj.id);
+      const splinePoints = getSnakePoints(headCoords, tailCoords, (snakeIdx >= 0 ? snakeIdx : 0) + 1, 28);
+
+      // Traversal melingkar menuruni badan ular
+      for (let i = 0; i < splinePoints.length; i++) {
+        const pt = splinePoints[i];
+        const rot = (i * 45) % 360;
+        setTokenOverrides((prev) => ({
+          ...prev,
+          [targetUserId]: {
+            x: pt.x,
+            y: pt.y,
+            scale: 0.88,
+            rotate: rot,
+            opacity: 1,
+          },
+        }));
+        await new Promise((r) => setTimeout(r, 38));
+      }
+
+      // Sampai di ekor: Lepas override dan posisikan di tail
+      setTokenOverrides((prev) => {
+        const copy = { ...prev };
+        delete copy[targetUserId];
+        return copy;
+      });
+      setVisualPositions((prev) => ({ ...prev, [targetUserId]: sObj.tail }));
+
+      // Ular menghilang & berteleportasi
+      setDisappearingSnakeId(sObj.id);
+      await new Promise((r) => setTimeout(r, 500));
+      setDisappearingSnakeId(null);
+    }
+    // 3. SKENARIO BLACK HOLE -> WHITE HOLE
+    else if (specialHit.type === 'wormhole' && specialHit.wormholeObj) {
+      const wObj = specialHit.wormholeObj;
+      const bhCoords = getTileCoordinates(wObj.blackHole);
+      const whCoords = getTileCoordinates(wObj.whiteHole);
+
+      // Animasi Tersedot ke dalam Black Hole (Spin 720° & Shrink scale -> 0)
+      for (let step = 1; step <= 10; step++) {
+        const progress = step / 10;
+        setTokenOverrides((prev) => ({
+          ...prev,
+          [targetUserId]: {
+            x: bhCoords.x,
+            y: bhCoords.y,
+            scale: 1 - progress,
+            rotate: progress * 720,
+            opacity: 1 - progress,
+          },
+        }));
+        await new Promise((r) => setTimeout(r, 35));
+      }
+
+      // Delay transisi antar dimensi
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Animasi Keluar/Terhempas dari White Hole (Spin out & Pop scale 0 -> 1.25 -> 1)
+      for (let step = 1; step <= 10; step++) {
+        const progress = step / 10;
+        const scaleVal = progress < 0.8 ? progress * 1.5 : 1.25 - (progress - 0.8) * 1.25;
+        setTokenOverrides((prev) => ({
+          ...prev,
+          [targetUserId]: {
+            x: whCoords.x,
+            y: whCoords.y,
+            scale: Math.max(0.1, scaleVal),
+            rotate: (1 - progress) * -360,
+            opacity: progress,
+          },
+        }));
+        await new Promise((r) => setTimeout(r, 35));
+      }
+
+      // Lepas token override & posisikan di white hole
+      setTokenOverrides((prev) => {
+        const copy = { ...prev };
+        delete copy[targetUserId];
+        return copy;
+      });
+      setVisualPositions((prev) => ({ ...prev, [targetUserId]: wObj.whiteHole }));
+
+      // Portal berpindah tempat
+      setRelocatingWormholeId(wObj.id);
+      await new Promise((r) => setTimeout(r, 450));
+      setRelocatingWormholeId(null);
+    }
+    // 4. Kasus Tangga / Biasa
+    else if (finalPos !== steppedPos) {
       setVisualPositions((prev) => ({ ...prev, [targetUserId]: finalPos }));
-      await new Promise((r) => setTimeout(r, 700));
+      await new Promise((r) => setTimeout(r, 600));
     }
 
     lastProcessedPosRef.current[targetUserId] = finalPos;
     setActionStatus(null);
     isAnimatingRef.current = false;
     if (onComplete) onComplete();
-  }, []);
+  }, [snakesState]);
 
-  // Sinkronisasi animasi saat pemain lain melangkah
+  // Sinkronisasi realtime saat pemain lain bergerak
   useEffect(() => {
-    if (isAnimatingRef.current) return;
+    if (isAnimatingRef.current || !snakesState) return;
 
     Object.entries(serverPositions).forEach(([pId, targetPos]) => {
       const currentVisual = visualPositions[pId] || lastProcessedPosRef.current[pId] || 1;
 
       if (targetPos !== currentVisual && pId !== userId) {
         let steppedPos = targetPos;
-        const ladderHit = snakesState?.ladders?.find((l) => l.end === targetPos);
-        const snakeHit = snakesState?.snakes?.find((s) => s.tail === targetPos);
-        const wormholeHit = snakesState?.wormholes?.find((w) => w.whiteHole === targetPos);
+        const ladderHit = snakesState.ladders?.find((l) => l.end === targetPos);
+        const snakeHit = snakesState.snakes?.find((s) => s.tail === targetPos);
+        const wormholeHit = snakesState.wormholes?.find((w) => w.whiteHole === targetPos);
 
         let eventMsg = '';
         const pName = players[pId]?.username || 'Player';
+        let specialHit: Parameters<typeof animatePath>[4] = {};
 
         if (ladderHit) {
           steppedPos = ladderHit.start;
-          eventMsg = `🪜 ${pName} menaiki tangga ke kotak ${targetPos}!`;
+          eventMsg = `🪜 ${pName} memanjat tangga ke kotak ${targetPos}!`;
+          specialHit = { type: 'ladder' };
         } else if (snakeHit) {
           steppedPos = snakeHit.head;
-          eventMsg = `🐍 ${pName} dimakan ular turun ke kotak ${targetPos}!`;
+          eventMsg = `🐍 ${pName} dimakan ular meluncur ke kotak ${targetPos}!`;
+          specialHit = { type: 'snake', snakeObj: snakeHit };
         } else if (wormholeHit) {
           steppedPos = wormholeHit.blackHole;
-          eventMsg = `🌀 ${pName} tersedot lubang ke kotak ${targetPos}!`;
+          eventMsg = `🌀 ${pName} terhisap lubang cacing ke kotak ${targetPos}!`;
+          specialHit = { type: 'wormhole', wormholeObj: wormholeHit };
         }
 
-        animatePath(pId, currentVisual, steppedPos, targetPos, eventMsg);
+        animatePath(pId, currentVisual, steppedPos, targetPos, specialHit, eventMsg);
       } else if (visualPositions[pId] === undefined) {
         setVisualPositions((prev) => ({ ...prev, [pId]: targetPos }));
         lastProcessedPosRef.current[pId] = targetPos;
@@ -284,7 +399,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     });
   }, [serverPositions, visualPositions, userId, snakesState, players, animatePath]);
 
-  // Auto skip giliran jika pemain saat ini sudah selesai
+  // Skip giliran otomatis jika pemain yang gilirannya aktif sudah selesai finish
   useEffect(() => {
     if (!snakesState || isGameFullyFinished || isSkippingRef.current) return;
 
@@ -334,6 +449,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           let eventMessage = '';
           let updatedObstacles: Partial<SnakesState> = {};
           const newFrozen = { ...frozenTurns };
+          let specialHit: Parameters<typeof animatePath>[4] = {};
 
           const ladderHit = snakesState.ladders?.find((l) => l.start === steppedPos);
           const snakeHit = snakesState.snakes?.find((s) => s.head === steppedPos);
@@ -346,19 +462,23 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             finalPos = ladderHit.end;
             eventMessage = `🪜 ${playerName} memanjat tangga ke kotak ${finalPos}!`;
             updatedObstacles = relocateTriggeredItem(snakesState, 'ladder', ladderHit.id);
+            specialHit = { type: 'ladder' };
           } else if (snakeHit) {
             finalPos = snakeHit.tail;
-            eventMessage = `🐍 ${playerName} dimakan ular turun ke kotak ${finalPos}!`;
+            eventMessage = `🐍 ${playerName} dimakan ular meluncur ke kotak ${finalPos}!`;
             updatedObstacles = relocateTriggeredItem(snakesState, 'snake', snakeHit.id);
+            specialHit = { type: 'snake', snakeObj: snakeHit };
           } else if (wormholeHit) {
             finalPos = wormholeHit.whiteHole;
             eventMessage = `🌀 ${playerName} tersedot Black Hole ke kotak ${finalPos}!`;
             updatedObstacles = relocateTriggeredItem(snakesState, 'wormhole', wormholeHit.id);
+            specialHit = { type: 'wormhole', wormholeObj: wormholeHit };
           } else if (mineHit) {
             newFrozen[userId] = 3;
             eventMessage = `💣 ${playerName} terinjak Ranjau Capit! Terjebak 3 turn!`;
             updatedObstacles = relocateTriggeredItem(snakesState, 'mine', steppedPos);
             toast.error('💥 Kamu menginjak Ranjau Capit! Freeze 3 giliran!');
+            specialHit = { type: 'mine' };
           }
 
           const hasWon = finalPos === 100;
@@ -390,7 +510,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             }
           }
 
-          animatePath(userId, currentPos, steppedPos, finalPos, eventMessage, () => {
+          animatePath(userId, currentPos, steppedPos, finalPos, specialHit, eventMessage, () => {
             const nextState: SnakesState = {
               ...snakesState,
               ...updatedObstacles,
@@ -495,7 +615,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           })}
         </div>
 
-        {/* SVG Item Layer */}
+        {/* SVG Layer: Tangga, Ular & Wormhole */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" viewBox="0 0 100 100">
           <defs>
             <style>{`
@@ -507,7 +627,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               .jet-beam { transform-box: fill-box; transform-origin: center; animation: pulse-jet 2s ease-in-out infinite; }
             `}</style>
 
-            {/* Gradient Ular Dunia Nyata */}
             {SNAKE_SPECIES.map((species) => (
               <linearGradient key={species.gradientId} id={species.gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stopColor={species.colors[0]} />
@@ -517,7 +636,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               </linearGradient>
             ))}
 
-            {/* Gradient Black Hole Pekat */}
             <radialGradient id="bhDeepBlackGrad">
               <stop offset="0%" stopColor="#000000" />
               <stop offset="45%" stopColor="#000000" />
@@ -540,7 +658,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               <stop offset="100%" stopColor="#1e3a8a" stopOpacity="0" />
             </radialGradient>
 
-            {/* Trap Gradients */}
             <linearGradient id="trapMetalDark" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stopColor="#475569" />
               <stop offset="50%" stopColor="#94a3b8" />
@@ -553,7 +670,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             </linearGradient>
           </defs>
 
-          {/* 1. TANGGA (LADDERS) */}
+          {/* 1. TANGGA */}
           {snakesState?.ladders?.map((ladder) => {
             const start = getTileCoordinates(ladder.start);
             const end = getTileCoordinates(ladder.end);
@@ -586,7 +703,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             );
           })}
 
-          {/* 2. ULAR DUNIA ASLI BERAGAM SPESIES */}
+          {/* 2. ULAR (Dengan Animasi Menghilang Saat Dimakan) */}
           {snakesState?.snakes?.map((snake, sIdx) => {
             const head = getTileCoordinates(snake.head);
             const tail = getTileCoordinates(snake.tail);
@@ -594,9 +711,18 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             if (typeof pathInfo === 'string') return null;
             const { d, firstSegmentAngle } = pathInfo;
             const species = SNAKE_SPECIES[sIdx % SNAKE_SPECIES.length];
+            const isDisappearing = disappearingSnakeId === snake.id;
 
             return (
-              <g key={snake.id}>
+              <g
+                key={snake.id}
+                style={{
+                  opacity: isDisappearing ? 0 : 1,
+                  transform: isDisappearing ? 'scale(0.8)' : 'scale(1)',
+                  transformOrigin: `${head.x}% ${head.y}%`,
+                  transition: 'opacity 0.45s ease-out, transform 0.45s ease-out',
+                }}
+              >
                 <path d={d} fill="none" stroke="rgba(0,0,0,0.28)" strokeWidth="1.6" strokeLinecap="round" transform="translate(0.2, 0.3)" />
                 <path d={d} fill="none" stroke={`url(#${species.gradientId})`} strokeWidth="1.45" strokeLinecap="round" />
                 <path d={d} fill="none" stroke={species.scalesColor} strokeWidth="0.55" strokeDasharray="0.6 1.1" strokeLinecap="round" opacity="0.9" />
@@ -609,7 +735,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             );
           })}
 
-          {/* 3. RANJAU CAPIT BAJA */}
+          {/* 3. RANJAU CAPIT */}
           {snakesState?.mines?.map((mineTile, idx) => {
             const pos = getTileCoordinates(mineTile);
             return (
@@ -637,50 +763,35 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             );
           })}
 
-          {/* 4. BLACK HOLE & WHITE HOLE */}
+          {/* 4. BLACK HOLE & WHITE HOLE (Dengan Efek Relokasi) */}
           {snakesState?.wormholes?.map((wh) => {
             const bhPos = getTileCoordinates(wh.blackHole);
             const whPos = getTileCoordinates(wh.whiteHole);
+            const isRelocating = relocatingWormholeId === wh.id;
 
             return (
-              <g key={wh.id}>
+              <g
+                key={wh.id}
+                style={{
+                  opacity: isRelocating ? 0 : 1,
+                  transform: isRelocating ? 'scale(0.2)' : 'scale(1)',
+                  transformOrigin: `${bhPos.x}% ${bhPos.y}%`,
+                  transition: 'opacity 0.4s ease-out, transform 0.4s ease-out',
+                }}
+              >
                 {/* Black Hole */}
                 <g transform={`translate(${bhPos.x}, ${bhPos.y})`}>
                   <circle cx="0" cy="0" r="4.6" fill="url(#bhDeepBlackGrad)" />
                   <g className="vortex-cw">
-                    <path
-                      d="M 0 0 C 1.2 0.4, 2.6 2.0, 3.4 0.6 C 4.0 -0.6, 2.2 -2.2, 0 0"
-                      fill="#18181b"
-                      opacity="0.8"
-                    />
-                    <path
-                      d="M 0 0 C -1.2 -0.4, -2.6 -2.0, -3.4 -0.6 C -4.0 0.6, -2.2 2.2, 0 0"
-                      fill="#18181b"
-                      opacity="0.8"
-                    />
-                    <path
-                      d="M 0 0 C -0.4 1.2, -2.0 2.6, -0.6 3.4 C 0.6 4.0, 2.2 2.2, 0 0"
-                      fill="#09090b"
-                      opacity="0.9"
-                    />
-                    <path
-                      d="M 0 0 C 0.4 -1.2, 2.0 -2.6, 0.6 -3.4 C -0.6 -4.0, -2.2 -2.2, 0 0"
-                      fill="#09090b"
-                      opacity="0.9"
-                    />
+                    <path d="M 0 0 C 1.2 0.4, 2.6 2.0, 3.4 0.6 C 4.0 -0.6, 2.2 -2.2, 0 0" fill="#18181b" opacity="0.8" />
+                    <path d="M 0 0 C -1.2 -0.4, -2.6 -2.0, -3.4 -0.6 C -4.0 0.6, -2.2 2.2, 0 0" fill="#18181b" opacity="0.8" />
+                    <path d="M 0 0 C -0.4 1.2, -2.0 2.6, -0.6 3.4 C 0.6 4.0, 2.2 2.2, 0 0" fill="#09090b" opacity="0.9" />
+                    <path d="M 0 0 C 0.4 -1.2, 2.0 -2.6, 0.6 -3.4 C -0.6 -4.0, -2.2 -2.2, 0 0" fill="#09090b" opacity="0.9" />
                   </g>
                   <g className="vortex-ccw">
                     <circle cx="0" cy="0" r="2.8" fill="url(#bhAccretionGrad)" />
-                    <path
-                      d="M 0 0 C 0.8 0.8, 1.8 1.8, 2.4 0 C 2.8 -1.2, 1.2 -1.8, 0 0"
-                      fill="#27272a"
-                      opacity="0.6"
-                    />
-                    <path
-                      d="M 0 0 C -0.8 -0.8, -1.8 -1.8, -2.4 0 C -2.8 1.2, -1.2 1.8, 0 0"
-                      fill="#27272a"
-                      opacity="0.6"
-                    />
+                    <path d="M 0 0 C 0.8 0.8, 1.8 1.8, 2.4 0 C 2.8 -1.2, 1.2 -1.8, 0 0" fill="#27272a" opacity="0.6" />
+                    <path d="M 0 0 C -0.8 -0.8, -1.8 -1.8, -2.4 0 C -2.8 1.2, -1.2 1.8, 0 0" fill="#27272a" opacity="0.6" />
                   </g>
                   <circle cx="0" cy="0" r="1.8" fill="none" stroke="#3f3f46" strokeWidth="0.25" opacity="0.6" />
                   <circle cx="0" cy="0" r="1.3" fill="#000000" stroke="#18181b" strokeWidth="0.3" />
@@ -712,23 +823,45 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             if (!p || p.isSpectator || p.status === 'left') return null;
 
             const coords = getTileCoordinates(pos || 1);
+            const override = tokenOverrides[pId];
+
+            const leftPos = override?.x !== undefined ? `${override.x}%` : `${coords.x}%`;
+            const topPos = override?.y !== undefined ? `${override.y}%` : `${coords.y}%`;
+            const scale = override?.scale !== undefined ? override.scale : 1;
+            const rotate = override?.rotate !== undefined ? override.rotate : 0;
+            const opacity = override?.opacity !== undefined ? override.opacity : 1;
+
             return (
               <motion.div
                 key={pId}
                 className="absolute flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2 pointer-events-none"
-                animate={{ left: `${coords.x}%`, top: `${coords.y}%` }}
-                transition={{ type: 'spring', stiffness: 280, damping: 22 }}
+                animate={{
+                  left: leftPos,
+                  top: topPos,
+                  scale: scale,
+                  rotate: rotate,
+                  opacity: opacity,
+                }}
+                transition={{
+                  type: override ? 'tween' : 'spring',
+                  ease: 'easeOut',
+                  duration: override ? 0.04 : 0.35,
+                  stiffness: 280,
+                  damping: 22,
+                }}
               >
-                <div className="mb-0.5 px-1.5 py-0.2 text-[9px] font-bold bg-background/95 text-foreground border border-border rounded-md shadow-xs whitespace-nowrap">
-                  {p.username || 'Player'}
-                </div>
+                {opacity > 0.4 && (
+                  <div className="mb-0.5 px-1.5 py-0.2 text-[9px] font-bold bg-background/95 text-foreground border border-border rounded-md shadow-xs whitespace-nowrap">
+                    {p.username || 'Player'}
+                  </div>
+                )}
 
                 <motion.div
                   key={`hop-${pos}`}
                   animate={{
-                    y: [0, -16, -3, 0],
-                    scaleX: [1, 0.88, 1.12, 1],
-                    scaleY: [1, 1.2, 0.9, 1],
+                    y: override ? 0 : [0, -16, -3, 0],
+                    scaleX: override ? 1 : [1, 0.88, 1.12, 1],
+                    scaleY: override ? 1 : [1, 1.2, 0.9, 1],
                   }}
                   transition={{
                     duration: 0.35,
