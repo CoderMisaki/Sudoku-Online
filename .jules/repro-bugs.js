@@ -1,6 +1,7 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { chromium } = require('playwright');
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require('fs');
 const SHOT_DIR = '.jules/screenshots';
 if (!fs.existsSync(SHOT_DIR)) fs.mkdirSync(SHOT_DIR, { recursive: true });

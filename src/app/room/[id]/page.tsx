@@ -199,7 +199,7 @@ export default function RoomPage() {
             id,
             {
               ...p,
-              score: 0,
+              score: p.score ?? 0, // Skor kemenangan tetap dipertahankan
               hints: 3,
               progress: 0,
               rank: undefined,
