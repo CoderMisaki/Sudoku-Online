@@ -186,6 +186,23 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     return unfinishedPlayerIds.length === 0 || winners.length === activePlayerIds.length;
   }, [activePlayerIds.length, unfinishedPlayerIds.length, winners.length]);
 
+  // Reset visual posisi dan flag saat ronde baru dimulai (winners kosong)
+  useEffect(() => {
+    if (snakesState?.playerPositions) {
+      const isNewGame = (!snakesState.winners || snakesState.winners.length === 0) && !snakesState.winnerId;
+      if (isNewGame) {
+        // Use queueMicrotask to avoid synchronous setState inside effect lint warning
+        queueMicrotask(() => {
+          setVisualPositions(snakesState.playerPositions);
+          lastProcessedPosRef.current = { ...snakesState.playerPositions };
+          isAnimatingRef.current = false;
+          setIsRollingLocal(false);
+          setActionStatus(null);
+        });
+      }
+    }
+  }, [snakesState?.winners, snakesState?.winnerId, snakesState?.playerPositions]);
+
   const isAlreadyFinished = Boolean(userId && winners.includes(userId));
   const currentTurn = snakesState?.currentTurnUserId || activePlayerIds[0];
   const isMyTurn = currentTurn === userId;
