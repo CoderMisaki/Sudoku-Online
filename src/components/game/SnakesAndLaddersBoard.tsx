@@ -184,6 +184,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
   const [localDiceRoll, setLocalDiceRoll] = useState<number | null>(null);
   const [isRollingLocal, setIsRollingLocal] = useState(false);
+  const [isGlobalMoving, setIsGlobalMoving] = useState(false);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
 
   const [visualPositions, setVisualPositions] = useState<Record<string, number>>({});
@@ -250,26 +251,18 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   ) => {
     isAnimatingRef.current = true;
     let curr = startPos;
-    const stepIntervalMs = 280;
+    const stepIntervalMs = 180;
 
     // 1. Bergerak lurus kotak demi kotak sampai kotak pendaratan dadu
-    if (steppedPos > curr) {
-      while (curr < steppedPos) {
-        curr++;
-        setVisualPositions((prev) => ({ ...prev, [targetUserId]: curr }));
-        await new Promise((r) => setTimeout(r, stepIntervalMs));
-      }
-    } else if (steppedPos < curr) {
-      while (curr > steppedPos) {
-        curr--;
-        setVisualPositions((prev) => ({ ...prev, [targetUserId]: curr }));
-        await new Promise((r) => setTimeout(r, stepIntervalMs));
-      }
+    while (curr !== steppedPos) {
+      curr += steppedPos > curr ? 1 : -1;
+      setVisualPositions((prev) => ({ ...prev, [targetUserId]: curr }));
+      await new Promise((r) => setTimeout(r, stepIntervalMs));
     }
 
     if (eventLabel) {
       setActionStatus(eventLabel);
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 250));
     }
 
     // 2. DIMAKAN ULAR (Meliuk-liuk menuruni badan ular)
@@ -293,7 +286,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             opacity: 1,
           },
         }));
-        await new Promise((r) => setTimeout(r, 35));
+        await new Promise((r) => setTimeout(r, 20));
       }
 
       setTokenOverrides((prev) => {
@@ -422,9 +415,10 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   }, [snakesState, winners, unfinishedPlayerIds, isGameFullyFinished, updateSnakesState, broadcastSnakesState, room?.hostId, userId]);
 
   const handleRollDice = () => {
-    if (!isMyTurn || isRollingLocal || isGameFullyFinished || !userId || isAnimatingRef.current || !snakesState || isAlreadyFinished) return;
+    if (!isMyTurn || isRollingLocal || isGlobalMoving || isGameFullyFinished || !userId || isAnimatingRef.current || !snakesState || isAlreadyFinished) return;
 
     setIsRollingLocal(true);
+    setIsGlobalMoving(true);
     let counter = 0;
     const interval = setInterval(() => {
       setLocalDiceRoll(Math.floor(Math.random() * 6) + 1);
@@ -434,11 +428,10 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         clearInterval(interval);
         const finalDice = Math.floor(Math.random() * 6) + 1;
         setLocalDiceRoll(finalDice);
+        setIsRollingLocal(false);
 
-        setTimeout(() => {
-          setIsRollingLocal(false);
-          const currentPos = visualPositions[userId] || serverPositions[userId] || 1;
-          let steppedPos = currentPos + finalDice;
+        const currentPos = visualPositions[userId] || serverPositions[userId] || 1;
+        let steppedPos = currentPos + finalDice;
 
           if (steppedPos > 100) {
             steppedPos = 100 - (steppedPos - 100);
@@ -525,30 +518,30 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
           lastProcessedActionTimeRef.current = actionPayload.timestamp;
 
-          const nextState: ExtendedSnakesState = {
-            ...snakesState,
-            ...updatedObstacles,
-            diceValue: finalDice,
-            playerPositions: {
-              ...serverPositions,
-              [userId]: finalPos,
-            },
-            currentTurnUserId: nextTurnId,
-            winnerId: newWinners[0] || snakesState.winnerId,
-            winners: newWinners,
-            frozenTurns: newFrozen,
-            lastAction: actionPayload,
-          };
+          animatePath(userId, currentPos, steppedPos, finalPos, specialHit, eventMessage, () => {
+            const nextState: ExtendedSnakesState = {
+              ...snakesState,
+              ...updatedObstacles,
+              diceValue: finalDice,
+              playerPositions: {
+                ...serverPositions,
+                [userId]: finalPos,
+              },
+              currentTurnUserId: nextTurnId,
+              winnerId: newWinners[0] || snakesState.winnerId,
+              winners: newWinners,
+              frozenTurns: newFrozen,
+              lastAction: actionPayload,
+            };
 
-          updateSnakesState(nextState);
-          if (broadcastSnakesState) {
-            broadcastSnakesState(nextState);
-          }
-
-          animatePath(userId, currentPos, steppedPos, finalPos, specialHit, eventMessage);
-        }, 200);
+            updateSnakesState(nextState);
+            if (broadcastSnakesState) {
+              broadcastSnakesState(nextState);
+            }
+            setIsGlobalMoving(false);
+          });
       }
-    }, 50);
+    }, 40);
   };
 
   const handleSkipTurn = () => {
@@ -942,11 +935,11 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           <Button
             size="lg"
             onClick={handleRollDice}
-            disabled={!isMyTurn || isRollingLocal || isGameFullyFinished}
+            disabled={!isMyTurn || isRollingLocal || isGlobalMoving || isGameFullyFinished}
             className="gap-2 w-full sm:w-auto"
           >
             <Dices className={`w-5 h-5 ${isRollingLocal ? 'animate-spin' : ''}`} />
-            {isRollingLocal ? 'Mengocok...' : 'Lempar Dadu'}
+            {isRollingLocal ? 'Mengocok...' : isGlobalMoving ? 'Menunggu langkah...' : 'Lempar Dadu'}
           </Button>
         )}
       </div>
