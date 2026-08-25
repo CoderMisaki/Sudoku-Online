@@ -4,6 +4,7 @@ import { useGameStore } from '../store/gameStore';
 import { ChatMessage, Grid, RoomState, SnakesState, Player } from '../types/game';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getOrCreateUserId } from '../utils/uuid';
+import { getStoredAvatar, isSafeDataUrl } from '../utils/avatar';
 import toast from 'react-hot-toast';
 
 const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
@@ -171,6 +172,7 @@ export function useRealtime(roomId: string) {
   const connectChannel = useCallback(() => {
     const currentUserId = userIdRef.current || (typeof window !== 'undefined' ? getOrCreateUserId() : '');
     const currentUsername = usernameRef.current || (typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') || 'Player' : 'Player');
+    const currentAvatar = typeof window !== 'undefined' ? getStoredAvatar() : null;
 
     if (!roomId || !currentUserId || !isMountedRef.current) return;
 
@@ -210,27 +212,43 @@ export function useRealtime(roomId: string) {
       let changed = false;
 
       Object.keys(players).forEach((id) => {
-        const presences = presenceState[id] as Array<{ username?: string }> | undefined;
+        const presences = presenceState[id] as Array<{ username?: string; avatar?: string | null }> | undefined;
         const isTracked = Boolean(presences?.length);
         const current = players[id];
 
         if (current.status === 'left' && !isTracked) return;
 
         const latestUsername = presences?.[0]?.username;
+        const rawAvatar = (presences?.[0] as Record<string, unknown> | undefined)?.avatar as unknown;
+        const hasAvatarField = presences?.[0] && 'avatar' in (presences[0] as Record<string, unknown>);
+        // Security: validate avatar DataURL from presence (untrusted)
+        let latestAvatar: string | null | undefined = undefined;
+        if (hasAvatarField) {
+          if (rawAvatar === null) latestAvatar = null;
+          else if (typeof rawAvatar === 'string' && isSafeDataUrl(rawAvatar)) latestAvatar = rawAvatar;
+          else if (typeof rawAvatar === 'string' && rawAvatar.length === 0) latestAvatar = null;
+          else {
+            // Reject poisoned avatar, keep current
+            latestAvatar = current.avatar;
+          }
+        }
         const targetStatus: Player['status'] = isTracked ? 'online' : 'disconnected';
 
-        if (current.status !== targetStatus || (latestUsername && current.username !== latestUsername)) {
+        const shouldUpdateUsername = Boolean(latestUsername && current.username !== latestUsername);
+        const shouldUpdateAvatar = hasAvatarField && latestAvatar !== current.avatar;
+        if (current.status !== targetStatus || shouldUpdateUsername || shouldUpdateAvatar) {
           players[id] = {
             ...current,
             status: targetStatus,
             username: latestUsername || current.username,
+            ...(hasAvatarField ? { avatar: latestAvatar ?? null } : {}),
           };
           changed = true;
         }
       });
 
       Object.entries(presenceState).forEach(([id, presences]) => {
-        const latestPresence = (presences as Array<{ username?: string }>)?.[0];
+        const latestPresence = (presences as Array<{ username?: string; avatar?: string | null }>)?.[0];
         if (!latestPresence || players[id]) return;
 
         players[id] = {
@@ -241,6 +259,7 @@ export function useRealtime(roomId: string) {
           score: 0,
           hints: 3,
           status: 'online',
+          avatar: (latestPresence as { avatar?: string | null }).avatar ?? null,
         };
         changed = true;
       });
@@ -259,13 +278,22 @@ export function useRealtime(roomId: string) {
         }
       })
       .on('presence', { event: 'join' }, ({ key, newPresences }) => {
-        const user = newPresences?.[0] as { username?: string } | undefined;
+        const raw = newPresences?.[0] as Record<string, unknown> | undefined;
+        const user = raw as { username?: string; avatar?: unknown } | undefined;
         const store = useGameStore.getState();
 
         if (store.room) {
+          let safeAvatar: string | null | undefined = undefined;
+          if (user && 'avatar' in (user as Record<string, unknown>)) {
+            const av = (user as Record<string, unknown>).avatar;
+            if (av === null) safeAvatar = null;
+            else if (typeof av === 'string' && isSafeDataUrl(av)) safeAvatar = av;
+            else safeAvatar = store.room.players[key]?.avatar ?? null; // reject poison
+          }
           store.updatePlayer(key, {
             status: 'online',
             username: user?.username || store.room.players[key]?.username || 'Player',
+            ...(safeAvatar !== undefined ? { avatar: safeAvatar } : {}),
           });
         }
       })
@@ -301,6 +329,14 @@ export function useRealtime(roomId: string) {
 
         const store = useGameStore.getState();
         if (payload.room) {
+          // Security: sanitize avatars in room payload (untrusted host)
+          try {
+            Object.values(payload.room.players as Record<string, Player> || {}).forEach((pl: Player) => {
+              if (pl.avatar !== undefined && pl.avatar !== null && !isSafeDataUrl(pl.avatar as string)) {
+                (pl as Player).avatar = null;
+              }
+            });
+          } catch {}
           // Room dari host bisa saja diambil sebelum presence kita diproses host,
           // jadi rekonsiliasi presence agar player tidak hilang / stuck disconnected.
           store.setRoom(applyPresenceToRoom(payload.room));
@@ -363,7 +399,16 @@ export function useRealtime(roomId: string) {
       .on('broadcast', { event: 'next_game' }, ({ payload }) => {
         addLog(`[Next Game] Game baru dimulai oleh host.`);
         const store = useGameStore.getState();
-        if (payload.room) store.setRoom(payload.room);
+        if (payload.room) {
+          try {
+            Object.values(payload.room.players as Record<string, Player> || {}).forEach((pl: Player) => {
+              if (pl.avatar !== undefined && pl.avatar !== null && !isSafeDataUrl(pl.avatar as string)) {
+                (pl as Player).avatar = null;
+              }
+            });
+          } catch {}
+          store.setRoom(payload.room);
+        }
 
         if (payload.room?.mode === 'snakes_and_ladders' && payload.snakesState) {
           store.updateSnakesState(payload.snakesState);
@@ -391,6 +436,21 @@ export function useRealtime(roomId: string) {
           useGameStore.getState().updateSnakesState(payload.snakesState);
         }
       })
+      .on('broadcast', { event: 'player_avatar_update' }, ({ payload }) => {
+        const { playerId, avatar } = payload as { playerId: string; avatar: unknown };
+        if (!playerId) return;
+        // Security: validate broadcast avatar (untrusted)
+        let safe: string | null | undefined = undefined;
+        if (avatar === null) safe = null;
+        else if (typeof avatar === 'string' && isSafeDataUrl(avatar)) safe = avatar;
+        else {
+          addLog(`[Avatar] Rejected poisoned avatar from ${playerId}`);
+          return;
+        }
+        // Prevent loop: only update remote, local already has it
+        useGameStore.getState().updatePlayer(playerId, { avatar: safe });
+        addLog(`[Avatar] Update avatar dari ${playerId}`);
+      })
       .subscribe(async (status) => {
         if (!isMountedRef.current) return;
 
@@ -407,6 +467,7 @@ export function useRealtime(roomId: string) {
             await channel.track({
               user_id: currentUserId,
               username: currentUsername,
+              avatar: currentAvatar,
               status: 'online',
               online_at: new Date().toISOString(),
             });
@@ -657,6 +718,40 @@ export function useRealtime(roomId: string) {
     });
   }, []);
 
+  const broadcastAvatarUpdate = useCallback((avatar: string | null) => {
+    // Security: validate before sending
+    if (avatar !== null && !isSafeDataUrl(avatar)) {
+      addLog('[Avatar] Blocked unsafe avatar upload');
+      toast.error('Avatar tidak valid/aman');
+      return;
+    }
+    const currentUid = userIdRef.current || getOrCreateUserId();
+    // Update local store immediately (optimistic)
+    useGameStore.getState().updatePlayer(currentUid, { avatar: avatar ?? null });
+    // Keep localStorage in sync (source of truth)
+    try {
+      if (avatar) localStorage.setItem('sudoku_avatar', avatar);
+      else localStorage.removeItem('sudoku_avatar');
+    } catch {}
+    // Update presence current (so rejoin uses new avatar)
+    if (channelRef.current && statusRef.current === 'SUBSCRIBED') {
+      const currentUsername = usernameRef.current || localStorage.getItem('sudoku_username') || 'Player';
+      channelRef.current.track({
+        user_id: currentUid,
+        username: currentUsername,
+        avatar: avatar ?? null,
+        status: 'online',
+        online_at: new Date().toISOString(),
+      }).catch(() => {});
+    }
+    // Broadcast to all peers (realtime without refresh) - loop-safe: receivers only update store
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'player_avatar_update',
+      payload: { playerId: currentUid, avatar: avatar ?? null },
+    });
+  }, [addLog]);
+
   return {
     broadcastMove,
     broadcastNote,
@@ -668,6 +763,7 @@ export function useRealtime(roomId: string) {
     broadcastLeaveRoom,
     broadcastSnakesDiceRoll,
     broadcastSnakesState,
+    broadcastAvatarUpdate,
     requestState,
     realtimeStatus,
     isTrulyOffline,

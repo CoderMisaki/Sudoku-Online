@@ -16,6 +16,7 @@ export interface Player {
   status: 'online' | 'offline' | 'disconnected' | 'left';
   cursor?: { row: number; col: number } | null;
   isSpectator?: boolean;
+  avatar?: string | null; // Data URL compressed avatar (64-128px), null = fallback
 }
 
 export interface CellData {

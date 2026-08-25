@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 import { Modal } from '@/components/ui/Modal';
+import { ProfileWidget } from '@/components/profile/ProfileWidget';
 import { Difficulty, GameMode } from '@/types/game';
 import { Play, Users, ClipboardPaste } from 'lucide-react';
 
@@ -35,17 +36,31 @@ export default function Home() {
   useEffect(() => {
     const storedName = localStorage.getItem('sudoku_username') || '';
     if (storedName) {
+      const upper = storedName.toUpperCase();
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setUsername(storedName);
+      setUsername(upper);
+      // Sinkronkan ke store juga supaya tidak stale TES1 setelah refresh
+      try {
+        const uid = getOrCreateUserId();
+        setUserInfo(uid, upper);
+        // Perbaiki jika localStorage masih ada huruf kecil
+        if (storedName !== upper) localStorage.setItem('sudoku_username', upper);
+        // Perbaiki persisted room yang masih menyimpan TES1 lama
+        const st = useGameStore.getState();
+        if (st.room?.players[uid] && st.room.players[uid].username !== upper) {
+          st.updatePlayer(uid, { username: upper });
+        }
+      } catch {}
     }
     getOrCreateUserId();
-  }, []);
+  }, [setUserInfo]);
 
   const handleSaveUsername = (name: string) => {
-    setUsername(name);
-    localStorage.setItem('sudoku_username', name);
+    const upper = name.toUpperCase();
+    setUsername(upper);
+    localStorage.setItem('sudoku_username', upper);
     const userId = getOrCreateUserId();
-    setUserInfo(userId, name);
+    setUserInfo(userId, upper);
   };
 
   const handleOpenCreateModal = () => {
@@ -127,7 +142,11 @@ export default function Home() {
   };
 
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-background text-foreground p-6">
+    <div className="flex flex-col flex-1 items-center justify-center bg-background text-foreground p-6 relative">
+      {/* Profile avatar - pojok kanan atas, tetap terlihat sebelum & sesudah masuk game */}
+      <div className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20">
+        <ProfileWidget />
+      </div>
       <main className="flex flex-col items-center max-w-md w-full gap-8 text-center">
         <div className="space-y-3">
           <h1 className="text-4xl font-bold tracking-tight">Sudoku Together</h1>
@@ -139,10 +158,22 @@ export default function Home() {
         <Card className="w-full p-6 space-y-6 text-left">
           <Input
             label="Nama Kamu"
-            placeholder="Contoh: Alex"
+            placeholder="Contoh: ALEX"
             value={username}
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+            className="uppercase"
+            style={{ textTransform: 'uppercase' } as React.CSSProperties}
             onChange={(e) => {
-              setUsername(e.target.value);
+              const upper = e.target.value.toUpperCase();
+              setUsername(upper);
+              // Simpan langsung supaya refresh tidak balik ke nama lama (bug TES1)
+              try {
+                localStorage.setItem('sudoku_username', upper);
+                const uid = getOrCreateUserId();
+                setUserInfo(uid, upper);
+              } catch {}
               setError('');
             }}
             error={error && !username.trim() ? error : undefined}
@@ -238,9 +269,14 @@ export default function Home() {
           <div className="relative">
             <Input
               label="Kode Room"
-              placeholder="Masukan code room..."
+              placeholder="MASUKAN CODE ROOM..."
               value={joinCode}
               maxLength={5}
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
+              className="uppercase"
+              style={{ textTransform: 'uppercase' } as React.CSSProperties}
               onChange={(e) => {
                 const clean = e.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 5).toUpperCase();
                 setJoinCode(clean);

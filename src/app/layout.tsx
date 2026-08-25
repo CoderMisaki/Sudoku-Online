@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import { Toaster } from "react-hot-toast";
 
@@ -41,21 +42,33 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
-        <script
+        <Script
           id="theme-initializer"
+          strategy="beforeInteractive"
           dangerouslySetInnerHTML={{
             __html: `
               try {
-                if (localStorage.getItem('sudoku_theme') === 'dark' || (!('sudoku_theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-                  document.documentElement.classList.add('dark');
-                } else if (localStorage.getItem('sudoku_theme') === 'light') {
-                  document.documentElement.classList.add('light');
-                }
+                (function() {
+                  var t = null;
+                  try { t = localStorage.getItem('sudoku_theme'); } catch(e) {}
+                  var m = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                  var root = document.documentElement;
+                  root.classList.remove('dark','light');
+                  if (t === 'dark' || (!t && m)) root.classList.add('dark');
+                  else if (t === 'light') root.classList.add('light');
+                })();
               } catch (_) {}
-
+            `,
+          }}
+        />
+        <Script
+          id="sw-register"
+          strategy="lazyOnload"
+          dangerouslySetInnerHTML={{
+            __html: `
               if ('serviceWorker' in navigator) {
-                window.addEventListener('load', () => {
-                  navigator.serviceWorker.register('/sw.js').catch(() => {});
+                window.addEventListener('load', function() {
+                  navigator.serviceWorker.register('/sw.js').catch(function(){});
                 });
               }
             `,

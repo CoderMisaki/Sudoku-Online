@@ -10,6 +10,7 @@ import { getOrCreateUserId } from '../../../utils/uuid';
 import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
+import { ProfileWidget } from '../../../components/profile/ProfileWidget';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
 import { SudokuBoard3D } from '../../../components/game/SudokuBoard3D';
 import { SnakesAndLaddersBoard } from '../../../components/game/SnakesAndLaddersBoard';
@@ -34,6 +35,7 @@ import {
   Grid as GridIcon
 } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
+import { getStoredAvatar } from '../../../utils/avatar';
 import { Difficulty, GameMode, RoomState, Player } from '../../../types/game';
 import toast from 'react-hot-toast';
 
@@ -43,6 +45,7 @@ export default function RoomPage() {
   const router = useRouter();
 
   const userId = useGameStore(state => state.userId);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const username = useGameStore(state => state.username);
   const room = useGameStore(state => state.room);
   const grid = useGameStore(state => state.grid);
@@ -109,6 +112,7 @@ export default function RoomPage() {
     broadcastLeaveRoom,
     broadcastSnakesDiceRoll,
     broadcastSnakesState,
+    broadcastAvatarUpdate,
     isTrulyOffline,
     connectionError,
     reconnect
@@ -340,7 +344,15 @@ export default function RoomPage() {
     isInitializedRef.current = true;
 
     const storedUserId = getOrCreateUserId();
-    const storedUsername = typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') : null;
+    let storedUsername = typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') : null;
+    // Pastikan selalu kapital (fix bug TES1 / huruf kecil)
+    if (storedUsername) {
+      const upper = storedUsername.toUpperCase();
+      if (upper !== storedUsername) {
+        try { localStorage.setItem('sudoku_username', upper); } catch {}
+        storedUsername = upper;
+      }
+    }
 
     if (!storedUserId || !storedUsername) {
       router.push('/');
@@ -371,9 +383,10 @@ export default function RoomPage() {
     }
 
     if (isHost) {
+      const hostAvatar = getStoredAvatar();
       useGameStore.getState().setRoom({
         id: roomId,
- code: roomId,
+  code: roomId,
         hostId: storedUserId,
         difficulty,
         mode,
@@ -388,6 +401,7 @@ export default function RoomPage() {
             score: 0,
             hints: 3,
             status: 'online',
+            avatar: hostAvatar,
           },
         },
         createdAt: Date.now(),
@@ -632,13 +646,9 @@ export default function RoomPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-2">
-            <span className="text-xs sm:text-sm font-medium">{username}</span>
-            <div className="w-7 h-7 rounded-full bg-secondary/20 flex items-center justify-center text-xs font-bold">
-              {username?.charAt(0).toUpperCase()}
-            </div>
-          </div>
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Profile avatar tetap terlihat selama game, bisa diubah kapan saja tanpa reset */}
+          <ProfileWidget onAvatarUpdate={broadcastAvatarUpdate} compact />
           <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(true)} className="p-1.5 h-8 w-8">
             <Settings className="w-4 h-4" />
           </Button>
