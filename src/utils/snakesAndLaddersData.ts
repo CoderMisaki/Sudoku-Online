@@ -242,3 +242,43 @@ export function relocateTriggeredItem(
 
   return {};
 }
+
+export function areSnakesLayoutsEqual(a?: SnakesState | null, b?: SnakesState | null): boolean {
+  if (!a || !b) return a === b;
+  if (a.boardId && b.boardId && a.boardId !== b.boardId) return false;
+
+  // Compare Ladders
+  const aLadders = a.ladders || [];
+  const bLadders = b.ladders || [];
+  if (aLadders.length !== bLadders.length) return false;
+  for (let i = 0; i < aLadders.length; i++) {
+    if (aLadders[i].start !== bLadders[i].start || aLadders[i].end !== bLadders[i].end) return false;
+  }
+
+  // Compare Snakes
+  const aSnakes = a.snakes || [];
+  const bSnakes = b.snakes || [];
+  if (aSnakes.length !== bSnakes.length) return false;
+  for (let i = 0; i < aSnakes.length; i++) {
+    if (aSnakes[i].head !== bSnakes[i].head || aSnakes[i].tail !== bSnakes[i].tail) return false;
+  }
+
+  // Compare Mines
+  const aMines = a.mines || [];
+  const bMines = b.mines || [];
+  if (aMines.length !== bMines.length) return false;
+  for (let i = 0; i < aMines.length; i++) {
+    if (aMines[i] !== bMines[i]) return false;
+  }
+
+  // Compare Wormholes
+  const aWormholes = a.wormholes || [];
+  const bWormholes = b.wormholes || [];
+  if (aWormholes.length !== bWormholes.length) return false;
+  for (let i = 0; i < aWormholes.length; i++) {
+    if (aWormholes[i].blackHole !== bWormholes[i].blackHole || aWormholes[i].whiteHole !== bWormholes[i].whiteHole) return false;
+  }
+
+  return true;
+}
+

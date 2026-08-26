@@ -5,6 +5,7 @@ import { ChatMessage, Grid, RoomState, SnakesState, Player } from '../types/game
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getOrCreateUserId } from '../utils/uuid';
 import { getStoredAvatar, isSafeDataUrl } from '../utils/avatar';
+import { areSnakesLayoutsEqual } from '../utils/snakesAndLaddersData';
 import toast from 'react-hot-toast';
 
 const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
@@ -486,7 +487,8 @@ export function useRealtime(roomId: string) {
         if (payload.snakesState) {
           const incoming = payload.snakesState as SnakesState;
           const current = useGameStore.getState().snakesState;
-          if (incoming.boardId && current?.boardId && incoming.boardId !== current.boardId) {
+          const layoutDiffers = !areSnakesLayoutsEqual(current, incoming);
+          if (layoutDiffers || (incoming.boardId && current?.boardId && incoming.boardId !== current.boardId)) {
             useGameStore.getState().replaceAllSnakesState(incoming);
           } else {
             useGameStore.getState().updateSnakesState(incoming);
@@ -619,9 +621,7 @@ export function useRealtime(roomId: string) {
     window.addEventListener('focus', handleSmartReconnect);
     document.addEventListener('visibilitychange', handleSmartReconnect);
 
-    // Polling sync jika board masih kosong, plus rekonsiliasi periodik guest
-    // di mode ular tangga: bila >15s tidak menerima state apa pun dari host,
-    // minta sync_state agar papan/posisi/turn tidak mungkin beda diam-diam.
+    // Polling sync & rekonsiliasi periodik: menjamin 100% board identik antar player
     syncPollIntervalRef.current = setInterval(() => {
       const store = useGameStore.getState();
 
@@ -638,20 +638,21 @@ export function useRealtime(roomId: string) {
       if (
         store.room?.mode === 'snakes_and_ladders' &&
         hasBoard &&
-        statusRef.current === 'SUBSCRIBED' &&
-        store.room.hostId !== (store.userId || '')
+        statusRef.current === 'SUBSCRIBED'
       ) {
-        const lastAt = lastSnakesStateAtRef.current;
-        if (lastAt === 0) {
-          // Belum pernah menerima state sejak connect — minta sekarang
-          lastSnakesStateAtRef.current = Date.now(); // cegah spam, tunggu siklus berikutnya bila tak ada balasan
-          requestState();
-        } else if (Date.now() - lastAt > 15000) {
-          lastSnakesStateAtRef.current = Date.now();
-          requestState();
+        const isHost = store.room.hostId === (store.userId || '');
+        if (!isHost) {
+          const lastAt = lastSnakesStateAtRef.current;
+          if (lastAt === 0) {
+            lastSnakesStateAtRef.current = Date.now();
+            requestState();
+          } else if (Date.now() - lastAt > 5000) {
+            lastSnakesStateAtRef.current = Date.now();
+            requestState();
+          }
         }
       }
-    }, 2500);
+    }, 2000);
 
     return () => {
       isMountedRef.current = false;
@@ -833,7 +834,12 @@ export function useRealtime(roomId: string) {
   }, []);
 
   const broadcastSnakesState = useCallback((newState: SnakesState) => {
-    useGameStore.getState().updateSnakesState(newState);
+    const current = useGameStore.getState().snakesState;
+    if (newState.boardId && current?.boardId && newState.boardId !== current.boardId) {
+      useGameStore.getState().replaceAllSnakesState(newState);
+    } else {
+      useGameStore.getState().updateSnakesState(newState);
+    }
     channelRef.current?.send({
       type: 'broadcast',
       event: 'snakes_state_update',

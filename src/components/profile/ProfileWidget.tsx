@@ -147,17 +147,19 @@ export const ProfileWidget: React.FC<ProfileWidgetProps> = ({ onAvatarUpdate, on
         title="Profil"
       >
         <div className={`relative shrink-0 ${compact ? 'w-7 h-7 sm:w-8 sm:h-8' : 'w-8 h-8 sm:w-9 sm:h-9'}`}>
-          <div className="w-full h-full rounded-full overflow-hidden border border-border bg-secondary/20 flex items-center justify-center font-bold text-foreground text-[11px] sm:text-xs">
+          <div className="relative w-full h-full rounded-full overflow-hidden border border-border bg-secondary/20 flex items-center justify-center font-bold text-foreground text-[11px] sm:text-xs">
             {displayAvatar ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={displayAvatar} alt="avatar" className="w-full h-full object-cover" />
             ) : (
               <span className="select-none">{fallbackLabel}</span>
             )}
+
+            {/* Camera icon centered perfectly inside the circular avatar on hover */}
+            <div className="absolute inset-0 bg-black/45 text-white flex items-center justify-center rounded-full opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity duration-150 pointer-events-none">
+              <Camera className={`${compact ? 'w-3 h-3 sm:w-3.5 sm:h-3.5' : 'w-3.5 h-3.5 sm:w-4 sm:h-4'}`} />
+            </div>
           </div>
-          <span className="absolute -bottom-1 -right-1 bg-foreground text-background rounded-full p-1 border-2 border-card shadow-sm opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity pointer-events-none">
-            <Camera className="w-3 h-3" />
-          </span>
         </div>
         <div className={`flex flex-col items-start leading-none ${compact ? 'hidden sm:flex' : 'hidden sm:flex'}`}>
           <span className="text-xs sm:text-sm font-semibold tracking-wide max-w-[90px] truncate">{displayName}</span>
@@ -171,7 +173,12 @@ export const ProfileWidget: React.FC<ProfileWidgetProps> = ({ onAvatarUpdate, on
         <div className="flex flex-col gap-5">
           {/* Preview */}
           <div className="flex flex-col items-center gap-3">
-            <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden border-2 border-border bg-secondary/10 flex items-center justify-center shadow-inner">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="group/preview relative w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden border-2 border-border bg-secondary/10 flex items-center justify-center shadow-inner cursor-pointer hover:border-foreground transition-all focus:outline-none focus:ring-2 focus:ring-foreground"
+              title="Klik untuk ganti avatar"
+            >
               {preview ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={preview} alt="preview avatar" className="w-full h-full object-cover" />
@@ -181,15 +188,20 @@ export const ProfileWidget: React.FC<ProfileWidgetProps> = ({ onAvatarUpdate, on
                   <span className="text-[11px]">No avatar</span>
                 </div>
               )}
-              {isProcessing && (
+              {isProcessing ? (
                 <div className="absolute inset-0 bg-background/60 backdrop-blur-[1px] flex items-center justify-center">
                   <Loader2 className="w-6 h-6 animate-spin text-foreground" />
                 </div>
+              ) : (
+                <div className="absolute inset-0 bg-black/40 text-white flex flex-col items-center justify-center rounded-full opacity-0 group-hover/preview:opacity-100 transition-opacity duration-150">
+                  <Camera className="w-6 h-6 mb-1" />
+                  <span className="text-[10px] font-semibold">Ubah</span>
+                </div>
               )}
-            </div>
+            </button>
             <div className="text-center">
               <p className="text-sm font-semibold">{displayName}</p>
-              <p className="text-xs text-secondary">Preview avatar kamu</p>
+              <p className="text-xs text-secondary">Preview avatar kamu (klik untuk ubah)</p>
             </div>
           </div>
 

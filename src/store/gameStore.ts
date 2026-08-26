@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Grid, RoomState, Player, ChatMessage, SnakesState } from '../types/game';
 import { checkConflicts } from '../utils/sudoku';
-import { generateInitialSnakesState } from '../utils/snakesAndLaddersData';
+import { generateInitialSnakesState, areSnakesLayoutsEqual } from '../utils/snakesAndLaddersData';
 
 // Debug logging off by default. Enable with: localStorage.setItem('sudoku_debug_snakes', '1')
 const isSnakesDebugEnabled = (): boolean => {
@@ -399,8 +399,11 @@ export const useGameStore = create<GameStore>()(
           incomingBoardId && current?.boardId && incomingBoardId !== current.boardId
         );
 
-        // Revision ordering: ignore stale state ONLY if it's the exact same board
-        if (!isDifferentBoard && current && typeof incomingRevision === 'number' && typeof current.revision === 'number') {
+        // Check if obstacles layout changed (e.g. host moved a ladder/wormhole or incoming has different obstacle positions)
+        const isLayoutDiscrepancy = !areSnakesLayoutsEqual(current, updates as SnakesState);
+
+        // Revision ordering: ignore stale state ONLY if it's the exact same board and layout matches
+        if (!isDifferentBoard && !isLayoutDiscrepancy && current && typeof incomingRevision === 'number' && typeof current.revision === 'number') {
           if (incomingRevision <= current.revision) {
             debugSnakesState(`ignore stale revision ${incomingRevision} <= ${current.revision}`, current);
             return state;
@@ -425,13 +428,13 @@ export const useGameStore = create<GameStore>()(
       replaceAllSnakesState: (incoming) => set((state) => {
         const current = state.snakesState as SnakesState | undefined;
         // Adopt a full authority snapshot UNLESS it is a stale in-flight snapshot
-        // of the SAME board (older revision). A DIFFERENT boardId always wins:
-        // it is a genuinely new board (new game / host regen / stale local board).
+        // of the EXACT SAME board with identical layout. If obstacles differ in ANY way, adopt incoming immediately!
         if (
           current &&
           incoming.boardId &&
           current.boardId &&
           incoming.boardId === current.boardId &&
+          areSnakesLayoutsEqual(current, incoming) &&
           typeof incoming.revision === 'number' &&
           typeof current.revision === 'number' &&
           incoming.revision < current.revision

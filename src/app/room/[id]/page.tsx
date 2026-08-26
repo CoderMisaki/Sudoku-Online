@@ -408,7 +408,7 @@ export default function RoomPage() {
       const hostAvatar = getStoredAvatar();
       useGameStore.getState().setRoom({
         id: roomId,
-  code: roomId,
+        code: roomId,
         hostId: storedUserId,
         difficulty,
         mode,
@@ -430,29 +430,35 @@ export default function RoomPage() {
         startedAt: Date.now(),
       });
 
-      fetch('/api/game/create-room', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ difficulty, roomId }),
-      })
-        .then((res) => {
-          if (!res.ok) throw new Error('API Error');
-          return res.json();
+      if (mode === 'snakes_and_ladders') {
+        const initialSnakes = generateInitialSnakesState(difficulty, [storedUserId]);
+        useGameStore.getState().replaceAllSnakesState(initialSnakes);
+        setLoading(false);
+      } else {
+        fetch('/api/game/create-room', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ difficulty, roomId }),
         })
-        .then((data) => {
-          if (data.initialGrid && data.solutionToken) {
-            useGameStore.getState().setGameData(data.initialGrid, data.solutionToken);
-          } else {
-            toast.error(data.error || 'Gagal memuat puzzle');
-          }
-        })
-        .catch((err) => {
-          console.error('[Room Init] Gagal membuat game:', err);
-          toast.error('Gagal memuat puzzle. Pastikan SERVER berjalan normal.');
-        })
-        .finally(() => {
-          setLoading(false);
-        });
+          .then((res) => {
+            if (!res.ok) throw new Error('API Error');
+            return res.json();
+          })
+          .then((data) => {
+            if (data.initialGrid && data.solutionToken) {
+              useGameStore.getState().setGameData(data.initialGrid, data.solutionToken);
+            } else {
+              toast.error(data.error || 'Gagal memuat puzzle');
+            }
+          })
+          .catch((err) => {
+            console.error('[Room Init] Gagal membuat game:', err);
+            toast.error('Gagal memuat puzzle. Pastikan SERVER berjalan normal.');
+          })
+          .finally(() => {
+            setLoading(false);
+          });
+      }
     } else {
       setTimeout(() => setLoading(false), 0);
     }

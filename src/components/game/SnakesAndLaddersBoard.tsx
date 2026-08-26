@@ -228,6 +228,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
   const [localDiceRoll, setLocalDiceRoll] = useState<number | null>(null);
   const [isRollingLocal, setIsRollingLocal] = useState(false);
+  const [isDiceRolling, setIsDiceRolling] = useState(false);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
 
   const [visualPositions, setVisualPositions] = useState<Record<string, number>>({});
@@ -478,10 +479,26 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       wormholeObj: action.hitWormhole,
     };
 
-    // Start on next frame for 60fps sync, no artificial delay
-    requestAnimationFrame(() => {
-      animatePath(action.userId, startPos, action.steppedPos, action.finalPos, specialHit, action.eventMessage);
-    });
+    // Quick visual random dice shuffle for other players to see the roll
+    setIsDiceRolling(true);
+    let ticks = 0;
+    const remoteShuffle = setInterval(() => {
+      setLocalDiceRoll(Math.floor(Math.random() * 6) + 1);
+      ticks++;
+      if (ticks >= 7) {
+        clearInterval(remoteShuffle);
+        setIsDiceRolling(false);
+        setLocalDiceRoll(action.dice);
+        // Start token animation on next frame
+        requestAnimationFrame(() => {
+          animatePath(action.userId, startPos, action.steppedPos, action.finalPos, specialHit, action.eventMessage);
+        });
+      }
+    }, 45);
+
+    return () => {
+      clearInterval(remoteShuffle);
+    };
   }, [snakesState, snakesState?.lastAction, userId, animatePath, serverPositions]);
 
   // Skip giliran otomatis jika pemain yang aktif sudah finish
@@ -519,6 +536,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     if (latestState.isAnimating) return;
 
     setIsRollingLocal(true);
+    setIsDiceRolling(true);
     // ── PHASE 1: LOCK (revision N+1). This exact locked snapshot is what the
     // server validates and builds on, so revisions chain without collisions:
     // N (idle) -> N+1 (lock) -> N+2 (server result, animating) -> N+3 (settle).
@@ -528,21 +546,15 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     if (broadcastSnakesState) broadcastSnakesState(lockState);
     isAnimatingRef.current = true;
 
-    // Visual dice shuffle while awaiting server
-    let counter = 0;
+    // Visual random dice shuffle while rolling
     const shuffleInterval = setInterval(() => {
       setLocalDiceRoll(Math.floor(Math.random() * 6) + 1);
-      counter++;
-      if (counter > 12) {
-        // keep shuffling until server responds
-      }
     }, 45);
 
     const unlockAfterFailure = (errorMessage?: string) => {
       clearInterval(shuffleInterval);
+      setIsDiceRolling(false);
       if (errorMessage) toast.error(errorMessage);
-      // Compose unlock from the FRESHEST store state with a forward revision so
-      // peers accept it even if other broadcasts happened meanwhile.
       const current = (useGameStore.getState().snakesState as ExtendedSnakesState | undefined) ?? lockState;
       const unlock: ExtendedSnakesState = {
         ...current,
@@ -556,10 +568,8 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     };
 
     try {
-      // Send the LOCKED revision (N+1) but with isAnimating cleared for the
-      // server's animation-guard; every peer already accepted the lock at N+1,
-      // so the server result chains cleanly to N+2.
-      const res = await fetch('/api/game/snakes-roll', {
+      const minRollDuration = new Promise((resolve) => setTimeout(resolve, 600));
+      const fetchRoll = fetch('/api/game/snakes-roll', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -569,12 +579,16 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           activePlayerIds,
         }),
       });
+
+      const [res] = await Promise.all([fetchRoll, minRollDuration]);
       const data = await res.json();
+      clearInterval(shuffleInterval);
+      setIsDiceRolling(false);
+
       if (!res.ok || !data.success) {
         unlockAfterFailure(data.error || 'Gagal lempar dadu (server).');
         return;
       }
-      clearInterval(shuffleInterval);
 
       const finalDice: number = data.dice;
       // The full authoritative state computed by the server from our locked snapshot
@@ -745,11 +759,11 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         )}
       </AnimatePresence>
 
-      <div className="relative w-full aspect-square max-h-[min(92vw,560px)] lg:max-h-[min(460px,58vh)] xl:max-h-[min(500px,60vh)] 2xl:max-h-[min(540px,62vh)] border-2 border-border bg-card rounded-2xl shadow-xl overflow-hidden shrink-0 touch-manipulation will-change-transform [transform:translateZ(0)]">
+      <div className="relative w-full aspect-square max-w-[560px] border-2 border-border bg-card rounded-2xl shadow-xl overflow-hidden shrink-0 touch-manipulation select-none">
         {/* Board surface: ONE coordinate space shared by tiles, SVG overlay and tokens.
             Grid is a gapless 10x10 (visual gaps via inner inset) so tile centers sit
             EXACTLY at (col*10+5, 95-row*10)% — snakes, ladders and tokens align pixel-perfect. */}
-        <div className="absolute inset-1">
+        <div className="absolute inset-1 sm:inset-1.5">
         <div className="grid grid-cols-10 grid-rows-10 w-full h-full">
           {Array.from({ length: 100 }, (_, i) => {
             const rowFromTop = Math.floor(i / 10);
@@ -1016,9 +1030,9 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             if (!override) {
               const cnt = posCount[pos] || 1;
               const idx = posIndex[pId] || 0;
-              if (cnt === 2) { dx = idx === 0 ? -2.0 : 2.0; dy = idx === 0 ? -1.2 : 1.2; }
-              else if (cnt === 3) { const off = [-2.2, 2.2, 0]; dx = off[idx] ?? 0; dy = idx === 2 ? 2.0 : -1.0; }
-              else if (cnt >= 4) { const offX = [-2.4, 2.4, -2.4, 2.4]; const offY = [-1.6, -1.6, 1.6, 1.6]; dx = offX[idx % 4] ?? 0; dy = offY[idx % 4] ?? 0; }
+              if (cnt === 2) { dx = idx === 0 ? -1.8 : 1.8; dy = idx === 0 ? -1.0 : 1.0; }
+              else if (cnt === 3) { const off = [-2.0, 2.0, 0]; dx = off[idx] ?? 0; dy = idx === 2 ? 1.8 : -1.0; }
+              else if (cnt >= 4) { const offX = [-2.2, 2.2, -2.2, 2.2]; const offY = [-1.4, -1.4, 1.4, 1.4]; dx = offX[idx % 4] ?? 0; dy = offY[idx % 4] ?? 0; }
             }
             const coords = override ? baseCoords : { x: baseCoords.x + dx, y: baseCoords.y + dy };
 
@@ -1030,62 +1044,70 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             const isOverridden = Boolean(override);
 
             return (
-              <motion.div
+              <div
                 key={pId}
-                className="absolute flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2 pointer-events-none will-change-transform [transform:translateZ(0)]"
-                style={{ willChange: 'transform, opacity' }}
-                animate={{
+                className="absolute pointer-events-none"
+                style={{
                   left: leftPos,
                   top: topPos,
-                  scale: scale,
-                  rotate: rotate,
-                  opacity: opacity,
-                }}
-                transition={{
-                  type: 'tween',
-                  ease: isOverridden ? 'linear' : 'easeInOut',
-                  duration: isOverridden ? 0.02 : 0.13,
+                  transform: 'translate(-50%, -50%)',
+                  transition: isOverridden ? 'none' : 'left 0.13s ease-in-out, top 0.13s ease-in-out',
+                  zIndex: isOverridden ? 40 : 30,
                 }}
               >
-                {opacity > 0.35 && (
-                  <div className="mb-0.5 px-1.5 py-0.5 text-[9px] font-bold bg-background/95 text-foreground border border-border rounded-md shadow-xs whitespace-nowrap max-w-[80px] truncate text-center">
-                    {p.username}
-                  </div>
-                )}
-
                 <motion.div
-                  key={`hop-${hopTick[pId] || 0}`}
-                  initial={{ y: 0 }}
+                  className="relative flex flex-col items-center justify-center"
                   animate={{
-                    y: isOverridden ? 0 : [0, -6, 0],
+                    scale: scale,
+                    rotate: rotate,
+                    opacity: opacity,
                   }}
                   transition={{
-                    duration: isOverridden ? 0.03 : 0.16,
-                    ease: 'easeOut',
+                    type: 'tween',
+                    ease: isOverridden ? 'linear' : 'easeInOut',
+                    duration: isOverridden ? 0.02 : 0.13,
                   }}
-                  className="relative flex items-center justify-center"
                 >
-                  {p.avatar ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={p.avatar}
-                      alt={p.username || 'avatar'}
-                      className="w-7 h-7 rounded-full border-2 shadow-lg object-cover bg-secondary/20"
-                      style={{ borderColor: p.color || '#3b82f6', borderWidth: '2px' }}
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = 'none';
-                      }}
-                    />
-                  ) : (
-                    <div
-                      className="w-7 h-7 rounded-full border-2 border-background shadow-lg flex items-center justify-center text-[10px] font-black text-white"
-                      style={{ backgroundColor: p.color || '#3b82f6' }}
-                    >
-                      {p.username?.charAt(0).toUpperCase() || '?'}
+                  {opacity > 0.35 && (
+                    <div className="absolute bottom-full mb-1 px-1.5 py-0.5 text-[9px] font-bold bg-background/95 text-foreground border border-border rounded-md shadow-xs whitespace-nowrap max-w-[80px] truncate text-center z-10 pointer-events-none">
+                      {p.username}
                     </div>
                   )}
+
+                  <motion.div
+                    key={`hop-${hopTick[pId] || 0}`}
+                    initial={{ y: 0 }}
+                    animate={{
+                      y: isOverridden ? 0 : [0, -6, 0],
+                    }}
+                    transition={{
+                      duration: isOverridden ? 0.03 : 0.16,
+                      ease: 'easeOut',
+                    }}
+                    className="relative flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8"
+                  >
+                    {p.avatar ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={p.avatar}
+                        alt={p.username || 'avatar'}
+                        className="w-full h-full rounded-full border-2 shadow-lg object-cover bg-secondary/20"
+                        style={{ borderColor: p.color || '#3b82f6', borderWidth: '2px' }}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <div
+                        className="w-full h-full rounded-full border-2 border-background shadow-lg flex items-center justify-center text-[10px] sm:text-xs font-black text-white"
+                        style={{ backgroundColor: p.color || '#3b82f6' }}
+                      >
+                        {p.username?.charAt(0).toUpperCase() || '?'}
+                      </div>
+                    )}
+                  </motion.div>
                 </motion.div>
-              </motion.div>
+              </div>
             );
           }); })()}
         </div>
@@ -1108,12 +1130,26 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
       <div className="flex flex-col sm:flex-row items-center gap-4 bg-card p-4 rounded-2xl border border-border shadow-md w-full justify-between">
         <div className="flex items-center gap-4">
-          <div className="text-center font-mono w-16 bg-secondary/10 py-1.5 rounded-xl border border-border">
-            <div className="text-[10px] text-secondary font-semibold uppercase">Dadu</div>
-            <div className="text-3xl font-black text-foreground">
-              {isRollingLocal ? localDiceRoll : snakesState?.diceValue ?? '-'}
-            </div>
-          </div>
+          {(() => {
+            const displayedDice = (isDiceRolling || isRollingLocal)
+              ? (localDiceRoll ?? '-')
+              : (snakesState?.diceValue ?? localDiceRoll ?? '-');
+
+            return (
+              <div className="text-center font-mono w-16 h-16 bg-gradient-to-br from-secondary/15 to-secondary/5 rounded-2xl border border-border shadow-xs flex flex-col items-center justify-center overflow-hidden shrink-0">
+                <div className="text-[9px] text-secondary font-bold uppercase tracking-wider mb-0.5">Dadu</div>
+                <motion.div
+                  key={`${displayedDice}-${isDiceRolling}`}
+                  initial={isDiceRolling ? { scale: 0.85, rotate: Math.random() * 24 - 12 } : { scale: 1.35, rotate: 0 }}
+                  animate={{ scale: 1, rotate: 0 }}
+                  transition={{ duration: isDiceRolling ? 0.04 : 0.22, ease: isDiceRolling ? 'linear' : 'backOut' }}
+                  className="text-3xl font-black text-foreground leading-none"
+                >
+                  {displayedDice}
+                </motion.div>
+              </div>
+            );
+          })()}
 
           <div className="border-l border-border h-10" />
 
