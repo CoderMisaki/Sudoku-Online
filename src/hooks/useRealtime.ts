@@ -568,9 +568,12 @@ export function useRealtime(roomId: string) {
             });
           }
 
-          if (!hasBoard) {
-            requestState();
-          }
+          // ALWAYS reconcile on (re)connect — even if we already have a board.
+          // A persisted/local board can be stale (old game, higher revision) and
+          // would reject every host update forever; the host's full sync_state
+          // snapshot is adopted wholesale (replaceAll) so obstacle layout,
+          // positions and turn converge to the authoritative board.
+          requestState();
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           if (typeof navigator !== 'undefined' && !navigator.onLine) {
             setIsTrulyOffline(true);
