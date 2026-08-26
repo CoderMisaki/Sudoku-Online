@@ -22,6 +22,9 @@ export function useRealtime(roomId: string) {
   const syncPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const offlineTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
+  // Last time we received ANY authoritative snakes state (sync_state or update).
+  // Used by the reconciliation poll to detect silent divergence.
+  const lastSnakesStateAtRef = useRef<number>(0);
 
   const userId = useGameStore((state) => state.userId);
   const username = useGameStore((state) => state.username);
@@ -378,9 +381,15 @@ export function useRealtime(roomId: string) {
           // Full authority snapshot from host: adopt wholesale so a stale/high
           // local revision can never reject fresh authoritative state.
           store.replaceAllSnakesState(payload.snakesState as SnakesState);
+          lastSnakesStateAtRef.current = Date.now();
         }
         if (payload.messages && Array.isArray(payload.messages)) {
-          payload.messages.forEach((msg: ChatMessage) => store.addMessage(msg));
+          // Dedupe by id — sync_state can arrive repeatedly (reconciliation,
+          // reconnects) and must not duplicate chat history.
+          const existingIds = new Set(useGameStore.getState().messages.map((m) => m.id));
+          payload.messages.forEach((msg: ChatMessage) => {
+            if (!existingIds.has(msg.id)) store.addMessage(msg);
+          });
         }
       })
       .on('broadcast', { event: 'cell_move' }, ({ payload }) => {
@@ -476,6 +485,7 @@ export function useRealtime(roomId: string) {
       .on('broadcast', { event: 'snakes_state_update' }, ({ payload }) => {
         if (payload.snakesState) {
           useGameStore.getState().updateSnakesState(payload.snakesState as SnakesState);
+          lastSnakesStateAtRef.current = Date.now();
         }
       })
       .on('broadcast', { event: 'player_profile_update' }, ({ payload }) => {
@@ -603,7 +613,9 @@ export function useRealtime(roomId: string) {
     window.addEventListener('focus', handleSmartReconnect);
     document.addEventListener('visibilitychange', handleSmartReconnect);
 
-    // Polling sync jika board masih kosong
+    // Polling sync jika board masih kosong, plus rekonsiliasi periodik guest
+    // di mode ular tangga: bila >15s tidak menerima state apa pun dari host,
+    // minta sync_state agar papan/posisi/turn tidak mungkin beda diam-diam.
     syncPollIntervalRef.current = setInterval(() => {
       const store = useGameStore.getState();
 
@@ -614,6 +626,24 @@ export function useRealtime(roomId: string) {
 
       if (!hasBoard && statusRef.current === 'SUBSCRIBED') {
         requestState();
+        return;
+      }
+
+      if (
+        store.room?.mode === 'snakes_and_ladders' &&
+        hasBoard &&
+        statusRef.current === 'SUBSCRIBED' &&
+        store.room.hostId !== (store.userId || '')
+      ) {
+        const lastAt = lastSnakesStateAtRef.current;
+        if (lastAt === 0) {
+          // Belum pernah menerima state sejak connect — minta sekarang
+          lastSnakesStateAtRef.current = Date.now(); // cegah spam, tunggu siklus berikutnya bila tak ada balasan
+          requestState();
+        } else if (Date.now() - lastAt > 15000) {
+          lastSnakesStateAtRef.current = Date.now();
+          requestState();
+        }
       }
     }, 2500);
 

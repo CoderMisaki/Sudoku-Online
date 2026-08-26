@@ -23,6 +23,7 @@ const wormholeSchema = z.object({
 });
 
 const snakesStateSchema = z.object({
+  boardId: z.string().max(64).optional(),
   diceValue: z.number().nullable().optional(),
   playerPositions: z.record(z.string(), z.number().int().min(1).max(100)),
   currentTurnUserId: z.string().nullable().optional(),

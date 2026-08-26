@@ -411,15 +411,28 @@ export const useGameStore = create<GameStore>()(
       }),
       replaceAllSnakesState: (incoming) => set((state) => {
         const current = state.snakesState as SnakesState | undefined;
-        // Only adopt when it actually differs or moves forward; a full authority
-        // snapshot is always accepted (never regress ordering semantics here).
+        // Adopt a full authority snapshot UNLESS it is a stale in-flight snapshot
+        // of the SAME board (older revision). A DIFFERENT boardId always wins:
+        // it is a genuinely new board (new game / host regen / stale local board).
+        if (
+          current &&
+          incoming.boardId &&
+          current.boardId &&
+          incoming.boardId === current.boardId &&
+          typeof incoming.revision === 'number' &&
+          typeof current.revision === 'number' &&
+          incoming.revision < current.revision
+        ) {
+          debugSnakesState(`replaceAll ignored (stale same-board snapshot ${incoming.revision} < ${current.revision})`, current);
+          return state;
+        }
         const next: SnakesState = {
           ...incoming,
           revision: typeof incoming.revision === 'number'
             ? incoming.revision
             : Math.max(current?.revision ?? 0, 0) + 1,
         };
-        debugSnakesState(`replaceAll -> revision ${next.revision}`, next);
+        debugSnakesState(`replaceAll -> revision ${next.revision} board=${(next.boardId || '').slice(0, 8)}`, next);
         return { snakesState: next };
       }),
       resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null, snakesState: undefined }),

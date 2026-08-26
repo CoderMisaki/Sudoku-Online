@@ -1,5 +1,6 @@
 import { Difficulty } from '@/types/game';
 import { SnakeItem, LadderItem, WormholePair, SnakesState } from '@/types/game';
+import { generateUUID } from './uuid';
 
 export function getTileCoordinates(tile: number): { x: number; y: number } {
   const boundedTile = Math.max(1, Math.min(100, tile));
@@ -120,6 +121,10 @@ export function generateInitialSnakesState(
   });
 
   return {
+    // Unique per generated board: receivers can tell a NEW board apart from a
+    // stale snapshot of the board they already have (ordering within a board
+    // stays revision-based).
+    boardId: generateUUID(),
     diceValue: null,
     playerPositions: initialPositions,
     currentTurnUserId: activePlayerIds[0] || null,

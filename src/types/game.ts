@@ -79,6 +79,7 @@ export interface WormholePair {
 }
 
 export interface SnakesState {
+  boardId?: string; // Identity of THIS board (regenerated every new game) — lets clients distinguish "new board" from "stale snapshot of the same board"
   diceValue: number | null;
   playerPositions: Record<string, number>;
   currentTurnUserId: string | null;

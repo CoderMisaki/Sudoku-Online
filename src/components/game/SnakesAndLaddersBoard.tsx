@@ -745,8 +745,12 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         )}
       </AnimatePresence>
 
-      <div className="relative w-full aspect-square max-h-[min(92vw,560px)] lg:max-h-[min(460px,58vh)] xl:max-h-[min(500px,60vh)] 2xl:max-h-[min(540px,62vh)] border-2 border-border bg-card rounded-2xl shadow-xl p-1 overflow-hidden shrink-0 touch-manipulation will-change-transform [transform:translateZ(0)]">
-        <div className="grid grid-cols-10 grid-rows-10 w-full h-full gap-0.5">
+      <div className="relative w-full aspect-square max-h-[min(92vw,560px)] lg:max-h-[min(460px,58vh)] xl:max-h-[min(500px,60vh)] 2xl:max-h-[min(540px,62vh)] border-2 border-border bg-card rounded-2xl shadow-xl overflow-hidden shrink-0 touch-manipulation will-change-transform [transform:translateZ(0)]">
+        {/* Board surface: ONE coordinate space shared by tiles, SVG overlay and tokens.
+            Grid is a gapless 10x10 (visual gaps via inner inset) so tile centers sit
+            EXACTLY at (col*10+5, 95-row*10)% — snakes, ladders and tokens align pixel-perfect. */}
+        <div className="absolute inset-1">
+        <div className="grid grid-cols-10 grid-rows-10 w-full h-full">
           {Array.from({ length: 100 }, (_, i) => {
             const rowFromTop = Math.floor(i / 10);
             const col = i % 10;
@@ -760,15 +764,24 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             return (
               <div
                 key={tileNumber}
-                className={`relative flex items-center justify-center text-xs rounded-xs ${
+                className={`relative text-xs ${
                   tileNumber === 100
-                    ? 'bg-foreground text-background font-black'
+                    ? 'text-background font-black'
                     : isAlt
-                    ? 'bg-secondary/10 text-foreground/80'
-                    : 'bg-card text-secondary'
+                    ? 'text-foreground/80'
+                    : 'text-secondary'
                 }`}
               >
-                <span className="absolute top-1 left-1 text-[9px] font-mono opacity-40">
+                <div
+                  className={`absolute inset-px rounded-xs ${
+                    tileNumber === 100
+                      ? 'bg-foreground'
+                      : isAlt
+                      ? 'bg-secondary/10'
+                      : 'bg-card'
+                  }`}
+                />
+                <span className="absolute top-0.5 left-1 text-[9px] font-mono opacity-40">
                   {tileNumber === 100 ? '⭐100' : tileNumber}
                 </span>
               </div>
@@ -1075,6 +1088,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               </motion.div>
             );
           }); })()}
+        </div>
         </div>
       </div>
 
