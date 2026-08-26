@@ -1048,7 +1048,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                 }}
               >
                 {opacity > 0.35 && (
-                  <div className="mb-0.5 px-1.5 py-0.2 text-[9px] font-bold bg-background/95 text-foreground border border-border rounded-md shadow-xs whitespace-nowrap">
+                  <div className="mb-0.5 px-1.5 py-0.5 text-[9px] font-bold bg-background/95 text-foreground border border-border rounded-md shadow-xs whitespace-nowrap max-w-[80px] truncate text-center">
                     {p.username}
                   </div>
                 )}

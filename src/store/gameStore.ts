@@ -391,22 +391,35 @@ export const useGameStore = create<GameStore>()(
       updateSnakesState: (updates) => set((state) => {
         const current = state.snakesState as SnakesState | undefined;
         const incomingRevision = (updates as SnakesState).revision;
-        // Revision ordering: ignore stale state
-        if (current && typeof incomingRevision === 'number' && typeof current.revision === 'number') {
+        const incomingBoardId = (updates as SnakesState).boardId;
+
+        // If the incoming state belongs to a DIFFERENT boardId (new game/host generation),
+        // adopt the new board wholesale rather than rejecting it based on the old board's revision.
+        const isDifferentBoard = Boolean(
+          incomingBoardId && current?.boardId && incomingBoardId !== current.boardId
+        );
+
+        // Revision ordering: ignore stale state ONLY if it's the exact same board
+        if (!isDifferentBoard && current && typeof incomingRevision === 'number' && typeof current.revision === 'number') {
           if (incomingRevision <= current.revision) {
             debugSnakesState(`ignore stale revision ${incomingRevision} <= ${current.revision}`, current);
             return state;
           }
         }
+
         // If no revision provided, auto-increment from current (monotonic guarantee)
         let nextRevision = incomingRevision;
-        if (typeof nextRevision !== 'number' && current && typeof current.revision === 'number') {
+        if (typeof nextRevision !== 'number' && current && typeof current.revision === 'number' && !isDifferentBoard) {
           nextRevision = current.revision + 1;
         } else if (typeof nextRevision !== 'number') {
           nextRevision = 1;
         }
-        const merged = { ...current, ...updates, revision: nextRevision } as SnakesState;
-        debugSnakesState(`apply revision ${nextRevision}`, merged);
+
+        const merged = isDifferentBoard
+          ? ({ ...updates, revision: nextRevision } as SnakesState)
+          : ({ ...current, ...updates, revision: nextRevision } as SnakesState);
+
+        debugSnakesState(`apply revision ${nextRevision} board=${(merged.boardId || '').slice(0, 8)}`, merged);
         return { snakesState: merged };
       }),
       replaceAllSnakesState: (incoming) => set((state) => {
@@ -482,7 +495,11 @@ export const useGameStore = create<GameStore>()(
 
       enterRoom: (roomId) => {
         const state = get();
-        if (state.room?.id === roomId) return;
+        if (state.room?.id === roomId) {
+          // If re-entering the same room, reset ephemeral snakesState so host/guest sync freshly
+          set({ snakesState: undefined });
+          return;
+        }
         set({
           room: null,
           grid: null,
@@ -513,7 +530,8 @@ export const useGameStore = create<GameStore>()(
         grid: state.grid,
         solutionToken: state.solutionToken,
         messages: state.messages,
-        snakesState: state.snakesState,
+        // NOTE: snakesState is intentionally NOT persisted in localStorage
+        // to prevent stale board layouts / revisions from desyncing multiplayer matches.
       }),
     }
   )

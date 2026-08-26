@@ -484,7 +484,13 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'snakes_state_update' }, ({ payload }) => {
         if (payload.snakesState) {
-          useGameStore.getState().updateSnakesState(payload.snakesState as SnakesState);
+          const incoming = payload.snakesState as SnakesState;
+          const current = useGameStore.getState().snakesState;
+          if (incoming.boardId && current?.boardId && incoming.boardId !== current.boardId) {
+            useGameStore.getState().replaceAllSnakesState(incoming);
+          } else {
+            useGameStore.getState().updateSnakesState(incoming);
+          }
           lastSnakesStateAtRef.current = Date.now();
         }
       })
