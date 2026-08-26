@@ -4,6 +4,22 @@ import { Grid, RoomState, Player, ChatMessage, SnakesState } from '../types/game
 import { checkConflicts } from '../utils/sudoku';
 import { generateInitialSnakesState } from '../utils/snakesAndLaddersData';
 
+// Debug logging off by default. Enable with: localStorage.setItem('sudoku_debug_snakes', '1')
+const isSnakesDebugEnabled = (): boolean => {
+  try {
+    return typeof window !== 'undefined' && window.localStorage.getItem('sudoku_debug_snakes') === '1';
+  } catch {
+    return false;
+  }
+};
+
+const debugSnakesState = (message: string, s: SnakesState): void => {
+  if (!isSnakesDebugEnabled()) return;
+  console.debug(
+    `[SnakesState] ${message} | turn=${s.currentTurnUserId ?? '-'} | positions=${JSON.stringify(s.playerPositions)}`
+  );
+};
+
 interface GameStore {
   // Local User State
   userId: string | null;
@@ -37,6 +53,13 @@ interface GameStore {
   resetGame: () => void;
   startNextGame: (newGrid: Grid, newSolutionToken: string) => void;
   updateSnakesState: (state: Partial<SnakesState>) => void;
+  /**
+   * Adopt a full authoritative SnakesState (host sync_state / next_game).
+   * Bypasses the revision guard because a full resnapshot from the authority
+   * is always the truth, even if our local persisted revision drifted ahead
+   * (e.g. reconnect after host restart, or brand-new game with revision 1).
+   */
+  replaceAllSnakesState: (state: SnakesState) => void;
   enterRoom: (roomId: string) => void;
   clearPersistedStorage: () => void;
 }
@@ -65,7 +88,8 @@ export const useGameStore = create<GameStore>()(
               [playerId]: {
                 ...(existingPlayer || {
                   id: playerId,
-                  username: 'Player',
+                  // No fake name: empty until the player actually sets one
+                  username: '',
                   color: '#3b82f6',
                   isHost: false,
                   score: 0,
@@ -364,7 +388,40 @@ export const useGameStore = create<GameStore>()(
       selectedCell: null,
       snakesState: undefined,
       setSelectedCell: (cell) => set({ selectedCell: cell }),
-      updateSnakesState: (updates) => set((state) => ({ snakesState: { ...state.snakesState, ...updates } as SnakesState })),
+      updateSnakesState: (updates) => set((state) => {
+        const current = state.snakesState as SnakesState | undefined;
+        const incomingRevision = (updates as SnakesState).revision;
+        // Revision ordering: ignore stale state
+        if (current && typeof incomingRevision === 'number' && typeof current.revision === 'number') {
+          if (incomingRevision <= current.revision) {
+            debugSnakesState(`ignore stale revision ${incomingRevision} <= ${current.revision}`, current);
+            return state;
+          }
+        }
+        // If no revision provided, auto-increment from current (monotonic guarantee)
+        let nextRevision = incomingRevision;
+        if (typeof nextRevision !== 'number' && current && typeof current.revision === 'number') {
+          nextRevision = current.revision + 1;
+        } else if (typeof nextRevision !== 'number') {
+          nextRevision = 1;
+        }
+        const merged = { ...current, ...updates, revision: nextRevision } as SnakesState;
+        debugSnakesState(`apply revision ${nextRevision}`, merged);
+        return { snakesState: merged };
+      }),
+      replaceAllSnakesState: (incoming) => set((state) => {
+        const current = state.snakesState as SnakesState | undefined;
+        // Only adopt when it actually differs or moves forward; a full authority
+        // snapshot is always accepted (never regress ordering semantics here).
+        const next: SnakesState = {
+          ...incoming,
+          revision: typeof incoming.revision === 'number'
+            ? incoming.revision
+            : Math.max(current?.revision ?? 0, 0) + 1,
+        };
+        debugSnakesState(`replaceAll -> revision ${next.revision}`, next);
+        return { snakesState: next };
+      }),
       resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null, snakesState: undefined }),
 
       startNextGame: (newGrid, newSolutionToken) => set((state) => {
@@ -375,7 +432,13 @@ export const useGameStore = create<GameStore>()(
         let newSnakesState = state.snakesState;
 
         if (isSnakesMode) {
-          newSnakesState = generateInitialSnakesState(state.room.difficulty, Object.keys(newPlayers));
+          const fresh = generateInitialSnakesState(state.room.difficulty, Object.keys(newPlayers));
+          // Keep revision monotonic across games so peers never reject the new
+          // board as "stale" (generateInitial restarts at revision 1).
+          newSnakesState = {
+            ...fresh,
+            revision: Math.max(fresh.revision ?? 1, (state.snakesState?.revision ?? 0) + 1),
+          } as SnakesState;
         }
         Object.keys(newPlayers).forEach(playerId => {
           newPlayers[playerId] = {

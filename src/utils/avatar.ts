@@ -190,6 +190,7 @@ export async function processAvatarImage(file: File): Promise<string> {
 
 // For testing / fallback generation: initials
 export function getAvatarFallbackLabel(username: string): string {
-  const u = (username || 'P').trim().toUpperCase();
-  return u.charAt(0) || 'P';
+  const u = (username || '').trim().toUpperCase();
+  // Neutral glyph for nameless players — never a fabricated name/initial
+  return u.charAt(0) || '?';
 }

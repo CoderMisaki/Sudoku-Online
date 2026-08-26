@@ -128,6 +128,7 @@ export default function RoomPage() {
     broadcastSnakesDiceRoll,
     broadcastSnakesState,
     broadcastAvatarUpdate,
+    broadcastProfileUpdate,
     isTrulyOffline,
     connectionError,
     reconnect
@@ -241,6 +242,11 @@ export default function RoomPage() {
         newSnakesState.winnerId = null;
         newSnakesState.frozenTurns = {};
         newSnakesState.currentTurnUserId = activeIds[0] || '';
+        // generateInitialSnakesState restarts at revision 1 — after a long match the
+        // room revision is far higher, so every client would reject it as stale.
+        // Always move FORWARD from the current authoritative revision.
+        const baseRevision = useGameStore.getState().snakesState?.revision ?? 0;
+        newSnakesState.revision = Math.max(newSnakesState.revision ?? 1, baseRevision + 1);
 
         useGameStore.getState().updateSnakesState(newSnakesState);
 
@@ -369,7 +375,8 @@ export default function RoomPage() {
       }
     }
 
-    if (!storedUserId || !storedUsername) {
+    // Empty name ("") is valid — only redirect when the key was never set.
+    if (!storedUserId || storedUsername === null) {
       router.push('/');
       return;
     }
@@ -659,8 +666,8 @@ export default function RoomPage() {
 
         <div className="flex items-center gap-1.5 sm:gap-2">
           {isAdminUser && isAdminVerified && <ErrorLogPanel isAdmin={true} />}
-          {/* Profile avatar tetap terlihat selama game, bisa diubah kapan saja tanpa reset */}
-          <ProfileWidget onAvatarUpdate={broadcastAvatarUpdate} compact />
+          {/* Profile (avatar + nama) tetap terlihat selama game, realtime tanpa reset */}
+          <ProfileWidget onAvatarUpdate={broadcastAvatarUpdate} onProfileUpdate={broadcastProfileUpdate} compact />
           <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(true)} className="p-1.5 h-8 w-8">
             <Settings className="w-4 h-4" />
           </Button>
@@ -734,7 +741,7 @@ export default function RoomPage() {
                       <div className={`w-2.5 h-2.5 rounded-full ${p.status !== 'online' ? 'opacity-40' : ''} shrink-0`} style={{ backgroundColor: p.status === 'online' ? p.color : '#9ca3af' }} />
                     )}
                     <span className={`font-medium ${p.status !== 'online' ? 'line-through text-secondary/60' : ''}`}>
-                      {p.username || 'Player'}
+                      {p.username}
                     </span>
                     {p.isHost && (
                       <span className="text-secondary text-xs">(Host)</span>

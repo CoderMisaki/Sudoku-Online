@@ -158,7 +158,12 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
   const isSkippingRef = useRef(false);
   const isInitializedRef = useRef(false);
+  // Initialized on mount so a rejoin never replays an OLD move's animation;
+  // positions are already authoritative from sync_state.
   const lastProcessedActionTimeRef = useRef<number>(0);
+  useEffect(() => {
+    lastProcessedActionTimeRef.current = Date.now();
+  }, []);
 
   const activePlayerIdsKey = useMemo(() => {
     return Object.values(players)
@@ -177,8 +182,15 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       if (!isInitializedRef.current && activePlayerIds.length > 0 && room?.hostId === userId) {
         isInitializedRef.current = true;
         const initial = generateInitialSnakesState(room?.difficulty || 'medium', activePlayerIds);
-        updateSnakesState(initial);
-        if (broadcastSnakesState) broadcastSnakesState(initial as ExtendedSnakesState);
+        // Revision must move FORWARD from whatever this client already has,
+        // otherwise remote clients would reject the broadcast as stale.
+        const baseRevision = useGameStore.getState().snakesState?.revision ?? 0;
+        const nextState: ExtendedSnakesState = {
+          ...initial,
+          revision: Math.max(initial.revision ?? 1, baseRevision + 1),
+        } as ExtendedSnakesState;
+        updateSnakesState(nextState);
+        if (broadcastSnakesState) broadcastSnakesState(nextState);
       }
     }
   }, [snakesState, room?.difficulty, activePlayerIds, updateSnakesState, broadcastSnakesState, room?.hostId, userId]);
@@ -198,11 +210,18 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     if (missing.length === 0) return;
     const isAuthority = room.hostId === userId;
     if (!isAuthority) return;
-    const nextPositions = { ...serverPos };
+    // Compose from the FRESHEST store state, not the render closure
+    const latest = useGameStore.getState().snakesState as ExtendedSnakesState | undefined;
+    if (!latest) return;
+    const nextPositions = { ...(latest.playerPositions || {}) };
     missing.forEach((pid) => {
       nextPositions[pid] = 1;
     });
-    const nextState: ExtendedSnakesState = { ...snakesState, playerPositions: nextPositions };
+    const nextState: ExtendedSnakesState = {
+      ...latest,
+      playerPositions: nextPositions,
+      revision: (latest.revision ?? 0) + 1,
+    };
     updateSnakesState(nextState);
     if (broadcastSnakesState) broadcastSnakesState(nextState);
   }, [activePlayerIds, snakesState, room, userId, updateSnakesState, broadcastSnakesState]);
@@ -237,23 +256,26 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     return unfinishedPlayerIds.length === 0 || winners.length === activePlayerIds.length;
   }, [activePlayerIds.length, unfinishedPlayerIds.length, winners.length]);
 
-  // Watchdog: if isAnimating stays true >5s (e.g. roller disconnected mid-animation), reset to avoid deadlock
+  // Watchdog: if isAnimating stays true >5s (e.g. roller disconnected mid-animation), reset to avoid deadlock.
+  // Every client clears LOCALLY (auto-bumped revision, no broadcast); only the
+  // authority (host) broadcasts recovery so N clients never race stale snapshots.
   useEffect(() => {
     if (!snakesState?.isAnimating) return;
     const timer = setTimeout(() => {
-      if (snakesStateRef.current?.isAnimating) {
-        isAnimatingRef.current = false;
-        setIsRollingLocal(false);
-        const fallback = { ...snakesStateRef.current, isAnimating: false } as ExtendedSnakesState;
-        updateSnakesState(fallback);
-        if (broadcastSnakesState) broadcastSnakesState(fallback);
-        toast.error('Animasi ter-reset (timeout 5s) — koneksi roller mungkin terputus.');
-      }
+      const latest = useGameStore.getState().snakesState as ExtendedSnakesState | undefined;
+      if (!latest?.isAnimating) return;
+      isAnimatingRef.current = false;
+      setIsRollingLocal(false);
+      // Explicit forward revision — otherwise the fallback carries the CURRENT
+      // revision and is rejected by the stale-revision guard (deadlock).
+      const fallback: ExtendedSnakesState = { ...latest, isAnimating: false, revision: (latest.revision ?? 0) + 1 };
+      updateSnakesState(fallback);
+      if (broadcastSnakesState && room?.hostId === userId) broadcastSnakesState(fallback);
     }, 5000);
     return () => clearTimeout(timer);
-  }, [snakesState?.isAnimating, updateSnakesState, broadcastSnakesState]);
+  }, [snakesState?.isAnimating, updateSnakesState, broadcastSnakesState, room?.hostId, userId]);
 
-  // Keep visualPositions in sync with server when no animation is running
+  // Keep visualPositions in sync with server when no animation is running — authoritative wins
   useEffect(() => {
     if (!snakesState?.playerPositions) return;
     if (snakesState.isAnimating || isAnimatingRef.current) return;
@@ -268,32 +290,30 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       setActionStatus(null);
       return;
     }
+    // Force sync to authoritative positions (handles desync, revision update, reconnect)
+    const serverPos = snakesState.playerPositions;
+    const filtered: Record<string, number> = {};
+    for (const [pid, pos] of Object.entries(serverPos)) {
+      const pl = players[pid];
+      if (!pl || pl.isSpectator || pl.status === 'left') continue;
+      filtered[pid] = pos;
+    }
     setVisualPositions((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      const serverPos = snakesState.playerPositions!;
-      for (const [pid, pos] of Object.entries(serverPos)) {
-        const pl = players[pid];
-        if (!pl || pl.isSpectator || pl.status === 'left') continue;
-        if (next[pid] === undefined) {
-          next[pid] = pos;
-          lastProcessedPosRef.current[pid] = pos;
-          changed = true;
+      // Quick check if already in sync
+      const prevKeys = Object.keys(prev);
+      const filteredKeys = Object.keys(filtered);
+      if (prevKeys.length === filteredKeys.length) {
+        let same = true;
+        for (const k of filteredKeys) {
+          if (prev[k] !== filtered[k]) { same = false; break; }
         }
+        if (same) return prev;
       }
-      for (const pid of Object.keys(next)) {
-        if (!serverPos[pid] && !players[pid]) {
-          delete next[pid];
-          delete lastProcessedPosRef.current[pid];
-          changed = true;
-        }
-      }
-      if (!changed && Object.keys(prev).length === 0 && Object.keys(serverPos).length > 0) {
-        return { ...serverPos };
-      }
-      return changed ? next : prev;
+      lastProcessedPosRef.current = { ...filtered };
+      return filtered;
     });
-  }, [snakesState?.playerPositions, snakesState?.winners, snakesState?.winnerId, snakesState?.isAnimating, players]);
+    setTokenOverrides({});
+  }, [snakesState?.playerPositions, snakesState?.revision, snakesState?.winners, snakesState?.winnerId, snakesState?.isAnimating, players]);
 
   const isAlreadyFinished = Boolean(userId && winners.includes(userId));
   const currentTurn = snakesState?.currentTurnUserId || activePlayerIds[0];
@@ -471,11 +491,15 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     const currentTurnId = snakesState.currentTurnUserId || '';
     const isAuthority = room?.hostId === userId || currentTurnId === userId;
     if (isAuthority && winners.includes(currentTurnId) && unfinishedPlayerIds.length > 0) {
+      // Compose from the FRESHEST store state so we never build on a stale snapshot
+      const latest = useGameStore.getState().snakesState as ExtendedSnakesState | undefined;
+      if (!latest || latest.currentTurnUserId !== currentTurnId) return;
       isSkippingRef.current = true;
       const nextTurnId = unfinishedPlayerIds[0];
       const nextState: ExtendedSnakesState = {
-        ...snakesState,
+        ...latest,
         currentTurnUserId: nextTurnId,
+        revision: (latest.revision ?? 0) + 1,
       };
 
       updateSnakesState(nextState);
@@ -488,11 +512,18 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   }, [snakesState, winners, unfinishedPlayerIds, isGameFullyFinished, updateSnakesState, broadcastSnakesState, room?.hostId, userId]);
 
   const handleRollDice = async () => {
-    if (!isMyTurn || isRollingLocal || isBoardAnimating || isGameFullyFinished || !userId || isAnimatingRef.current || !snakesState || isAlreadyFinished) return;
-    if (snakesState.isAnimating) return;
+    // Always read the FRESHEST authoritative state at call time — never a stale
+    // React closure/ref snapshot.
+    const latestState = (useGameStore.getState().snakesState as ExtendedSnakesState | undefined) ?? snakesStateRef.current;
+    if (!isMyTurn || isRollingLocal || isBoardAnimating || isGameFullyFinished || !userId || isAnimatingRef.current || !latestState || isAlreadyFinished) return;
+    if (latestState.isAnimating) return;
 
     setIsRollingLocal(true);
-    const lockState: ExtendedSnakesState = { ...snakesState, isAnimating: true };
+    // ── PHASE 1: LOCK (revision N+1). This exact locked snapshot is what the
+    // server validates and builds on, so revisions chain without collisions:
+    // N (idle) -> N+1 (lock) -> N+2 (server result, animating) -> N+3 (settle).
+    const lockRevision = (latestState.revision ?? 0) + 1;
+    const lockState: ExtendedSnakesState = { ...latestState, isAnimating: true, revision: lockRevision } as ExtendedSnakesState;
     updateSnakesState(lockState);
     if (broadcastSnakesState) broadcastSnakesState(lockState);
     isAnimatingRef.current = true;
@@ -503,66 +534,87 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       setLocalDiceRoll(Math.floor(Math.random() * 6) + 1);
       counter++;
       if (counter > 12) {
-        // keep shuffling until server responds; cap at 12 but continue if needed
+        // keep shuffling until server responds
       }
     }, 45);
 
+    const unlockAfterFailure = (errorMessage?: string) => {
+      clearInterval(shuffleInterval);
+      if (errorMessage) toast.error(errorMessage);
+      // Compose unlock from the FRESHEST store state with a forward revision so
+      // peers accept it even if other broadcasts happened meanwhile.
+      const current = (useGameStore.getState().snakesState as ExtendedSnakesState | undefined) ?? lockState;
+      const unlock: ExtendedSnakesState = {
+        ...current,
+        isAnimating: false,
+        revision: Math.max((current.revision ?? 0), lockRevision) + 1,
+      } as ExtendedSnakesState;
+      updateSnakesState(unlock);
+      if (broadcastSnakesState) broadcastSnakesState(unlock);
+      isAnimatingRef.current = false;
+      setIsRollingLocal(false);
+    };
+
     try {
+      // Send the LOCKED revision (N+1) but with isAnimating cleared for the
+      // server's animation-guard; every peer already accepted the lock at N+1,
+      // so the server result chains cleanly to N+2.
       const res = await fetch('/api/game/snakes-roll', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           roomId: room?.id || 'unknown',
           userId,
-          snakesState,
+          snakesState: { ...lockState, isAnimating: false } as SnakesState,
           activePlayerIds,
         }),
       });
       const data = await res.json();
-      clearInterval(shuffleInterval);
       if (!res.ok || !data.success) {
-        toast.error(data.error || 'Gagal lempar dadu (server).');
-        // unlock
-        const unlock: ExtendedSnakesState = { ...snakesState, isAnimating: false };
-        updateSnakesState(unlock);
-        if (broadcastSnakesState) broadcastSnakesState(unlock);
-        isAnimatingRef.current = false;
-        setIsRollingLocal(false);
+        unlockAfterFailure(data.error || 'Gagal lempar dadu (server).');
         return;
       }
+      clearInterval(shuffleInterval);
 
       const finalDice: number = data.dice;
-      const { startPos, steppedPos, finalPos, hasWon, nextTurnId, newWinners, newFrozen, updatedObstacles, actionPayload } = data as {
-        startPos: number;
-        steppedPos: number;
-        finalPos: number;
-        hasWon: boolean;
-        nextTurnId: string;
-        newWinners: string[];
-        newFrozen: Record<string, number>;
-        updatedObstacles: Partial<SnakesState>;
-        actionPayload: SnakesActionPayload;
-      };
+      // The full authoritative state computed by the server from our locked snapshot
+      const serverNewState = data.newSnakesState as ExtendedSnakesState | undefined;
+      const serverActionPayload = data.actionPayload as SnakesActionPayload;
+
+      let actionPayload: SnakesActionPayload = serverActionPayload;
+      let startPos: number = data.startPos;
+      let steppedPos: number = data.steppedPos;
+      let finalPos: number = data.finalPos;
+      let hasWon: boolean = data.hasWon;
+      let nextTurnId: string = data.nextTurnId;
+      let newWinners: string[] = data.newWinners;
+      let newFrozen: Record<string, number> = data.newFrozen;
+      const updatedObstacles: Partial<SnakesState> = data.updatedObstacles;
+
+      if (serverNewState && serverNewState.lastAction) {
+        actionPayload = serverNewState.lastAction;
+        startPos = actionPayload.startPos;
+        steppedPos = actionPayload.steppedPos;
+        finalPos = actionPayload.finalPos;
+        hasWon = !!serverNewState.winnerId && !!serverNewState.winners?.includes(userId);
+        nextTurnId = serverNewState.currentTurnUserId || nextTurnId;
+        newWinners = serverNewState.winners || newWinners;
+        newFrozen = serverNewState.frozenTurns || newFrozen;
+      }
 
       setLocalDiceRoll(finalDice);
       setIsRollingLocal(false);
 
-      // Personalize eventMessage with real username
-      const playerName = players[userId]?.username || 'Kamu';
-      if (actionPayload.eventMessage) {
-        actionPayload.eventMessage = actionPayload.eventMessage.replace(/Player \w{4}/, playerName);
-      }
-
-      // Handle mine toast locally
       if (actionPayload.specialHitType === 'mine') {
         toast.error('💥 Kamu menginjak Ranjau Capit! Freeze 3 giliran!');
       }
 
-      if (hasWon && !winners.includes(userId)) {
+      // Use latest winners for rank check
+      const currentWinners = useGameStore.getState().snakesState?.winners || winners;
+      if (hasWon && !currentWinners.includes(userId)) {
         const myRank = newWinners.length;
         const medal = myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : '🥉';
         toast.success(`${medal} Kamu Finish di Juara ${myRank}!`, { duration: 2500 });
-
         const earnedScore = myRank === 1 ? 100 : myRank === 2 ? 60 : 30;
         const currentScore = players[userId]?.score || 0;
         updatePlayer(userId, { score: currentScore + earnedScore, rank: myRank });
@@ -580,58 +632,72 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         wormholeObj: actionPayload.hitWormhole,
       };
 
-      const animatingState: ExtendedSnakesState = {
-        ...snakesState,
-        isAnimating: true,
-        diceValue: finalDice,
-        lastAction: actionPayload,
-      };
-      updateSnakesState(animatingState);
-      if (broadcastSnakesState) broadcastSnakesState(animatingState);
-
-      // Ensure personalized message is shown locally
-      const localEventMessage = actionPayload.eventMessage;
-
-      animatePath(userId, startPos, steppedPos, finalPos, specialHit, localEventMessage, () => {
-        const nextState: ExtendedSnakesState = {
-          ...snakesState,
+      // ── PHASE 2: RESULT (revision N+2, straight from the server). Contains the
+      // FINAL authoritative positions/turn/winners/frozen/obstacles + lastAction.
+      // Remote clients apply this immediately and animate from lastAction.
+      let resultBase: ExtendedSnakesState;
+      if (serverNewState) {
+        resultBase = { ...serverNewState, isAnimating: true } as ExtendedSnakesState;
+      } else {
+        // Backward-compat fallback if server did not return a full state:
+        // build onto the FRESHEST local state (never the stale lock snapshot).
+        const base = (useGameStore.getState().snakesState as ExtendedSnakesState | undefined) ?? lockState;
+        resultBase = {
+          ...base,
           ...updatedObstacles,
           diceValue: finalDice,
-          playerPositions: {
-            ...serverPositions,
-            [userId]: finalPos,
-          },
+          playerPositions: { ...(base.playerPositions || {}), [userId]: finalPos },
           currentTurnUserId: nextTurnId,
-          winnerId: newWinners[0] || snakesState.winnerId,
+          winnerId: newWinners[0] || base.winnerId || null,
           winners: newWinners,
           frozenTurns: newFrozen,
           lastAction: actionPayload,
-          isAnimating: false,
-        };
+          isAnimating: true,
+        } as ExtendedSnakesState;
+      }
+      updateSnakesState(resultBase);
+      if (broadcastSnakesState) broadcastSnakesState(resultBase);
 
-        updateSnakesState(nextState);
-        if (broadcastSnakesState) {
-          broadcastSnakesState(nextState);
-        }
+      const localEventMessage = actionPayload.eventMessage;
+
+      // Animate using authoritative start/stepped/final from the server
+      animatePath(userId, startPos, steppedPos, finalPos, specialHit, localEventMessage, () => {
+        // ── PHASE 3: SETTLE after the animation finishes. Revision MUST move
+        // forward past the RESULT broadcast (N+2) or every peer — and this
+        // client — would reject it as stale (the original deadlock bug).
+        const latestNow = (useGameStore.getState().snakesState as ExtendedSnakesState | undefined) ?? resultBase;
+        const settleRevision = Math.max((serverNewState?.revision ?? 0), (latestNow.revision ?? 0)) + 1;
+        const finalState: ExtendedSnakesState = {
+          ...(serverNewState ?? latestNow),
+          isAnimating: false,
+          isRolling: false,
+          lastAction: actionPayload,
+          revision: settleRevision,
+        } as ExtendedSnakesState;
+        updateSnakesState(finalState);
+        if (broadcastSnakesState) broadcastSnakesState(finalState);
+
+        // Authoritative positions win over any visual leftovers
+        const authPos = finalState.playerPositions;
+        setVisualPositions((prev) => ({ ...prev, ...authPos }));
+        Object.entries(authPos).forEach(([pid, pos]) => {
+          lastProcessedPosRef.current[pid] = pos;
+        });
       });
-    } catch (err) {
-      clearInterval(shuffleInterval);
-      console.error('snakes-roll fetch failed', err);
-      toast.error('Gagal menghubungi server dadu.');
-      const unlock: ExtendedSnakesState = { ...snakesState, isAnimating: false };
-      updateSnakesState(unlock);
-      if (broadcastSnakesState) broadcastSnakesState(unlock);
-      isAnimatingRef.current = false;
-      setIsRollingLocal(false);
+    } catch {
+      unlockAfterFailure('Gagal menghubungi server dadu.');
     }
   };
 
   const handleSkipTurn = () => {
-    if (!isMyTurn || !userId || !snakesState) return;
-    if (snakesState.isAnimating || isAnimatingRef.current) return;
+    const latest = useGameStore.getState().snakesState as ExtendedSnakesState | undefined;
+    if (!isMyTurn || !userId || !latest) return;
+    if (latest.isAnimating || isAnimatingRef.current) return;
 
-    const remaining = Math.max(0, myFrozenCount - 1);
-    const updatedFrozen = { ...frozenTurns, [userId]: remaining };
+    const latestFrozen = latest.frozenTurns || EMPTY_FROZEN;
+    const myFrozen = userId ? latestFrozen[userId] || 0 : 0;
+    const remaining = Math.max(0, myFrozen - 1);
+    const updatedFrozen = { ...latestFrozen, [userId]: remaining };
 
     let nextTurnId = userId;
     if (unfinishedPlayerIds.length > 0) {
@@ -643,10 +709,11 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     toast(`Kamu melewatkan giliran (Sisa hukuman: ${remaining} turn)`, { icon: '⏳' });
 
     const nextState: ExtendedSnakesState = {
-      ...snakesState,
+      ...latest,
       currentTurnUserId: nextTurnId,
       frozenTurns: updatedFrozen,
-    };
+      revision: (latest.revision ?? 0) + 1,
+    } as ExtendedSnakesState;
     updateSnakesState(nextState);
     if (broadcastSnakesState) {
       broadcastSnakesState(nextState);
@@ -659,7 +726,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         <div className="bg-foreground text-background px-5 py-3 rounded-2xl flex items-center gap-3 w-full justify-center shadow-xl animate-bounce">
           <Trophy className="w-6 h-6 text-amber-400" />
           <span className="font-bold text-sm sm:text-base">
-            🎉 {players[winners[0]]?.username || 'Pemain'} Menang & Mencapai Kotak 100!
+            🎉 {players[winners[0]]?.username || ''} Menang & Mencapai Kotak 100!
           </span>
         </div>
       )}
@@ -969,7 +1036,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               >
                 {opacity > 0.35 && (
                   <div className="mb-0.5 px-1.5 py-0.2 text-[9px] font-bold bg-background/95 text-foreground border border-border rounded-md shadow-xs whitespace-nowrap">
-                    {p.username || 'Player'}
+                    {p.username}
                   </div>
                 )}
 
@@ -1001,7 +1068,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                       className="w-7 h-7 rounded-full border-2 border-background shadow-lg flex items-center justify-center text-[10px] font-black text-white"
                       style={{ backgroundColor: p.color || '#3b82f6' }}
                     >
-                      {p.username?.charAt(0).toUpperCase() || 'P'}
+                      {p.username?.charAt(0).toUpperCase() || '?'}
                     </div>
                   )}
                 </motion.div>
@@ -1018,7 +1085,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             {winners.map((wId, idx) => (
               <span key={wId} className="px-2.5 py-1 bg-secondary/15 rounded-lg font-medium">
                 {idx === 0 ? '🥇 Juara 1: ' : idx === 1 ? '🥈 Juara 2: ' : idx === 2 ? '🥉 Juara 3: ' : `Rank ${idx + 1}: `}
-                {players[wId]?.username || 'Player'}
+                {players[wId]?.username || ''}
               </span>
             ))}
           </div>
@@ -1039,7 +1106,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           <div className="flex flex-col">
             <span className="text-xs text-secondary font-medium">Giliran Saat Ini:</span>
             <span className="font-bold text-sm">
-              {players[currentTurn || '']?.username || 'Menunggu...'} {isMyTurn ? '(Giliran Kamu)' : ''}
+              {players[currentTurn || ''] ? (players[currentTurn || '']?.username || '') : 'Menunggu...'} {isMyTurn ? '(Giliran Kamu)' : ''}
               {isBoardAnimating && !isMyTurn ? ' - Berjalan...' : ''}
             </span>
           </div>

@@ -120,20 +120,14 @@ export default function Home() {
   };
 
   const handleOpenCreateModal = () => {
-    if (!username.trim()) {
-      setError('Masukkan nama kamu dulu ya!');
-      return;
-    }
+    // Empty name is allowed ("") — no fabricated placeholder identity
     setError('');
     setIsJoinModalOpen(false);
     setIsCreateModalOpen(true);
   };
 
   const handleOpenJoinModal = () => {
-    if (!username.trim()) {
-      setError('Masukkan nama kamu dulu ya!');
-      return;
-    }
+    // Empty name is allowed ("") — no fabricated placeholder identity
     setError('');
     setJoinCode('');
     setIsCreateModalOpen(false);
@@ -157,10 +151,6 @@ export default function Home() {
 
   const handleCreateRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim()) {
-      setError('Masukkan nama terlebih dahulu.');
-      return;
-    }
     // Admin gate: require password verification before creating room
     if (username.trim().toUpperCase() === 'ADMIN' && !isAdminVerified) {
       setAdminPendingAction('create');
@@ -226,10 +216,7 @@ export default function Home() {
 
   const handleJoinRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim()) {
-      setError('Masukkan nama terlebih dahulu.');
-      return;
-    }
+    // Empty name is allowed ("") — no fake fallback name
 
     const cleanCode = joinCode.trim().toUpperCase();
     // Validasi panjang dan karakter harus 5 digit alfanumerik

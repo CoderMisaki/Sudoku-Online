@@ -13,11 +13,14 @@ import toast from 'react-hot-toast';
 interface ProfileWidgetProps {
   // Called when avatar is changed locally; parent in room can forward to realtime broadcast
   onAvatarUpdate?: (avatar: string | null) => void;
+  // Unified profile save (username and/or avatar) — parent forwards a
+  // `player_profile_update` broadcast so every client patches the same playerId
+  onProfileUpdate?: (profile: { username?: string; avatar?: string | null }) => void;
   // Compact mode for header (show username on desktop, hide on mobile already handled)
   compact?: boolean;
 }
 
-export const ProfileWidget: React.FC<ProfileWidgetProps> = ({ onAvatarUpdate, compact = false }) => {
+export const ProfileWidget: React.FC<ProfileWidgetProps> = ({ onAvatarUpdate, onProfileUpdate, compact = false }) => {
   const userId = useGameStore((s) => s.userId);
   const username = useGameStore((s) => s.username);
   const room = useGameStore((s) => s.room);
@@ -28,10 +31,12 @@ export const ProfileWidget: React.FC<ProfileWidgetProps> = ({ onAvatarUpdate, co
   const storedAvatar = mounted ? getStoredAvatar() : null;
   const playerAvatar = mounted && userId ? room?.players[userId]?.avatar ?? null : null;
   const displayAvatar = mounted ? (playerAvatar ?? storedAvatar ?? null) : null;
-  const displayName = mounted ? (username || localStorage.getItem('sudoku_username') || 'PLAYER') : 'PLAYER';
+  // No fake name: show "" until the player actually sets one
+  const displayName = mounted ? (username ?? localStorage.getItem('sudoku_username') ?? '') : '';
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
+  const [nameDraft, setNameDraft] = useState('');
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -42,10 +47,11 @@ export const ProfileWidget: React.FC<ProfileWidgetProps> = ({ onAvatarUpdate, co
   useEffect(() => {
     if (isEditorOpen) {
       setPreview(displayAvatar);
+      setNameDraft(displayName);
       setPendingFile(null);
       setError(null);
     }
-  }, [isEditorOpen, displayAvatar]);
+  }, [isEditorOpen, displayAvatar, displayName]);
 
   // Ensure localStorage avatar is reflected in room on mount (fix TES1 stale room)
   useEffect(() => {
@@ -92,28 +98,33 @@ export const ProfileWidget: React.FC<ProfileWidgetProps> = ({ onAvatarUpdate, co
     if (preview === null) {
       finalAvatar = null;
     }
-    // Persist locally
+    // Persist locally (avatar)
     const ok = setStoredAvatar(finalAvatar);
     if (!ok) {
       toast.error('Gagal menyimpan avatar (storage penuh?)');
       return;
     }
-    // Update local player in room immediately (optimistic)
-    if (userId) {
-      const uid = userId || getOrCreateUserId();
-      // Ensure username is still set
-      if (!username && displayName) {
-        useGameStore.getState().setUserInfo(uid, displayName);
-      }
-      useGameStore.getState().updatePlayer(uid, { avatar: finalAvatar });
-    }
-    // Broadcast realtime if handler provided (room)
-    if (onAvatarUpdate) {
+
+    // Username: trim, cap length, keep app-wide uppercase convention.
+    const cleanName = nameDraft.trim().slice(0, 20).toUpperCase();
+    try { localStorage.setItem('sudoku_username', cleanName); } catch {}
+
+    const uid = userId || getOrCreateUserId();
+    // Update identity in store: same playerId, only mutable properties change.
+    useGameStore.getState().setUserInfo(uid, cleanName);
+    const patch: { username?: string; avatar?: string | null } = { username: cleanName, avatar: finalAvatar };
+    useGameStore.getState().updatePlayer(uid, patch);
+
+    // Broadcast realtime if unified handler provided (room) — no refresh needed
+    if (onProfileUpdate) {
+      onProfileUpdate(patch);
+    } else if (onAvatarUpdate) {
+      // Legacy avatar-only channel (home page has no realtime room anyway)
       onAvatarUpdate(finalAvatar);
     }
     // Always notify global presence (for OnlinePlayersBox) — even on home page
     try { window.dispatchEvent(new Event('avatarUpdated')); } catch {}
-    toast.success(finalAvatar ? 'Avatar disimpan!' : 'Avatar dihapus');
+    toast.success(finalAvatar ? 'Profil disimpan!' : 'Profil disimpan (avatar dihapus)');
     setIsEditorOpen(false);
   };
 
@@ -180,6 +191,28 @@ export const ProfileWidget: React.FC<ProfileWidgetProps> = ({ onAvatarUpdate, co
               <p className="text-sm font-semibold">{displayName}</p>
               <p className="text-xs text-secondary">Preview avatar kamu</p>
             </div>
+          </div>
+
+          {/* Username editor — realtime sync via player_profile_update */}
+          <div>
+            <label htmlFor="profile-username" className="text-sm font-medium block mb-1.5">
+              Nama Kamu
+            </label>
+            <input
+              id="profile-username"
+              type="text"
+              value={nameDraft}
+              maxLength={20}
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="(kosong = tanpa nama)"
+              onChange={(e) => setNameDraft(e.target.value.toUpperCase())}
+              className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-foreground"
+            />
+            <p className="text-[11px] text-secondary mt-1">
+              Nama tersinkronisasi realtime ke semua pemain tanpa refresh. Kosongkan untuk tampil tanpa nama.
+            </p>
           </div>
 
           {/* Actions */}

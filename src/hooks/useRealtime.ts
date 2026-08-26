@@ -187,7 +187,9 @@ export function useRealtime(roomId: string) {
 
   const connectChannel = useCallback(() => {
     const currentUserId = userIdRef.current || (typeof window !== 'undefined' ? getOrCreateUserId() : '');
-    const currentUsername = usernameRef.current || (typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') || 'Player' : 'Player');
+    // Empty name is valid ("") — never fabricate a placeholder identity
+    const currentUsername = usernameRef.current ??
+      (typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') ?? '' : '');
     const currentAvatar = typeof window !== 'undefined' ? getStoredAvatar() : null;
 
     if (!roomId || !currentUserId || !isMountedRef.current) return;
@@ -228,16 +230,21 @@ export function useRealtime(roomId: string) {
       let changed = false;
 
       Object.keys(players).forEach((id) => {
-        const presences = presenceState[id] as Array<{ username?: string; avatar?: string | null }> | undefined;
+        const presences = presenceState[id] as Array<Record<string, unknown>> | undefined;
         const isTracked = Boolean(presences?.length);
         const current = players[id];
 
         if (current.status === 'left' && !isTracked) return;
 
-        const lastPresence = presences?.[presences.length - 1] as Record<string, unknown> | undefined;
-        const latestUsername = (lastPresence as { username?: string } | undefined)?.username;
-        const rawAvatar = (lastPresence as Record<string, unknown> | undefined)?.avatar as unknown;
-        const hasAvatarField = lastPresence && 'avatar' in (lastPresence as Record<string, unknown>);
+        const lastPresence = presences?.[presences.length - 1];
+        // Username only overrides when the presence explicitly carries the field
+        // (an explicit "" means the player cleared their name — honor it).
+        const hasUsernameField = Boolean(lastPresence && 'username' in lastPresence);
+        const latestUsername = hasUsernameField
+          ? (typeof lastPresence?.username === 'string' ? lastPresence.username : '')
+          : undefined;
+        const rawAvatar = lastPresence?.avatar;
+        const hasAvatarField = Boolean(lastPresence && 'avatar' in lastPresence);
         // Security: validate avatar DataURL from presence (untrusted)
         let latestAvatar: string | null | undefined = undefined;
         if (hasAvatarField) {
@@ -251,13 +258,13 @@ export function useRealtime(roomId: string) {
         }
         const targetStatus: Player['status'] = isTracked ? 'online' : 'disconnected';
 
-        const shouldUpdateUsername = Boolean(latestUsername && current.username !== latestUsername);
+        const shouldUpdateUsername = hasUsernameField && latestUsername !== undefined && current.username !== latestUsername;
         const shouldUpdateAvatar = hasAvatarField && latestAvatar !== current.avatar;
         if (current.status !== targetStatus || shouldUpdateUsername || shouldUpdateAvatar) {
           players[id] = {
             ...current,
             status: targetStatus,
-            username: latestUsername || current.username,
+            ...(shouldUpdateUsername && latestUsername !== undefined ? { username: latestUsername } : {}),
             ...(hasAvatarField ? { avatar: latestAvatar ?? null } : {}),
           };
           changed = true;
@@ -265,18 +272,21 @@ export function useRealtime(roomId: string) {
       });
 
       Object.entries(presenceState).forEach(([id, presences]) => {
-        const latestPresence = (presences as Array<{ username?: string; avatar?: string | null }>)?.[0];
+        const latestPresence = (presences as Array<Record<string, unknown>>)?.[0];
         if (!latestPresence || players[id]) return;
 
         players[id] = {
           id,
-          username: latestPresence.username || 'Player',
+          // No fake name: empty until the player sets one
+          username: typeof latestPresence.username === 'string' ? latestPresence.username : '',
           color: PLAYER_COLORS[Object.keys(players).length % PLAYER_COLORS.length],
           isHost: id === room.hostId,
           score: 0,
           hints: 3,
           status: 'online',
-          avatar: (latestPresence as { avatar?: string | null }).avatar ?? null,
+          avatar: (typeof latestPresence.avatar === 'string' && isSafeDataUrl(latestPresence.avatar))
+            ? latestPresence.avatar
+            : null,
         };
         changed = true;
       });
@@ -296,20 +306,23 @@ export function useRealtime(roomId: string) {
       })
       .on('presence', { event: 'join' }, ({ key, newPresences }) => {
         const raw = newPresences?.[0] as Record<string, unknown> | undefined;
-        const user = raw as { username?: string; avatar?: unknown } | undefined;
         const store = useGameStore.getState();
 
         if (store.room) {
           let safeAvatar: string | null | undefined = undefined;
-          if (user && 'avatar' in (user as Record<string, unknown>)) {
-            const av = (user as Record<string, unknown>).avatar;
+          if (raw && 'avatar' in raw) {
+            const av = raw.avatar;
             if (av === null) safeAvatar = null;
             else if (typeof av === 'string' && isSafeDataUrl(av)) safeAvatar = av;
             else safeAvatar = store.room.players[key]?.avatar ?? null; // reject poison
           }
+          // Honor explicit username field, including "" (cleared name)
+          const hasUsernameField = Boolean(raw && 'username' in raw);
+          const incomingUsername = typeof raw?.username === 'string' ? raw.username : undefined;
+          const existingName = store.room.players[key]?.username ?? '';
           store.updatePlayer(key, {
             status: 'online',
-            username: user?.username || store.room.players[key]?.username || 'Player',
+            ...(hasUsernameField && incomingUsername !== undefined ? { username: incomingUsername } : { username: existingName }),
             ...(safeAvatar !== undefined ? { avatar: safeAvatar } : {}),
           });
         }
@@ -362,7 +375,9 @@ export function useRealtime(roomId: string) {
           store.setGameData(payload.grid, payload.solutionToken);
         }
         if (payload.snakesState) {
-          store.updateSnakesState(payload.snakesState);
+          // Full authority snapshot from host: adopt wholesale so a stale/high
+          // local revision can never reject fresh authoritative state.
+          store.replaceAllSnakesState(payload.snakesState as SnakesState);
         }
         if (payload.messages && Array.isArray(payload.messages)) {
           payload.messages.forEach((msg: ChatMessage) => store.addMessage(msg));
@@ -370,7 +385,7 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'cell_move' }, ({ payload }) => {
         const store = useGameStore.getState();
-        const senderName = store.room?.players[payload.userId]?.username || 'Player';
+        const senderName = store.room?.players[payload.userId]?.username || '';
 
         if (store.room?.mode === 'competition') {
           // Competition: tiap client menghitung grid sendiri, jadi hanya tampilkan notifikasi.
@@ -428,7 +443,9 @@ export function useRealtime(roomId: string) {
         }
 
         if (payload.room?.mode === 'snakes_and_ladders' && payload.snakesState) {
-          store.updateSnakesState(payload.snakesState);
+          // New game state is authoritative (host-generated, revision may reset to 1):
+          // adopt wholesale so old higher revisions cannot reject it.
+          store.replaceAllSnakesState(payload.snakesState as SnakesState);
         } else if (payload.room?.mode === 'competition') {
           // Kosongkan grid lama agar memicu pengambilan puzzle baru
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -438,6 +455,13 @@ export function useRealtime(roomId: string) {
         }
       })
       .on('broadcast', { event: 'snakes_dice_roll' }, ({ payload }) => {
+        // LEGACY compat event. The authoritative path is `snakes_state_update`
+        // (full state + revision). This handler must never overwrite newer
+        // authoritative state: only apply when idle and provably newer.
+        const cur = useGameStore.getState().snakesState;
+        if (!cur) return;
+        if (typeof payload.revision === 'number' && payload.revision <= cur.revision) return;
+        if (cur.isAnimating) return; // never clobber an in-flight move
         useGameStore.getState().updateSnakesState({
           diceValue: payload.diceValue,
           playerPositions: {
@@ -446,12 +470,37 @@ export function useRealtime(roomId: string) {
           },
           currentTurnUserId: payload.nextTurnUserId,
           winnerId: payload.hasWon ? payload.userId : null,
+          ...(typeof payload.revision === 'number' ? { revision: payload.revision } : {}),
         });
       })
       .on('broadcast', { event: 'snakes_state_update' }, ({ payload }) => {
         if (payload.snakesState) {
-          useGameStore.getState().updateSnakesState(payload.snakesState);
+          useGameStore.getState().updateSnakesState(payload.snakesState as SnakesState);
         }
+      })
+      .on('broadcast', { event: 'player_profile_update' }, ({ payload }) => {
+        // { playerId, username?, avatar? } — username is mutable, playerId is identity.
+        const { playerId, username, avatar } = (payload ?? {}) as {
+          playerId?: string;
+          username?: unknown;
+          avatar?: unknown;
+        };
+        if (!playerId || typeof playerId !== 'string') return;
+        const patch: Partial<Player> = {};
+        if (typeof username === 'string') {
+          patch.username = username.trim().slice(0, 20);
+        }
+        if (avatar === null) {
+          patch.avatar = null;
+        } else if (typeof avatar === 'string' && isSafeDataUrl(avatar)) {
+          patch.avatar = avatar;
+        } else if (avatar !== undefined) {
+          addLog(`[Profile] Rejected poisoned avatar from ${playerId}`);
+        }
+        if (Object.keys(patch).length === 0) return;
+        // Loop-safe: receivers only update the local store, never rebroadcast.
+        useGameStore.getState().updatePlayer(playerId, patch);
+        addLog(`[Profile] Update profil dari ${playerId}`);
       })
       .on('broadcast', { event: 'player_avatar_update' }, ({ payload }) => {
         const { playerId, avatar } = payload as { playerId: string; avatar: unknown };
@@ -590,7 +639,7 @@ export function useRealtime(roomId: string) {
   const broadcastMove = useCallback(
     async (row: number, col: number, value: number | null) => {
       const currentUid = userIdRef.current || getOrCreateUserId();
-      const currentUname = usernameRef.current || 'Player';
+      const currentUname = usernameRef.current ?? '';
       const store = useGameStore.getState();
 
       if (value === null) {
@@ -663,7 +712,7 @@ export function useRealtime(roomId: string) {
 
   const broadcastChat = useCallback((text: string) => {
     const currentUid = userIdRef.current || getOrCreateUserId();
-    const currentName = usernameRef.current || 'Player';
+    const currentName = usernameRef.current ?? '';
     const msg: ChatMessage = {
       id: Math.random().toString(36).substring(2, 9),
       userId: currentUid,
@@ -732,7 +781,15 @@ export function useRealtime(roomId: string) {
     channelRef.current?.send({
       type: 'broadcast',
       event: 'snakes_dice_roll',
-      payload: { diceValue, newPosition, nextTurnUserId, hasWon, userId: currentUid },
+      payload: {
+        diceValue,
+        newPosition,
+        nextTurnUserId,
+        hasWon,
+        userId: currentUid,
+        // Include current revision so receivers can order this legacy event
+        revision: useGameStore.getState().snakesState?.revision,
+      },
     });
   }, []);
 
@@ -745,43 +802,79 @@ export function useRealtime(roomId: string) {
     });
   }, []);
 
-  const broadcastAvatarUpdate = useCallback((avatar: string | null) => {
-    // Security: validate before sending
-    if (avatar !== null && !isSafeDataUrl(avatar)) {
-      addLog('[Avatar] Blocked unsafe avatar upload');
-      toast.error('Avatar tidak valid/aman');
-      return;
-    }
-    const currentUid = userIdRef.current || getOrCreateUserId();
-    // Update local store immediately (optimistic) — visible to all after broadcast
-    useGameStore.getState().updatePlayer(currentUid, { avatar: avatar ?? null });
-    // Keep localStorage in sync (source of truth) + notify global presence
-    try {
-      if (avatar) localStorage.setItem('sudoku_avatar', avatar);
-      else localStorage.removeItem('sudoku_avatar');
-      window.dispatchEvent(new Event('avatarUpdated'));
-    } catch {}
-    // Update presence current (so rejoin uses new avatar) — use untrack+track to avoid duplicate presence_ref
-    if (channelRef.current && statusRef.current === 'SUBSCRIBED') {
-      const currentUsername = usernameRef.current || localStorage.getItem('sudoku_username') || 'Player';
-      const ch = channelRef.current;
-      ch.untrack().catch(() => {}).finally(() => {
-        ch.track({
-          user_id: currentUid,
-          username: currentUsername,
-          avatar: avatar ?? null,
-          status: 'online',
-          online_at: new Date().toISOString(),
-        }).catch(() => {});
+  /**
+   * Unified profile update: playerId = stable identity, username/avatar = mutable.
+   * Updates local player, room presence (untrack+track), and broadcasts
+   * `player_profile_update` so every client patches the SAME playerId in place —
+   * no new player record, no userId change, no game/turn/position reset.
+   */
+  const broadcastProfileUpdate = useCallback(
+    (profile: { username?: string; avatar?: string | null }) => {
+      const currentUid = userIdRef.current || getOrCreateUserId();
+      const patch: Partial<Player> = {};
+
+      if (typeof profile.username === 'string') {
+        const clean = profile.username.trim().slice(0, 20);
+        patch.username = clean;
+        try {
+          localStorage.setItem('sudoku_username', clean);
+        } catch {}
+        usernameRef.current = clean;
+      }
+
+      if (profile.avatar !== undefined) {
+        if (profile.avatar !== null && !isSafeDataUrl(profile.avatar)) {
+          addLog('[Profile] Blocked unsafe avatar upload');
+          toast.error('Avatar tidak valid/aman');
+          return;
+        }
+        patch.avatar = profile.avatar;
+        try {
+          if (profile.avatar) localStorage.setItem('sudoku_avatar', profile.avatar);
+          else localStorage.removeItem('sudoku_avatar');
+          window.dispatchEvent(new Event('avatarUpdated'));
+        } catch {}
+      }
+
+      if (Object.keys(patch).length === 0) return;
+
+      // Optimistic local update (same playerId — nothing else resets)
+      useGameStore.getState().updatePlayer(currentUid, patch);
+
+      // Refresh own room presence so presence-based reconciliation agrees
+      // (and late joiners / reconnects see the latest identity).
+      if (channelRef.current && statusRef.current === 'SUBSCRIBED') {
+        const ch = channelRef.current;
+        const nextUsername = patch.username !== undefined ? patch.username : (usernameRef.current ?? '');
+        const nextAvatar = patch.avatar !== undefined ? patch.avatar : getStoredAvatar();
+        ch.untrack().catch(() => {}).finally(() => {
+          ch.track({
+            user_id: currentUid,
+            username: nextUsername,
+            avatar: nextAvatar,
+            status: 'online',
+            online_at: new Date().toISOString(),
+          }).catch(() => {});
+        });
+      }
+
+      // Broadcast to peers (loop-safe: receivers only patch their local store)
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'player_profile_update',
+        payload: {
+          playerId: currentUid,
+          ...(patch.username !== undefined ? { username: patch.username } : {}),
+          ...(patch.avatar !== undefined ? { avatar: patch.avatar } : {}),
+        },
       });
-    }
-    // Broadcast to all peers (realtime without refresh) - loop-safe: receivers only update store
-    channelRef.current?.send({
-      type: 'broadcast',
-      event: 'player_avatar_update',
-      payload: { playerId: currentUid, avatar: avatar ?? null },
-    });
-  }, [addLog]);
+    },
+    [addLog]
+  );
+
+  const broadcastAvatarUpdate = useCallback((avatar: string | null) => {
+    broadcastProfileUpdate({ avatar });
+  }, [broadcastProfileUpdate]);
 
   return {
     broadcastMove,
@@ -795,6 +888,7 @@ export function useRealtime(roomId: string) {
     broadcastSnakesDiceRoll,
     broadcastSnakesState,
     broadcastAvatarUpdate,
+    broadcastProfileUpdate,
     requestState,
     realtimeStatus,
     isTrulyOffline,

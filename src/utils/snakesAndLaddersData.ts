@@ -130,6 +130,7 @@ export function generateInitialSnakesState(
     mines,
     wormholes,
     frozenTurns: {},
+    revision: 1,
   };
 }
 

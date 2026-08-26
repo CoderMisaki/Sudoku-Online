@@ -91,6 +91,7 @@ export interface SnakesState {
   mines: number[]; // Posisi kotak yang berisi ranjau
   wormholes: WormholePair[]; // Pasangan Blackhole -> Whitehole
   frozenTurns: Record<string, number>; // Jumlah turn yang harus dilewati pemain
+  revision: number; // Monotonic sequence untuk ordering state
 }
 
 // Retain alias for backward compatibility if needed

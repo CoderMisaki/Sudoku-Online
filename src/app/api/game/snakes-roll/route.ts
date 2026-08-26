@@ -28,13 +28,14 @@ const snakesStateSchema = z.object({
   currentTurnUserId: z.string().nullable().optional(),
   winnerId: z.string().nullable().optional(),
   winners: z.array(z.string()).optional(),
-  isAnimating: z.boolean().optional(),
   isRolling: z.boolean().optional(),
+  isAnimating: z.boolean().optional(),
   ladders: z.array(ladderSchema).optional(),
   snakes: z.array(snakeSchema).optional(),
   mines: z.array(z.number().int().min(1).max(100)).optional(),
   wormholes: z.array(wormholeSchema).optional(),
   frozenTurns: z.record(z.string(), z.number()).optional(),
+  revision: z.number().int().min(0).optional(),
 });
 
 const schema = z.object({
@@ -119,8 +120,9 @@ export async function POST(request: Request) {
     const mineHit = snakesState.mines?.includes(steppedPos);
     const wormholeHit = snakesState.wormholes?.find((w) => w.blackHole === steppedPos);
 
-    // Use placeholder name; client will replace with real username for display
-    const playerLabel = `Player ${userId.slice(0, 4)}`;
+    // Generic subject only — never fabricate a player name from userId.
+    // The message text stays identical across all clients (sync-safe).
+    const playerLabel = 'Pemain';
 
     if (ladderHit) {
       finalPos = ladderHit.end;
@@ -166,6 +168,9 @@ export async function POST(request: Request) {
       }
     }
 
+    const currentRevision = typeof snakesState.revision === 'number' ? snakesState.revision : 0;
+    const newRevision = currentRevision + 1;
+
     const actionPayload = {
       id: `${userId}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
       userId,
@@ -180,6 +185,28 @@ export async function POST(request: Request) {
       timestamp: Date.now(),
     };
 
+    // Construct authoritative full new state
+    const newSnakesState: SnakesState = {
+      ...snakesState,
+      ...updatedObstacles,
+      diceValue: finalDice,
+      playerPositions: {
+        ...snakesState.playerPositions,
+        [userId]: finalPos,
+      },
+      currentTurnUserId: nextTurnId,
+      winnerId: newWinners[0] || snakesState.winnerId || null,
+      winners: newWinners,
+      frozenTurns: newFrozen,
+      isAnimating: false,
+      isRolling: false,
+      revision: newRevision,
+      // Keep lastAction at top level for broadcast convenience (will be merged)
+    } as SnakesState & { lastAction: typeof actionPayload };
+
+    // Attach lastAction for broadcast (not part of SnakesState type but used as Extended)
+    (newSnakesState as unknown as Record<string, unknown>).lastAction = actionPayload;
+
     return NextResponse.json({
       success: true,
       dice: finalDice,
@@ -193,6 +220,8 @@ export async function POST(request: Request) {
       updatedObstacles,
       actionPayload,
       isExtraTurn: finalDice === 6 && !hasWon && !mineHit,
+      newRevision,
+      newSnakesState,
     });
   } catch (e) {
     console.error('snakes-roll error', e);

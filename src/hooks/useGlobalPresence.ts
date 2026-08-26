@@ -47,8 +47,8 @@ export function useGlobalPresence() {
       if (!last) return;
       let safeAvatar: string | null = null;
       if (typeof last.avatar === 'string' && last.avatar && isSafeDataUrl(last.avatar)) safeAvatar = last.avatar;
-      const name = last.username?.trim() ? last.username.trim().toUpperCase() : 'PLAYER';
-      if (!name) return;
+      // No fake name: empty until the player sets one (still listed online)
+      const name = typeof last.username === 'string' ? last.username.trim().toUpperCase() : '';
       list.push({ id, username: name, avatar: safeAvatar });
     });
     const selfId = userIdRef.current || getOrCreateUserId();
@@ -71,12 +71,13 @@ export function useGlobalPresence() {
 
     const storedName = localStorage.getItem('sudoku_username');
     const currentId = userIdRef.current || getOrCreateUserId();
-    const currentName = usernameRef.current || storedName || 'Player';
+    // Empty name is valid — never fabricate "Player"
+    const currentName = usernameRef.current ?? storedName ?? '';
     const currentAvatar = getStoredAvatar();
 
-    if (!userIdStore || !username) {
+    if (!userIdStore || username === null || username === undefined) {
       try {
-        useGameStore.getState().setUserInfo(currentId, currentName.toUpperCase());
+        useGameStore.getState().setUserInfo(currentId, currentName);
       } catch {}
     }
 
@@ -105,7 +106,7 @@ export function useGlobalPresence() {
         const p = payload as { fromUserId?: string; fromUsername?: string; toUserId?: string; roomId?: string; roomCode?: string };
         const myId = userIdRef.current || getOrCreateUserId();
         if (!p || p.toUserId !== myId) return;
-        const fromName = (p.fromUsername || 'Player').toUpperCase();
+        const fromName = (p.fromUsername ?? '').toUpperCase();
         const code = (p.roomCode || p.roomId || '').toUpperCase();
         if (!code) return;
         const invite: PendingInvite = {
@@ -168,7 +169,7 @@ export function useGlobalPresence() {
   }, [refreshOnlineList]);
 
   useEffect(() => {
-    if (!channelRef.current || !username) return;
+    if (!channelRef.current || username === null || username === undefined) return;
     const currentId = userIdRef.current || getOrCreateUserId();
     const avatar = getStoredAvatar();
     // Use untrack+track to ensure presence is updated not duplicated
@@ -176,7 +177,7 @@ export function useGlobalPresence() {
     ch.untrack().catch(() => {}).finally(() => {
       ch.track({
         user_id: currentId,
-        username: username.toUpperCase(),
+        username: (username ?? '').toUpperCase(),
         avatar,
         online_at: new Date().toISOString(),
       }).catch(() => {});
@@ -188,7 +189,7 @@ export function useGlobalPresence() {
     const handleAvatarChange = () => {
       if (!channelRef.current) return;
       const currentId = userIdRef.current || getOrCreateUserId();
-      const latestName = localStorage.getItem('sudoku_username') || usernameRef.current || 'Player';
+      const latestName = localStorage.getItem('sudoku_username') ?? usernameRef.current ?? '';
       const latestAvatar = getStoredAvatar();
       const ch = channelRef.current;
       ch.untrack().catch(() => {}).finally(() => {
@@ -213,7 +214,7 @@ export function useGlobalPresence() {
 
   const sendInvite = useCallback(async (toUserId: string, roomId: string) => {
     const fromId = userIdRef.current || getOrCreateUserId();
-    const fromName = usernameRef.current || localStorage.getItem('sudoku_username') || 'Player';
+    const fromName = usernameRef.current ?? localStorage.getItem('sudoku_username') ?? '';
     const channel = channelRef.current;
     if (!channel) {
       toast.error('Koneksi realtime belum siap');
