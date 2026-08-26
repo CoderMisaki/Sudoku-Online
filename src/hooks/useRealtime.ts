@@ -72,22 +72,38 @@ export function useRealtime(roomId: string) {
     };
   }, []);
 
-  // Tambahkan useEffect untuk melepas presence saat tab ditutup
+  // Presence cleanup saat tab ditutup — sinkron untuk status disconnect
   useEffect(() => {
     const handleTabClose = () => {
       if (channelRef.current) {
         try {
+          // Supabase presence: untrack akan memicu event 'leave' di client lain
           channelRef.current.untrack();
+        } catch {}
+        // Fallback: coba removeChannel dengan sendBeacon-like (non-blocking)
+        try {
+          // Jangan removeChannel di beforeunload (bisa race), biarkan server timeout
+          // tapi untrack sudah cukup untuk trigger disconnect
+        } catch {}
+      }
+    };
+    const handleVisibilityHide = () => {
+      if (document.visibilityState === 'hidden' && channelRef.current) {
+        try {
+          // Untuk mobile/tab yang di-background, tetap jaga presence
+          // tidak untrack di hidden, hanya di pagehide/beforeunload
         } catch {}
       }
     };
 
     window.addEventListener("beforeunload", handleTabClose);
     window.addEventListener("pagehide", handleTabClose);
+    document.addEventListener("visibilitychange", handleVisibilityHide);
 
     return () => {
       window.removeEventListener("beforeunload", handleTabClose);
       window.removeEventListener("pagehide", handleTabClose);
+      document.removeEventListener("visibilitychange", handleVisibilityHide);
     };
   }, []);
 
@@ -218,9 +234,10 @@ export function useRealtime(roomId: string) {
 
         if (current.status === 'left' && !isTracked) return;
 
-        const latestUsername = presences?.[0]?.username;
-        const rawAvatar = (presences?.[0] as Record<string, unknown> | undefined)?.avatar as unknown;
-        const hasAvatarField = presences?.[0] && 'avatar' in (presences[0] as Record<string, unknown>);
+        const lastPresence = presences?.[presences.length - 1] as Record<string, unknown> | undefined;
+        const latestUsername = (lastPresence as { username?: string } | undefined)?.username;
+        const rawAvatar = (lastPresence as Record<string, unknown> | undefined)?.avatar as unknown;
+        const hasAvatarField = lastPresence && 'avatar' in (lastPresence as Record<string, unknown>);
         // Security: validate avatar DataURL from presence (untrusted)
         let latestAvatar: string | null | undefined = undefined;
         if (hasAvatarField) {
@@ -688,16 +705,26 @@ export function useRealtime(roomId: string) {
   const broadcastLeaveRoom = useCallback(async () => {
     const currentUid = userIdRef.current || getOrCreateUserId();
     useGameStore.getState().updatePlayer(currentUid, { status: 'left' });
-    await channelRef.current?.send({
-      type: 'broadcast',
-      event: 'player_leave_room',
-      payload: { userId: currentUid },
-    });
+    // Kirim broadcast tanpa await ack (fire-and-forget) untuk near-no-delay
+    try {
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'player_leave_room',
+        payload: { userId: currentUid },
+      });
+    } catch {}
+    // Beri jeda singkat agar broadcast sempat terkirim sebelum untrack
+    await new Promise((r) => setTimeout(r, 150));
     if (channelRef.current) {
-      await channelRef.current.untrack();
-      supabase.removeChannel(channelRef.current);
+      try {
+        await channelRef.current.untrack();
+      } catch {}
+      try {
+        supabase.removeChannel(channelRef.current);
+      } catch {}
       channelRef.current = null;
     }
+    statusRef.current = 'CLOSED';
   }, []);
 
   const broadcastSnakesDiceRoll = useCallback((diceValue: number, newPosition: number, nextTurnUserId: string, hasWon: boolean) => {
@@ -726,23 +753,27 @@ export function useRealtime(roomId: string) {
       return;
     }
     const currentUid = userIdRef.current || getOrCreateUserId();
-    // Update local store immediately (optimistic)
+    // Update local store immediately (optimistic) — visible to all after broadcast
     useGameStore.getState().updatePlayer(currentUid, { avatar: avatar ?? null });
-    // Keep localStorage in sync (source of truth)
+    // Keep localStorage in sync (source of truth) + notify global presence
     try {
       if (avatar) localStorage.setItem('sudoku_avatar', avatar);
       else localStorage.removeItem('sudoku_avatar');
+      window.dispatchEvent(new Event('avatarUpdated'));
     } catch {}
-    // Update presence current (so rejoin uses new avatar)
+    // Update presence current (so rejoin uses new avatar) — use untrack+track to avoid duplicate presence_ref
     if (channelRef.current && statusRef.current === 'SUBSCRIBED') {
       const currentUsername = usernameRef.current || localStorage.getItem('sudoku_username') || 'Player';
-      channelRef.current.track({
-        user_id: currentUid,
-        username: currentUsername,
-        avatar: avatar ?? null,
-        status: 'online',
-        online_at: new Date().toISOString(),
-      }).catch(() => {});
+      const ch = channelRef.current;
+      ch.untrack().catch(() => {}).finally(() => {
+        ch.track({
+          user_id: currentUid,
+          username: currentUsername,
+          avatar: avatar ?? null,
+          status: 'online',
+          online_at: new Date().toISOString(),
+        }).catch(() => {});
+      });
     }
     // Broadcast to all peers (realtime without refresh) - loop-safe: receivers only update store
     channelRef.current?.send({

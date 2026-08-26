@@ -171,13 +171,45 @@ export function useGlobalPresence() {
     if (!channelRef.current || !username) return;
     const currentId = userIdRef.current || getOrCreateUserId();
     const avatar = getStoredAvatar();
-    channelRef.current.track({
-      user_id: currentId,
-      username: username.toUpperCase(),
-      avatar,
-      online_at: new Date().toISOString(),
-    }).catch(() => {});
+    // Use untrack+track to ensure presence is updated not duplicated
+    const ch = channelRef.current;
+    ch.untrack().catch(() => {}).finally(() => {
+      ch.track({
+        user_id: currentId,
+        username: username.toUpperCase(),
+        avatar,
+        online_at: new Date().toISOString(),
+      }).catch(() => {});
+    });
   }, [username]);
+
+  // Listen for avatar changes via localStorage + custom event (from ProfileWidget)
+  useEffect(() => {
+    const handleAvatarChange = () => {
+      if (!channelRef.current) return;
+      const currentId = userIdRef.current || getOrCreateUserId();
+      const latestName = localStorage.getItem('sudoku_username') || usernameRef.current || 'Player';
+      const latestAvatar = getStoredAvatar();
+      const ch = channelRef.current;
+      ch.untrack().catch(() => {}).finally(() => {
+        ch.track({
+          user_id: currentId,
+          username: latestName.toUpperCase(),
+          avatar: latestAvatar,
+          online_at: new Date().toISOString(),
+        }).catch(() => {});
+      });
+      if (ch) refreshOnlineList(ch);
+    };
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'sudoku_avatar' || e.key === 'sudoku_username') handleAvatarChange();
+    });
+    window.addEventListener('avatarUpdated' as unknown as string, handleAvatarChange);
+    return () => {
+      window.removeEventListener('storage', handleAvatarChange as unknown as EventListener);
+      window.removeEventListener('avatarUpdated' as unknown as string, handleAvatarChange);
+    };
+  }, [refreshOnlineList]);
 
   const sendInvite = useCallback(async (toUserId: string, roomId: string) => {
     const fromId = userIdRef.current || getOrCreateUserId();

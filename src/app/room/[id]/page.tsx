@@ -460,12 +460,8 @@ export default function RoomPage() {
   const leaveRoom = async () => {
     if (isLeaving) return;
     setIsLeaving(true);
-
     try {
-      await Promise.race([
-        broadcastLeaveRoom(),
-        new Promise((resolve) => setTimeout(resolve, 300))
-      ]);
+      await broadcastLeaveRoom();
     } catch (err) {
       console.warn('Leave room non-blocking error:', err);
     } finally {
@@ -474,7 +470,7 @@ export default function RoomPage() {
       resetGame();
       try {
         useGameStore.getState().clearPersistedStorage();
-      } catch { /* ignore error */ }
+      } catch {}
       router.replace('/');
     }
   };
@@ -731,10 +727,12 @@ export default function RoomPage() {
               {Object.values(room?.players || {}).map(p => (
                 <div key={p.id} className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <div
-                      className={`w-2.5 h-2.5 rounded-full ${p.status !== 'online' ? 'opacity-40' : ''}`}
-                      style={{ backgroundColor: p.status === 'online' ? p.color : '#9ca3af' }}
-                    />
+                    {p.avatar ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={p.avatar} alt={p.username} className="w-6 h-6 rounded-full object-cover border border-border shrink-0" />
+                    ) : (
+                      <div className={`w-2.5 h-2.5 rounded-full ${p.status !== 'online' ? 'opacity-40' : ''} shrink-0`} style={{ backgroundColor: p.status === 'online' ? p.color : '#9ca3af' }} />
+                    )}
                     <span className={`font-medium ${p.status !== 'online' ? 'line-through text-secondary/60' : ''}`}>
                       {p.username || 'Player'}
                     </span>

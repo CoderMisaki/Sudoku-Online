@@ -107,13 +107,12 @@ export const ProfileWidget: React.FC<ProfileWidgetProps> = ({ onAvatarUpdate, co
       }
       useGameStore.getState().updatePlayer(uid, { avatar: finalAvatar });
     }
-    // Broadcast realtime if handler provided
+    // Broadcast realtime if handler provided (room)
     if (onAvatarUpdate) {
       onAvatarUpdate(finalAvatar);
-    } else if (userId) {
-      // Fallback: at least update presence via direct store? No broadcast available on home page
-      // Home page just needs localStorage
     }
+    // Always notify global presence (for OnlinePlayersBox) — even on home page
+    try { window.dispatchEvent(new Event('avatarUpdated')); } catch {}
     toast.success(finalAvatar ? 'Avatar disimpan!' : 'Avatar dihapus');
     setIsEditorOpen(false);
   };

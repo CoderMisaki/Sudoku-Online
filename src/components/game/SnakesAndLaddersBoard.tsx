@@ -171,15 +171,17 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     return activePlayerIdsKey ? activePlayerIdsKey.split(',') : EMPTY_ARRAY;
   }, [activePlayerIdsKey]);
 
+  // Hanya host yang generate board awal untuk sinkronisasi 100% — guest menunggu broadcast dari host
   useEffect(() => {
     if (!snakesState || !snakesState.ladders || snakesState.ladders.length === 0) {
-      if (!isInitializedRef.current && activePlayerIds.length > 0) {
+      if (!isInitializedRef.current && activePlayerIds.length > 0 && room?.hostId === userId) {
         isInitializedRef.current = true;
         const initial = generateInitialSnakesState(room?.difficulty || 'medium', activePlayerIds);
         updateSnakesState(initial);
+        if (broadcastSnakesState) broadcastSnakesState(initial as ExtendedSnakesState);
       }
     }
-  }, [snakesState, room?.difficulty, activePlayerIds, updateSnakesState]);
+  }, [snakesState, room?.difficulty, activePlayerIds, updateSnakesState, broadcastSnakesState, room?.hostId, userId]);
 
   // Player baru join -> host otomatis taruh di kotak 1 (tanpa tunggu giliran)
   const isAnimatingRef = useRef(false);
