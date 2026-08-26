@@ -53,10 +53,7 @@ async function makeMove(page) {
 }
 
 (async () => {
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  });
+  const browser = await chromium.launch({ headless: true });
 
   const MODES = ['collaborative', 'classic', 'competition', 'race', 'zen'];
 

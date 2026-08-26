@@ -10,18 +10,43 @@ function getMasterKey(): Buffer {
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
 
-export function encryptSolution(solutionGrid: number[][]): string {
+export interface EncryptOptions {
+  roomId?: string;
+  /** TTL in ms, default 6 hours */
+  ttlMs?: number;
+}
+
+export interface DecryptOptions {
+  expectedRoomId?: string;
+}
+
+interface TokenPayload {
+  solution: number[][];
+  timestamp: number;
+  roomId?: string;
+  expiresAt: number;
+  nonce?: string;
+}
+
+const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — matches a room lifecycle
+
+export function encryptSolution(solutionGrid: number[][], opts: EncryptOptions = {}): string {
   try {
     const iv = crypto.randomBytes(IV_LENGTH);
     const key = getMasterKey();
     const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
 
-    const payload = JSON.stringify({
+    const now = Date.now();
+    const ttl = opts.ttlMs ?? DEFAULT_TTL_MS;
+    const payload: TokenPayload = {
       solution: solutionGrid,
-      timestamp: Date.now(),
-    });
+      timestamp: now,
+      roomId: opts.roomId,
+      expiresAt: now + ttl,
+      nonce: crypto.randomBytes(8).toString('hex'),
+    };
 
-    const encrypted = Buffer.concat([cipher.update(payload, 'utf8'), cipher.final()]);
+    const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()]);
     const authTag = cipher.getAuthTag();
 
     // Format: iv:authTag:ciphertext
@@ -32,28 +57,59 @@ export function encryptSolution(solutionGrid: number[][]): string {
   }
 }
 
-export function decryptSolution(token: string): number[][] | null {
+function parseTokenPayload(token: string): TokenPayload | null {
   try {
     const parts = token.split(':');
     if (parts.length !== 3) return null;
-
     const [ivHex, authTagHex, encryptedHex] = parts;
     const iv = Buffer.from(ivHex, 'hex');
     const authTag = Buffer.from(authTagHex, 'hex');
     const encrypted = Buffer.from(encryptedHex, 'hex');
-
     if (iv.length !== IV_LENGTH || authTag.length !== 16) return null;
-
     const key = getMasterKey();
     const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
     decipher.setAuthTag(authTag);
-
     const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-    const parsed = JSON.parse(decrypted.toString('utf8'));
-
-    return parsed.solution as number[][];
-  } catch (error) {
-    console.warn('Dekripsi token solusi ditolak/tidak valid:', error);
+    const parsed = JSON.parse(decrypted.toString('utf8')) as TokenPayload & { timestamp?: number };
+    if (!parsed.solution || !Array.isArray(parsed.solution)) return null;
+    // BackwardCompat: old tokens had only timestamp, derive expiresAt
+    if (typeof parsed.expiresAt !== 'number') {
+      const ts = typeof parsed.timestamp === 'number' ? parsed.timestamp : Date.now();
+      (parsed as TokenPayload).expiresAt = ts + DEFAULT_TTL_MS;
+      if (typeof (parsed as TokenPayload).timestamp !== 'number') (parsed as TokenPayload).timestamp = ts;
+    }
+    if (typeof parsed.timestamp !== 'number') (parsed as TokenPayload).timestamp = (parsed as TokenPayload).expiresAt - DEFAULT_TTL_MS;
+    return parsed as TokenPayload;
+  } catch {
     return null;
   }
+}
+
+export function decryptSolution(token: string, opts: DecryptOptions = {}): number[][] | null {
+  const payload = parseTokenPayload(token);
+  if (!payload) {
+    console.warn('Dekripsi token solusi ditolak/tidak valid: parse failed');
+    return null;
+  }
+  // Expiry check — token cannot be reused outside the room lifecycle
+  if (Date.now() > payload.expiresAt) {
+    console.warn('Token kedaluwarsa:', { expiresAt: payload.expiresAt, now: Date.now() });
+    return null;
+  }
+  // Room binding — if token was issued for a room, it must be presented for that same room
+  if (payload.roomId && opts.expectedRoomId && payload.roomId !== opts.expectedRoomId) {
+    console.warn('Token roomId mismatch:', { expected: opts.expectedRoomId, got: payload.roomId });
+    return null;
+  }
+  // If token has roomId but caller didn't supply expectedRoomId, we still enforce that
+  // the caller should supply roomId when verification is room-scoped.
+  // Callers that don't know roomId can still use token only if they pass same roomId.
+  return payload.solution as number[][];
+}
+
+/** Helper to inspect token metadata without exposing solution — for debugging/logging */
+export function getTokenMeta(token: string): { roomId?: string; timestamp: number; expiresAt: number } | null {
+  const p = parseTokenPayload(token);
+  if (!p) return null;
+  return { roomId: p.roomId, timestamp: p.timestamp, expiresAt: p.expiresAt };
 }

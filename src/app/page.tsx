@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useGameStore } from '@/store/gameStore';
 import { getOrCreateUserId } from '@/utils/uuid';
@@ -9,8 +9,12 @@ import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 import { Modal } from '@/components/ui/Modal';
 import { ProfileWidget } from '@/components/profile/ProfileWidget';
+import { ErrorLogPanel } from '@/components/admin/ErrorLogPanel';
+import { OnlinePlayersBox } from '@/components/online/OnlinePlayersBox';
+import { initErrorLogger, addErrorLog } from '@/utils/errorLogger';
 import { Difficulty, GameMode } from '@/types/game';
-import { Play, Users, ClipboardPaste } from 'lucide-react';
+import { Play, Users, ClipboardPaste, Lock, Settings } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 export default function Home() {
   const router = useRouter();
@@ -19,8 +23,7 @@ export default function Home() {
 
   const clearRoomStateBeforeNavigate = () => {
     resetGame();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (useGameStore as any).persist?.clearStorage?.();
+    useGameStore.getState().clearPersistedStorage();
   };
 
   const [username, setUsername] = useState('');
@@ -32,6 +35,50 @@ export default function Home() {
   const [maxPlayers, setMaxPlayers] = useState(4);
   const [joinCode, setJoinCode] = useState('');
   const [error, setError] = useState('');
+
+  // Admin gate — password never in client bundle, verified via /api/admin/verify
+  const [isAdminVerified, setIsAdminVerified] = useState(false);
+  const [adminPasswordModalOpen, setAdminPasswordModalOpen] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminPasswordError, setAdminPasswordError] = useState('');
+  const [adminPendingAction, setAdminPendingAction] = useState<null | 'create'>(null);
+  const [isVerifyingAdmin, setIsVerifyingAdmin] = useState(false);
+  const isAdminUser = username.trim().toUpperCase() === 'ADMIN';
+
+  // Theme — mengikuti localStorage (sudoku_theme)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+  const applyTheme = useCallback((newTheme: 'light' | 'dark' | 'system') => {
+    if (newTheme === 'dark') {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
+    } else if (newTheme === 'light') {
+      document.documentElement.classList.add('light');
+      document.documentElement.classList.remove('dark');
+    } else {
+      document.documentElement.classList.remove('dark', 'light');
+    }
+  }, []);
+  const toggleTheme = () => {
+    const newTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+    localStorage.setItem('sudoku_theme', newTheme);
+    applyTheme(newTheme);
+  };
+
+  useEffect(() => {
+    initErrorLogger();
+    try {
+      const verified = sessionStorage.getItem('sudoku_admin_verified') === '1';
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sessionStorage to state sync on mount is intentional
+      if (verified) setIsAdminVerified(true);
+    } catch {}
+    const storedTheme = (localStorage.getItem('sudoku_theme') as 'light' | 'dark' | 'system') || 'system';
+    setTimeout(() => {
+      setTheme(storedTheme);
+      applyTheme(storedTheme);
+    }, 0);
+  }, [applyTheme]);
 
   useEffect(() => {
     const storedName = localStorage.getItem('sudoku_username') || '';
@@ -54,6 +101,15 @@ export default function Home() {
     }
     getOrCreateUserId();
   }, [setUserInfo]);
+
+  // Clear admin verified if username changes away from ADMIN
+  useEffect(() => {
+    if (username.trim().toUpperCase() !== 'ADMIN' && isAdminVerified) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing verified state when username leaves ADMIN is intentional
+      setIsAdminVerified(false);
+      try { sessionStorage.removeItem('sudoku_admin_verified'); } catch {}
+    }
+  }, [username, isAdminVerified]);
 
   const handleSaveUsername = (name: string) => {
     const upper = name.toUpperCase();
@@ -84,28 +140,75 @@ export default function Home() {
     setIsJoinModalOpen(true);
   };
 
-  const handleCreateRoom = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!username.trim()) {
-      setError('Masukkan nama terlebih dahulu.');
-      return;
-    }
-
+  const doCreateRoom = () => {
+    // actual room creation after Admin verification passed
     handleSaveUsername(username);
     clearRoomStateBeforeNavigate();
-
-    // Generate kode room 5 karakter
     const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
     sessionStorage.setItem(`sudoku_host_room_${roomId}`, '1');
-
     sessionStorage.setItem(`sudoku_room_config_${roomId}`, JSON.stringify({
       isHost: true,
       difficulty,
       mode,
       maxPlayers
     }));
-
     router.push(`/room/${roomId}`);
+  };
+
+  const handleCreateRoom = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username.trim()) {
+      setError('Masukkan nama terlebih dahulu.');
+      return;
+    }
+    // Admin gate: require password verification before creating room
+    if (username.trim().toUpperCase() === 'ADMIN' && !isAdminVerified) {
+      setAdminPendingAction('create');
+      setAdminPassword('');
+      setAdminPasswordError('');
+      setAdminPasswordModalOpen(true);
+      return;
+    }
+    doCreateRoom();
+  };
+
+  const handleAdminPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminPassword) {
+      setAdminPasswordError('Masukkan password Admin');
+      return;
+    }
+    setIsVerifyingAdmin(true);
+    setAdminPasswordError('');
+    try {
+      const res = await fetch('/api/admin/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'ADMIN', password: adminPassword }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setIsAdminVerified(true);
+        try { sessionStorage.setItem('sudoku_admin_verified', '1'); } catch {}
+        toast.success('Admin terverifikasi');
+        setAdminPasswordModalOpen(false);
+        setAdminPassword('');
+        if (adminPendingAction === 'create') {
+          doCreateRoom();
+        }
+        setAdminPendingAction(null);
+      } else {
+        const msg = data.error || 'Password salah';
+        setAdminPasswordError(msg);
+        addErrorLog({ level: 'warn', message: `Admin verify failed: ${msg}`, source: 'admin-gate' });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Gagal verifikasi';
+      setAdminPasswordError(msg);
+      addErrorLog({ level: 'error', message: `Admin verify error: ${msg}`, source: 'admin-gate' });
+    } finally {
+      setIsVerifyingAdmin(false);
+    }
   };
 
   const handlePasteCode = async () => {
@@ -143,9 +246,13 @@ export default function Home() {
 
   return (
     <div className="flex flex-col flex-1 items-center justify-center bg-background text-foreground p-6 relative">
-      {/* Profile avatar - pojok kanan atas, tetap terlihat sebelum & sesudah masuk game */}
-      <div className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20">
+      {/* Top-right: settings + error logs (Admin) di sebelah photo profile — semua dari localStorage */}
+      <div className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20 flex items-center gap-1.5 sm:gap-2">
+        {isAdminUser && isAdminVerified && <ErrorLogPanel isAdmin={true} />}
         <ProfileWidget />
+        <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(true)} className="p-1.5 h-8 w-8" aria-label="Pengaturan">
+          <Settings className="w-4 h-4" />
+        </Button>
       </div>
       <main className="flex flex-col items-center max-w-md w-full gap-8 text-center">
         <div className="space-y-3">
@@ -189,6 +296,11 @@ export default function Home() {
             </Button>
           </div>
         </Card>
+
+        {/* Player Online — realtime, ada di halaman pertama */}
+        <div className="w-full">
+          <OnlinePlayersBox variant="lobby" />
+        </div>
       </main>
 
       {/* Create Room Modal */}
@@ -300,6 +412,73 @@ export default function Home() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Admin Password Modal — hanya untuk username ADMIN */}
+      <Modal
+        isOpen={adminPasswordModalOpen}
+        onClose={() => {
+          setAdminPasswordModalOpen(false);
+          setAdminPassword('');
+          setAdminPasswordError('');
+          setAdminPendingAction(null);
+        }}
+        title="Verifikasi Admin"
+      >
+        <form onSubmit={handleAdminPasswordSubmit} className="space-y-4">
+          <p className="text-xs text-secondary">
+            Username <b>ADMIN</b> memerlukan password untuk membuat room.
+          </p>
+          <div>
+            <label className="text-sm font-medium block mb-1.5">Password Admin</label>
+            <div className="relative">
+              <Input
+                type="password"
+                placeholder="Masukkan password Admin"
+                value={adminPassword}
+                onChange={(e) => {
+                  setAdminPassword(e.target.value);
+                  setAdminPasswordError('');
+                }}
+                error={adminPasswordError || undefined}
+                autoComplete="off"
+              />
+              <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-secondary pointer-events-none" />
+            </div>
+          </div>
+          <div className="pt-2 flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              fullWidth
+              onClick={() => {
+                setAdminPasswordModalOpen(false);
+                setAdminPassword('');
+                setAdminPasswordError('');
+                setAdminPendingAction(null);
+              }}
+            >
+              Batal
+            </Button>
+            <Button type="submit" fullWidth disabled={isVerifyingAdmin}>
+              {isVerifyingAdmin ? 'Verifikasi...' : 'Verifikasi'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Settings">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Tema Gelap (Dark Mode)</span>
+            <Button variant="outline" size="sm" onClick={toggleTheme}>
+              {theme === 'dark' ? 'Aktif' : 'Nonaktif'}
+            </Button>
+          </div>
+          <div className="flex justify-end pt-4 border-t border-border">
+            <Button onClick={() => setIsSettingsOpen(false)}>Close</Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

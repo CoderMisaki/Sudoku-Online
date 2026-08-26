@@ -1,5 +1,4 @@
 "use client";
-/* eslint-disable react-hooks/set-state-in-effect, react-hooks/immutability, react-hooks/refs, react-hooks/exhaustive-deps */
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -9,7 +8,6 @@ import { Dices, Trophy, SkipForward } from 'lucide-react';
 import {
   getTileCoordinates,
   generateInitialSnakesState,
-  relocateTriggeredItem,
 } from '@/utils/snakesAndLaddersData';
 import { SnakesState, Player, SnakeItem as Snake, WormholePair as Wormhole } from '@/types/game';
 import toast from 'react-hot-toast';
@@ -184,6 +182,13 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   }, [snakesState, room?.difficulty, activePlayerIds, updateSnakesState]);
 
   // Player baru join -> host otomatis taruh di kotak 1 (tanpa tunggu giliran)
+  const isAnimatingRef = useRef(false);
+  const lastProcessedPosRef = useRef<Record<string, number>>({});
+  const snakesStateRef = useRef(snakesState);
+  useEffect(() => {
+    snakesStateRef.current = snakesState;
+  }, [snakesState]);
+
   useEffect(() => {
     if (!snakesState || !room || snakesState.isAnimating || isAnimatingRef.current) return;
     const serverPos = snakesState.playerPositions || {};
@@ -192,7 +197,9 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     const isAuthority = room.hostId === userId;
     if (!isAuthority) return;
     const nextPositions = { ...serverPos };
-    missing.forEach((pid) => { nextPositions[pid] = 1; });
+    missing.forEach((pid) => {
+      nextPositions[pid] = 1;
+    });
     const nextState: ExtendedSnakesState = { ...snakesState, playerPositions: nextPositions };
     updateSnakesState(nextState);
     if (broadcastSnakesState) broadcastSnakesState(nextState);
@@ -207,11 +214,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const [disappearingSnakeId, setDisappearingSnakeId] = useState<string | null>(null);
   const [relocatingWormholeId, setRelocatingWormholeId] = useState<string | null>(null);
   const [hopTick, setHopTick] = useState<Record<string, number>>({});
-
-  const isAnimatingRef = useRef(false);
-  const lastProcessedPosRef = useRef<Record<string, number>>({});
-  const snakesStateRef = useRef(snakesState);
-  useEffect(() => { snakesStateRef.current = snakesState; }, [snakesState]);
 
   const serverPositions = snakesState?.playerPositions ?? EMPTY_POSITIONS;
   const frozenTurns = snakesState?.frozenTurns ?? EMPTY_FROZEN;
@@ -233,12 +235,29 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     return unfinishedPlayerIds.length === 0 || winners.length === activePlayerIds.length;
   }, [activePlayerIds.length, unfinishedPlayerIds.length, winners.length]);
 
+  // Watchdog: if isAnimating stays true >5s (e.g. roller disconnected mid-animation), reset to avoid deadlock
+  useEffect(() => {
+    if (!snakesState?.isAnimating) return;
+    const timer = setTimeout(() => {
+      if (snakesStateRef.current?.isAnimating) {
+        isAnimatingRef.current = false;
+        setIsRollingLocal(false);
+        const fallback = { ...snakesStateRef.current, isAnimating: false } as ExtendedSnakesState;
+        updateSnakesState(fallback);
+        if (broadcastSnakesState) broadcastSnakesState(fallback);
+        toast.error('Animasi ter-reset (timeout 5s) — koneksi roller mungkin terputus.');
+      }
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [snakesState?.isAnimating, updateSnakesState, broadcastSnakesState]);
+
   // Keep visualPositions in sync with server when no animation is running
   useEffect(() => {
     if (!snakesState?.playerPositions) return;
     if (snakesState.isAnimating || isAnimatingRef.current) return;
     const isNewGame = (!snakesState.winners || snakesState.winners.length === 0) && !snakesState.winnerId;
     if (isNewGame) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync server state to visual state is intentional (new game reset)
       setVisualPositions(snakesState.playerPositions);
       lastProcessedPosRef.current = { ...snakesState.playerPositions };
       setTokenOverrides({});
@@ -247,7 +266,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       setActionStatus(null);
       return;
     }
-    // Tambah player baru otomatis di kotak 1 tanpa tunggu jalan
     setVisualPositions((prev) => {
       const next = { ...prev };
       let changed = false;
@@ -261,7 +279,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           changed = true;
         }
       }
-      // Hapus visual untuk player yang sudah left (optional, biar bersih)
       for (const pid of Object.keys(next)) {
         if (!serverPos[pid] && !players[pid]) {
           delete next[pid];
@@ -269,7 +286,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
           changed = true;
         }
       }
-      // Cold sync kalau masih kosong
       if (!changed && Object.keys(prev).length === 0 && Object.keys(serverPos).length > 0) {
         return { ...serverPos };
       }
@@ -280,159 +296,151 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const isAlreadyFinished = Boolean(userId && winners.includes(userId));
   const currentTurn = snakesState?.currentTurnUserId || activePlayerIds[0];
   const isMyTurn = currentTurn === userId;
-  const isBoardAnimating = Boolean(snakesState?.isAnimating || isAnimatingRef.current);
+  const isBoardAnimating = Boolean(snakesState?.isAnimating);
 
   // Pipeline Animasi Lengkap (Sinkron di Semua Player) - SMOOTH, NO BOUNCE, LOW MS
-  const animatePath = useCallback(async (
-    targetUserId: string,
-    startPos: number,
-    steppedPos: number,
-    finalPos: number,
-    specialHit: {
-      type?: 'snake' | 'wormhole' | 'ladder' | 'mine';
-      snakeObj?: Snake;
-      wormholeObj?: Wormhole;
-    },
-    eventLabel?: string,
-    onComplete?: () => void
-  ) => {
-    isAnimatingRef.current = true;
-    let curr = startPos;
-    // Pelanin sedikit step-by-step (sebelumnya 110ms) biar lebih kebaca
-    const stepIntervalMs = 160;
+  const animatePath = useCallback(
+    async (
+      targetUserId: string,
+      startPos: number,
+      steppedPos: number,
+      finalPos: number,
+      specialHit: {
+        type?: 'snake' | 'wormhole' | 'ladder' | 'mine';
+        snakeObj?: Snake;
+        wormholeObj?: Wormhole;
+      },
+      eventLabel?: string,
+      onComplete?: () => void
+    ) => {
+      isAnimatingRef.current = true;
+      let curr = startPos;
+      const stepIntervalMs = 130;
 
-    // 1. Bergerak kotak demi kotak sampai kotak pendaratan dadu
-    while (curr !== steppedPos) {
-      curr += steppedPos > curr ? 1 : -1;
-      setVisualPositions((prev) => ({ ...prev, [targetUserId]: curr }));
-      // trigger subtle hop per step
-      setHopTick((prev) => ({ ...prev, [targetUserId]: (prev[targetUserId] || 0) + 1 }));
-      await new Promise((r) => setTimeout(r, stepIntervalMs));
-    }
+      while (curr !== steppedPos) {
+        curr += steppedPos > curr ? 1 : -1;
+        setVisualPositions((prev) => ({ ...prev, [targetUserId]: curr }));
+        setHopTick((prev) => ({ ...prev, [targetUserId]: (prev[targetUserId] || 0) + 1 }));
+        await new Promise((r) => setTimeout(r, stepIntervalMs));
+      }
 
-    if (eventLabel) {
-      setActionStatus(eventLabel);
-      await new Promise((r) => setTimeout(r, 90));
-    }
+      if (eventLabel) {
+        setActionStatus(eventLabel);
+        await new Promise((r) => setTimeout(r, 63));
+      }
 
-    // 2. DIMAKAN ULAR - dipelanin (sebelumnya 14ms/point & 220ms fade)
-    if (specialHit.type === 'snake' && specialHit.snakeObj) {
-      const sObj = specialHit.snakeObj;
-      const headCoords = getTileCoordinates(sObj.head);
-      const tailCoords = getTileCoordinates(sObj.tail);
-      const currentSnakes = snakesStateRef.current?.snakes || [];
-      const snakeIdx = currentSnakes.findIndex((s) => s.id === sObj.id);
-      const splinePoints = getSnakePoints(headCoords, tailCoords, (snakeIdx >= 0 ? snakeIdx : 0) + 1, 20);
+      if (specialHit.type === 'snake' && specialHit.snakeObj) {
+        const sObj = specialHit.snakeObj;
+        const headCoords = getTileCoordinates(sObj.head);
+        const tailCoords = getTileCoordinates(sObj.tail);
+        const currentSnakes = snakesStateRef.current?.snakes || [];
+        const snakeIdx = currentSnakes.findIndex((s) => s.id === sObj.id);
+        const splinePoints = getSnakePoints(headCoords, tailCoords, (snakeIdx >= 0 ? snakeIdx : 0) + 1, 20);
 
-      for (let i = 0; i < splinePoints.length; i++) {
-        const pt = splinePoints[i];
+        for (let i = 0; i < splinePoints.length; i++) {
+          const pt = splinePoints[i];
+          setTokenOverrides((prev) => ({
+            ...prev,
+            [targetUserId]: {
+              x: pt.x,
+              y: pt.y,
+              scale: 0.92,
+              rotate: 0,
+              opacity: 1,
+            },
+          }));
+          await new Promise((r) => setTimeout(r, 15));
+        }
+
+        setTokenOverrides((prev) => {
+          const copy = { ...prev };
+          delete copy[targetUserId];
+          return copy;
+        });
+        setVisualPositions((prev) => ({ ...prev, [targetUserId]: sObj.tail }));
+
+        setDisappearingSnakeId(sObj.id);
+        await new Promise((r) => setTimeout(r, 238));
+        setDisappearingSnakeId(null);
+      } else if (specialHit.type === 'wormhole' && specialHit.wormholeObj) {
+        const wObj = specialHit.wormholeObj;
+        const bhCoords = getTileCoordinates(wObj.blackHole);
+        const whCoords = getTileCoordinates(wObj.whiteHole);
+
+        for (let step = 1; step <= 8; step++) {
+          const progress = step / 8;
+          setTokenOverrides((prev) => ({
+            ...prev,
+            [targetUserId]: {
+              x: bhCoords.x,
+              y: bhCoords.y,
+              scale: 1 - progress * 0.9,
+              rotate: progress * 360,
+              opacity: 1 - progress * 0.7,
+            },
+          }));
+          await new Promise((r) => setTimeout(r, 13));
+        }
+
+        await new Promise((r) => setTimeout(r, 60));
+
+        for (let step = 1; step <= 8; step++) {
+          const progress = step / 8;
+          setTokenOverrides((prev) => ({
+            ...prev,
+            [targetUserId]: {
+              x: whCoords.x,
+              y: whCoords.y,
+              scale: 0.2 + progress * 0.8,
+              rotate: (1 - progress) * -180,
+              opacity: 0.3 + progress * 0.7,
+            },
+          }));
+          await new Promise((r) => setTimeout(r, 13));
+        }
+
+        setTokenOverrides((prev) => {
+          const copy = { ...prev };
+          delete copy[targetUserId];
+          return copy;
+        });
+        setVisualPositions((prev) => ({ ...prev, [targetUserId]: wObj.whiteHole }));
+
+        setRelocatingWormholeId(wObj.id);
+        await new Promise((r) => setTimeout(r, 165));
+        setRelocatingWormholeId(null);
+      } else if (finalPos !== steppedPos) {
+        await new Promise((r) => setTimeout(r, 63));
+        const finalCoords = getTileCoordinates(finalPos);
         setTokenOverrides((prev) => ({
           ...prev,
           [targetUserId]: {
-            x: pt.x,
-            y: pt.y,
-            scale: 0.92,
+            x: finalCoords.x,
+            y: finalCoords.y,
+            scale: 1,
             rotate: 0,
             opacity: 1,
           },
         }));
-        await new Promise((r) => setTimeout(r, 22));
+        await new Promise((r) => setTimeout(r, 210));
+        setTokenOverrides((prev) => {
+          const copy = { ...prev };
+          delete copy[targetUserId];
+          return copy;
+        });
+        setVisualPositions((prev) => ({ ...prev, [targetUserId]: finalPos }));
+        await new Promise((r) => setTimeout(r, 70));
       }
 
-      setTokenOverrides((prev) => {
-        const copy = { ...prev };
-        delete copy[targetUserId];
-        return copy;
-      });
-      setVisualPositions((prev) => ({ ...prev, [targetUserId]: sObj.tail }));
+      lastProcessedPosRef.current[targetUserId] = finalPos;
+      setActionStatus(null);
+      isAnimatingRef.current = false;
+      if (onComplete) onComplete();
+    },
+    []
+  );
 
-      setDisappearingSnakeId(sObj.id);
-      await new Promise((r) => setTimeout(r, 340));
-      setDisappearingSnakeId(null);
-    }
-    // 3. BLACK HOLE -> WHITE HOLE (Vortex FAST)
-    else if (specialHit.type === 'wormhole' && specialHit.wormholeObj) {
-      const wObj = specialHit.wormholeObj;
-      const bhCoords = getTileCoordinates(wObj.blackHole);
-      const whCoords = getTileCoordinates(wObj.whiteHole);
-
-      // Tersedot ke Black Hole - faster
-      for (let step = 1; step <= 8; step++) {
-        const progress = step / 8;
-        setTokenOverrides((prev) => ({
-          ...prev,
-          [targetUserId]: {
-            x: bhCoords.x,
-            y: bhCoords.y,
-            scale: 1 - progress * 0.9,
-            rotate: progress * 360,
-            opacity: 1 - progress * 0.7,
-          },
-        }));
-        await new Promise((r) => setTimeout(r, 18));
-      }
-
-      await new Promise((r) => setTimeout(r, 80));
-
-      // Keluar dari White Hole
-      for (let step = 1; step <= 8; step++) {
-        const progress = step / 8;
-        setTokenOverrides((prev) => ({
-          ...prev,
-          [targetUserId]: {
-            x: whCoords.x,
-            y: whCoords.y,
-            scale: 0.2 + progress * 0.8,
-            rotate: (1 - progress) * -180,
-            opacity: 0.3 + progress * 0.7,
-          },
-        }));
-        await new Promise((r) => setTimeout(r, 18));
-      }
-
-      setTokenOverrides((prev) => {
-        const copy = { ...prev };
-        delete copy[targetUserId];
-        return copy;
-      });
-      setVisualPositions((prev) => ({ ...prev, [targetUserId]: wObj.whiteHole }));
-
-      setRelocatingWormholeId(wObj.id);
-      await new Promise((r) => setTimeout(r, 220));
-      setRelocatingWormholeId(null);
-    }
-    // 4. TANGGA / RANJAU / PINDAH POSISI - dipelanin (sebelumnya 60+180+80)
-    else if (finalPos !== steppedPos) {
-      await new Promise((r) => setTimeout(r, 90));
-      // Use override to smoothly glide to final (ladder climb) instead of teleport - dipelanin
-      const finalCoords = getTileCoordinates(finalPos);
-      setTokenOverrides((prev) => ({
-        ...prev,
-        [targetUserId]: {
-          x: finalCoords.x,
-          y: finalCoords.y,
-          scale: 1,
-          rotate: 0,
-          opacity: 1,
-        },
-      }));
-      await new Promise((r) => setTimeout(r, 300));
-      setTokenOverrides((prev) => {
-        const copy = { ...prev };
-        delete copy[targetUserId];
-        return copy;
-      });
-      setVisualPositions((prev) => ({ ...prev, [targetUserId]: finalPos }));
-      await new Promise((r) => setTimeout(r, 100));
-    }
-
-    lastProcessedPosRef.current[targetUserId] = finalPos;
-    setActionStatus(null);
-    isAnimatingRef.current = false;
-    if (onComplete) onComplete();
-  }, []);
-
-  // Sinkronisasi Realtime - remote mulai animasi BARENGAN dengan local (tanpa delay)
+  // Sinkronisasi Realtime - mendekati no-delay (requestAnimationFrame + immediate start)
   useEffect(() => {
     if (!snakesState) return;
     const action = snakesState.lastAction;
@@ -440,16 +448,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     if (action.timestamp <= lastProcessedActionTimeRef.current) return;
     lastProcessedActionTimeRef.current = action.timestamp;
 
-    // Pakai startPos dari payload biar sinkron, bukan visual yang mungkin stale
     const startPos = action.startPos ?? serverPositions[action.userId] ?? 1;
-    // Pastikan visual awal untuk player tersebut sesuai startPos sebelum slide
-    setVisualPositions((prev) => {
-      if (prev[action.userId] === undefined || prev[action.userId] !== startPos) {
-        // Jika player baru, set dulu ke startPos sebelum animasi
-        // Tapi jangan override kalau sedang animasi lokal untuk user lain?
-      }
-      return prev;
-    });
 
     const specialHit: Parameters<typeof animatePath>[4] = {
       type: action.specialHitType,
@@ -457,16 +456,11 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       wormholeObj: action.hitWormhole,
     };
 
-    // isAnimatingRef akan di-set di dalam animatePath
-    animatePath(
-      action.userId,
-      startPos,
-      action.steppedPos,
-      action.finalPos,
-      specialHit,
-      action.eventMessage
-    );
-  }, [snakesState?.lastAction, userId, animatePath, serverPositions]);
+    // Start on next frame for 60fps sync, no artificial delay
+    requestAnimationFrame(() => {
+      animatePath(action.userId, startPos, action.steppedPos, action.finalPos, specialHit, action.eventMessage);
+    });
+  }, [snakesState, snakesState?.lastAction, userId, animatePath, serverPositions]);
 
   // Skip giliran otomatis jika pemain yang aktif sudah finish
   useEffect(() => {
@@ -491,152 +485,143 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     }
   }, [snakesState, winners, unfinishedPlayerIds, isGameFullyFinished, updateSnakesState, broadcastSnakesState, room?.hostId, userId]);
 
-  const handleRollDice = () => {
+  const handleRollDice = async () => {
     if (!isMyTurn || isRollingLocal || isBoardAnimating || isGameFullyFinished || !userId || isAnimatingRef.current || !snakesState || isAlreadyFinished) return;
     if (snakesState.isAnimating) return;
 
     setIsRollingLocal(true);
-    // instantly lock board globally so next player cannot roll until we finish
     const lockState: ExtendedSnakesState = { ...snakesState, isAnimating: true };
     updateSnakesState(lockState);
     if (broadcastSnakesState) broadcastSnakesState(lockState);
     isAnimatingRef.current = true;
 
+    // Visual dice shuffle while awaiting server
     let counter = 0;
-    const interval = setInterval(() => {
+    const shuffleInterval = setInterval(() => {
       setLocalDiceRoll(Math.floor(Math.random() * 6) + 1);
       counter++;
-
-      if (counter > 6) {
-        clearInterval(interval);
-        const finalDice = Math.floor(Math.random() * 6) + 1;
-        setLocalDiceRoll(finalDice);
-        setIsRollingLocal(false);
-
-        const currentPos = visualPositions[userId] ?? serverPositions[userId] ?? 1;
-        let steppedPos = currentPos + finalDice;
-
-          if (steppedPos > 100) {
-            steppedPos = 100 - (steppedPos - 100);
-          }
-
-          let finalPos = steppedPos;
-          let eventMessage = '';
-          let updatedObstacles: Partial<SnakesState> = {};
-          const newFrozen = { ...frozenTurns };
-          let specialHit: Parameters<typeof animatePath>[4] = {};
-
-          const ladderHit = snakesState.ladders?.find((l) => l.start === steppedPos);
-          const snakeHit = snakesState.snakes?.find((s) => s.head === steppedPos);
-          const mineHit = snakesState.mines?.includes(steppedPos);
-          const wormholeHit = snakesState.wormholes?.find((w) => w.blackHole === steppedPos);
-
-          const playerName = players[userId]?.username || 'Kamu';
-
-          if (ladderHit) {
-            finalPos = ladderHit.end;
-            eventMessage = `🪜 ${playerName} memanjat tangga ke kotak ${finalPos}!`;
-            updatedObstacles = relocateTriggeredItem(snakesState, 'ladder', ladderHit.id);
-            specialHit = { type: 'ladder' };
-          } else if (snakeHit) {
-            finalPos = snakeHit.tail;
-            eventMessage = `🐍 ${playerName} dimakan ular meluncur ke kotak ${finalPos}!`;
-            updatedObstacles = relocateTriggeredItem(snakesState, 'snake', snakeHit.id);
-            specialHit = { type: 'snake', snakeObj: snakeHit };
-          } else if (wormholeHit) {
-            finalPos = wormholeHit.whiteHole;
-            eventMessage = `🌀 ${playerName} tersedot Black Hole ke kotak ${finalPos}!`;
-            updatedObstacles = relocateTriggeredItem(snakesState, 'wormhole', wormholeHit.id);
-            specialHit = { type: 'wormhole', wormholeObj: wormholeHit };
-          } else if (mineHit) {
-            newFrozen[userId] = 3;
-            eventMessage = `💣 ${playerName} terinjak Ranjau Capit! Terjebak 3 turn!`;
-            updatedObstacles = relocateTriggeredItem(snakesState, 'mine', steppedPos);
-            toast.error('💥 Kamu menginjak Ranjau Capit! Freeze 3 giliran!');
-            specialHit = { type: 'mine' };
-          }
-
-          const hasWon = finalPos === 100;
-          const newWinners = [...winners];
-
-          if (hasWon && !newWinners.includes(userId)) {
-            newWinners.push(userId);
-            const myRank = newWinners.length;
-            const medal = myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : '🥉';
-            toast.success(`${medal} Kamu Finish di Juara ${myRank}!`, { duration: 2500 });
-
-            const earnedScore = myRank === 1 ? 100 : myRank === 2 ? 60 : 30;
-            const currentScore = players[userId]?.score || 0;
-            updatePlayer(userId, { score: currentScore + earnedScore, rank: myRank });
-          }
-
-          const remainingUnfinished = activePlayerIds.filter((id) => !newWinners.includes(id));
-
-          let nextTurnId = userId;
-          if (remainingUnfinished.length > 0) {
-            if (hasWon) {
-              nextTurnId = remainingUnfinished[0];
-            } else if (finalDice !== 6 || mineHit) {
-              const currentIdxInUnfinished = remainingUnfinished.indexOf(userId);
-              const nextIdx = (currentIdxInUnfinished + 1) % remainingUnfinished.length;
-              nextTurnId = remainingUnfinished[nextIdx];
-            } else {
-              toast.success('🎲 Angka 6! Lempar dadu sekali lagi!');
-            }
-          }
-
-          const actionPayload: SnakesActionPayload = {
-            id: `${userId}-${Date.now()}`,
-            userId,
-            dice: finalDice,
-            startPos: currentPos,
-            steppedPos,
-            finalPos,
-            specialHitType: specialHit.type,
-            hitSnake: specialHit.snakeObj,
-            hitWormhole: specialHit.wormholeObj,
-            eventMessage,
-            timestamp: Date.now(),
-          };
-
-          lastProcessedActionTimeRef.current = actionPayload.timestamp;
-
-          // FASE A: broadcast segera biar remote mulai animasi BARENGAN (tanpa delay)
-          // - isAnimating true + lastAction + diceValue, tapi TANPA relocate obstacle
-          //   supaya ular/tangga/ranjau/wormhole tidak hilang duluan di remote
-          const animatingState: ExtendedSnakesState = {
-            ...snakesState,
-            isAnimating: true,
-            diceValue: finalDice,
-            lastAction: actionPayload,
-          };
-          updateSnakesState(animatingState);
-          if (broadcastSnakesState) broadcastSnakesState(animatingState);
-
-          animatePath(userId, currentPos, steppedPos, finalPos, specialHit, eventMessage, () => {
-            const nextState: ExtendedSnakesState = {
-              ...snakesState,
-              ...updatedObstacles,
-              diceValue: finalDice,
-              playerPositions: {
-                ...serverPositions,
-                [userId]: finalPos,
-              },
-              currentTurnUserId: nextTurnId,
-              winnerId: newWinners[0] || snakesState.winnerId,
-              winners: newWinners,
-              frozenTurns: newFrozen,
-              lastAction: actionPayload,
-              isAnimating: false,
-            };
-
-            updateSnakesState(nextState);
-            if (broadcastSnakesState) {
-              broadcastSnakesState(nextState);
-            }
-          });
+      if (counter > 12) {
+        // keep shuffling until server responds; cap at 12 but continue if needed
       }
-    }, 35);
+    }, 45);
+
+    try {
+      const res = await fetch('/api/game/snakes-roll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomId: room?.id || 'unknown',
+          userId,
+          snakesState,
+          activePlayerIds,
+        }),
+      });
+      const data = await res.json();
+      clearInterval(shuffleInterval);
+      if (!res.ok || !data.success) {
+        toast.error(data.error || 'Gagal lempar dadu (server).');
+        // unlock
+        const unlock: ExtendedSnakesState = { ...snakesState, isAnimating: false };
+        updateSnakesState(unlock);
+        if (broadcastSnakesState) broadcastSnakesState(unlock);
+        isAnimatingRef.current = false;
+        setIsRollingLocal(false);
+        return;
+      }
+
+      const finalDice: number = data.dice;
+      const { startPos, steppedPos, finalPos, hasWon, nextTurnId, newWinners, newFrozen, updatedObstacles, actionPayload } = data as {
+        startPos: number;
+        steppedPos: number;
+        finalPos: number;
+        hasWon: boolean;
+        nextTurnId: string;
+        newWinners: string[];
+        newFrozen: Record<string, number>;
+        updatedObstacles: Partial<SnakesState>;
+        actionPayload: SnakesActionPayload;
+      };
+
+      setLocalDiceRoll(finalDice);
+      setIsRollingLocal(false);
+
+      // Personalize eventMessage with real username
+      const playerName = players[userId]?.username || 'Kamu';
+      if (actionPayload.eventMessage) {
+        actionPayload.eventMessage = actionPayload.eventMessage.replace(/Player \w{4}/, playerName);
+      }
+
+      // Handle mine toast locally
+      if (actionPayload.specialHitType === 'mine') {
+        toast.error('💥 Kamu menginjak Ranjau Capit! Freeze 3 giliran!');
+      }
+
+      if (hasWon && !winners.includes(userId)) {
+        const myRank = newWinners.length;
+        const medal = myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : '🥉';
+        toast.success(`${medal} Kamu Finish di Juara ${myRank}!`, { duration: 2500 });
+
+        const earnedScore = myRank === 1 ? 100 : myRank === 2 ? 60 : 30;
+        const currentScore = players[userId]?.score || 0;
+        updatePlayer(userId, { score: currentScore + earnedScore, rank: myRank });
+      }
+
+      if (data.isExtraTurn) {
+        toast.success('🎲 Angka 6! Lempar dadu sekali lagi!');
+      }
+
+      lastProcessedActionTimeRef.current = actionPayload.timestamp;
+
+      const specialHit: Parameters<typeof animatePath>[4] = {
+        type: actionPayload.specialHitType,
+        snakeObj: actionPayload.hitSnake,
+        wormholeObj: actionPayload.hitWormhole,
+      };
+
+      const animatingState: ExtendedSnakesState = {
+        ...snakesState,
+        isAnimating: true,
+        diceValue: finalDice,
+        lastAction: actionPayload,
+      };
+      updateSnakesState(animatingState);
+      if (broadcastSnakesState) broadcastSnakesState(animatingState);
+
+      // Ensure personalized message is shown locally
+      const localEventMessage = actionPayload.eventMessage;
+
+      animatePath(userId, startPos, steppedPos, finalPos, specialHit, localEventMessage, () => {
+        const nextState: ExtendedSnakesState = {
+          ...snakesState,
+          ...updatedObstacles,
+          diceValue: finalDice,
+          playerPositions: {
+            ...serverPositions,
+            [userId]: finalPos,
+          },
+          currentTurnUserId: nextTurnId,
+          winnerId: newWinners[0] || snakesState.winnerId,
+          winners: newWinners,
+          frozenTurns: newFrozen,
+          lastAction: actionPayload,
+          isAnimating: false,
+        };
+
+        updateSnakesState(nextState);
+        if (broadcastSnakesState) {
+          broadcastSnakesState(nextState);
+        }
+      });
+    } catch (err) {
+      clearInterval(shuffleInterval);
+      console.error('snakes-roll fetch failed', err);
+      toast.error('Gagal menghubungi server dadu.');
+      const unlock: ExtendedSnakesState = { ...snakesState, isAnimating: false };
+      updateSnakesState(unlock);
+      if (broadcastSnakesState) broadcastSnakesState(unlock);
+      isAnimatingRef.current = false;
+      setIsRollingLocal(false);
+    }
   };
 
   const handleSkipTurn = () => {
@@ -691,7 +676,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         )}
       </AnimatePresence>
 
-      <div className="relative w-full aspect-square max-h-[min(92vw,560px)] lg:max-h-[min(460px,58vh)] xl:max-h-[min(500px,60vh)] 2xl:max-h-[min(540px,62vh)] border-2 border-border bg-card rounded-2xl shadow-xl p-1 overflow-hidden shrink-0">
+      <div className="relative w-full aspect-square max-h-[min(92vw,560px)] lg:max-h-[min(460px,58vh)] xl:max-h-[min(500px,60vh)] 2xl:max-h-[min(540px,62vh)] border-2 border-border bg-card rounded-2xl shadow-xl p-1 overflow-hidden shrink-0 touch-manipulation will-change-transform [transform:translateZ(0)]">
         <div className="grid grid-cols-10 grid-rows-10 w-full h-full gap-0.5">
           {Array.from({ length: 100 }, (_, i) => {
             const rowFromTop = Math.floor(i / 10);
@@ -924,7 +909,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         {/* Bidak Pemain - AVATAR + STACKING + SMOOTH */}
         <div className="absolute inset-0 pointer-events-none z-30">
           {(() => {
-            // Hitung stacking untuk player di cell yang sama
             const posCount: Record<number, number> = {};
             const posIndex: Record<string, number> = {};
             Object.entries(visualPositions).forEach(([pid, ppos]) => {
@@ -946,7 +930,6 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
             const baseCoords = getTileCoordinates(pos || 1);
             const override = tokenOverrides[pId];
-            // Offset untuk stacking (hanya jika tidak sedang override animasi khusus)
             let dx = 0, dy = 0;
             if (!override) {
               const cnt = posCount[pos] || 1;
@@ -967,7 +950,8 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             return (
               <motion.div
                 key={pId}
-                className="absolute flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+                className="absolute flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2 pointer-events-none will-change-transform [transform:translateZ(0)]"
+                style={{ willChange: 'transform, opacity' }}
                 animate={{
                   left: leftPos,
                   top: topPos,
@@ -978,7 +962,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                 transition={{
                   type: 'tween',
                   ease: isOverridden ? 'linear' : 'easeInOut',
-                  duration: isOverridden ? 0.03 : 0.16,
+                  duration: isOverridden ? 0.02 : 0.13,
                 }}
               >
                 {opacity > 0.35 && (
@@ -1064,7 +1048,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             🎉 Kamu sudah Finish (Juara {winners.indexOf(userId!) + 1})!
           </div>
         ) : myFrozenCount > 0 && isMyTurn ? (
-          <Button size="lg" onClick={handleSkipTurn} disabled={isBoardAnimating} className="bg-red-600 hover:bg-red-700 text-white gap-2 w-full sm:w-auto">
+          <Button size="lg" onClick={handleSkipTurn} disabled={isBoardAnimating} className="bg-red-600 hover:bg-red-700 text-white gap-2 w-full sm:w-auto touch-manipulation active:scale-95 select-none">
             <SkipForward className="w-5 h-5" /> Lewati Giliran (Terjebak {myFrozenCount} Turn)
           </Button>
         ) : (
@@ -1072,7 +1056,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             size="lg"
             onClick={handleRollDice}
             disabled={!isMyTurn || isRollingLocal || isBoardAnimating || isGameFullyFinished || Boolean(snakesState?.isAnimating)}
-            className="gap-2 w-full sm:w-auto"
+            className="gap-2 w-full sm:w-auto touch-manipulation active:scale-95 select-none"
           >
             <Dices className={`w-5 h-5 ${isRollingLocal ? 'animate-spin' : ''}`} />
             {isRollingLocal ? 'Mengocok...' : isBoardAnimating ? 'Menunggu langkah...' : 'Lempar Dadu'}

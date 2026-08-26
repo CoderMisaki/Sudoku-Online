@@ -14,10 +14,7 @@ async function playersText(page) {
 }
 
 (async () => {
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  });
+  const browser = await chromium.launch({ headless: true });
 
   const hostCtx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   const host = await hostCtx.newPage();

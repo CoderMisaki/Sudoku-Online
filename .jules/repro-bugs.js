@@ -95,10 +95,7 @@ async function clickEmptyCellAndType(page, tag, digit) {
 }
 
 (async () => {
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  });
+  const browser = await chromium.launch({ headless: true });
 
   // ---------------- HOST ----------------
   const hostCtx = await browser.newContext({ viewport: { width: 1400, height: 900 } });

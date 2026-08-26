@@ -11,6 +11,9 @@ import { Button } from '../../../components/ui/Button';
 import { Card } from '../../../components/ui/Card';
 import { Modal } from '../../../components/ui/Modal';
 import { ProfileWidget } from '../../../components/profile/ProfileWidget';
+import { ErrorLogPanel } from '../../../components/admin/ErrorLogPanel';
+import { OnlinePlayersBox } from '../../../components/online/OnlinePlayersBox';
+import { initErrorLogger } from '../../../utils/errorLogger';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
 import { SudokuBoard3D } from '../../../components/game/SudokuBoard3D';
 import { SnakesAndLaddersBoard } from '../../../components/game/SnakesAndLaddersBoard';
@@ -45,7 +48,6 @@ export default function RoomPage() {
   const router = useRouter();
 
   const userId = useGameStore(state => state.userId);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const username = useGameStore(state => state.username);
   const room = useGameStore(state => state.room);
   const grid = useGameStore(state => state.grid);
@@ -76,6 +78,10 @@ export default function RoomPage() {
   const [nextMode, setNextMode] = useState<GameMode>('collaborative');
   const [nextMaxPlayers, setNextMaxPlayers] = useState(4);
 
+  // Admin logs gate
+  const [isAdminVerified, setIsAdminVerified] = useState(false);
+  const isAdminUser = (username || '').toUpperCase() === 'ADMIN';
+
   const applyTheme = useCallback((newTheme: 'light' | 'dark' | 'system') => {
     if (newTheme === 'dark') {
       document.documentElement.classList.add('dark');
@@ -86,6 +92,15 @@ export default function RoomPage() {
     } else {
       document.documentElement.classList.remove('dark', 'light');
     }
+  }, []);
+
+  useEffect(() => {
+    initErrorLogger();
+    try {
+      const verified = sessionStorage.getItem('sudoku_admin_verified') === '1';
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sessionStorage to state sync on mount is intentional
+      if (verified) setIsAdminVerified(true);
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -155,7 +170,7 @@ export default function RoomPage() {
       fetch("/api/game/create-room", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ difficulty: room.difficulty || "medium" }),
+        body: JSON.stringify({ difficulty: room.difficulty || "medium", roomId }),
       })
         .then((res) => {
           if (!res.ok) throw new Error("API Error");
@@ -175,7 +190,7 @@ export default function RoomPage() {
           isFetchingPuzzleRef.current = false;
         });
     }
-  }, [room?.mode, room?.difficulty, grid, solutionToken, loading, setGameData]);
+  }, [room?.mode, room?.difficulty, grid, solutionToken, loading, setGameData, roomId]);
   const handleOpenNextGameModal = () => {
     if (!room) return;
     setNextDifficulty(room.difficulty || 'medium');
@@ -238,7 +253,7 @@ export default function RoomPage() {
         const res = await fetch('/api/game/create-room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ difficulty: diff }),
+          body: JSON.stringify({ difficulty: diff, roomId }),
         });
         const data = await res.json();
         if (res.ok && data.initialGrid && data.solutionToken) {
@@ -253,7 +268,7 @@ export default function RoomPage() {
         const res = await fetch('/api/game/create-room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ difficulty: diff }),
+          body: JSON.stringify({ difficulty: diff, roomId }),
         });
         const data = await res.json();
         if (res.ok && data.initialGrid && data.solutionToken) {
@@ -411,7 +426,7 @@ export default function RoomPage() {
       fetch('/api/game/create-room', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ difficulty }),
+        body: JSON.stringify({ difficulty, roomId }),
       })
         .then((res) => {
           if (!res.ok) throw new Error('API Error');
@@ -458,8 +473,7 @@ export default function RoomPage() {
       sessionStorage.removeItem(`sudoku_room_config_${roomId}`);
       resetGame();
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (useGameStore as any).persist?.clearStorage?.();
+        useGameStore.getState().clearPersistedStorage();
       } catch { /* ignore error */ }
       router.replace('/');
     }
@@ -511,6 +525,7 @@ export default function RoomPage() {
           row: selectedCell.row,
           col: selectedCell.col,
           solutionToken: store.solutionToken,
+          roomId,
         }),
       });
       const data = await res.json();
@@ -530,7 +545,7 @@ export default function RoomPage() {
       console.error('Gagal mendapatkan hint:', e);
       toast.error('Gagal mengambil hint');
     }
-  }, [userId, selectedCell, broadcastMove, isSpectator]);
+  }, [userId, selectedCell, broadcastMove, isSpectator, roomId]);
 
   const handleArrowNavigate = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
     if (isSpectator) return;
@@ -647,6 +662,7 @@ export default function RoomPage() {
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2">
+          {isAdminUser && isAdminVerified && <ErrorLogPanel isAdmin={true} />}
           {/* Profile avatar tetap terlihat selama game, bisa diubah kapan saja tanpa reset */}
           <ProfileWidget onAvatarUpdate={broadcastAvatarUpdate} compact />
           <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(true)} className="p-1.5 h-8 w-8">
@@ -699,6 +715,9 @@ export default function RoomPage() {
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Sidebar Left: Players & Chat */}
         <div className="space-y-4 flex flex-col h-full lg:col-span-2">
+          {/* Player Online — realtime, bisa invite */}
+          <OnlinePlayersBox variant="room" roomId={roomId} />
+
           <Card className="flex-shrink-0 flex flex-col overflow-hidden min-h-[250px] lg:min-h-0 lg:flex-1">
             <div className="p-3 border-b border-border bg-background/50 flex items-center justify-between">
               <h2 className="font-semibold text-sm flex items-center gap-2">

@@ -38,6 +38,7 @@ interface GameStore {
   startNextGame: (newGrid: Grid, newSolutionToken: string) => void;
   updateSnakesState: (state: Partial<SnakesState>) => void;
   enterRoom: (roomId: string) => void;
+  clearPersistedStorage: () => void;
 }
 
 export const useGameStore = create<GameStore>()(
@@ -414,6 +415,19 @@ export const useGameStore = create<GameStore>()(
           selectedCell: null,
           snakesState: undefined,
         });
+      },
+
+      clearPersistedStorage: () => {
+        try {
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('sudoku-game-storage');
+          }
+        } catch {}
+        try {
+          // Typed-safe wrapper around zustand persist clearStorage
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (useGameStore as any).persist?.clearStorage?.();
+        } catch {}
       },
     }),
     {

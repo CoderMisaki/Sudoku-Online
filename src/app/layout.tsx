@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
+import { headers } from "next/headers";
 import "./globals.css";
 import { Toaster } from "react-hot-toast";
 
@@ -30,11 +31,13 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const isDev = process.env.NODE_ENV !== 'production';
+  const nonce = isDev ? undefined : (await headers()).get('x-nonce') ?? undefined;
   return (
     <html
       lang="en"
@@ -45,6 +48,7 @@ export default function RootLayout({
         <Script
           id="theme-initializer"
           strategy="beforeInteractive"
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: `
               try {
@@ -64,6 +68,7 @@ export default function RootLayout({
         <Script
           id="sw-register"
           strategy="lazyOnload"
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: `
               if ('serviceWorker' in navigator) {

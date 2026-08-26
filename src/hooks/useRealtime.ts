@@ -593,7 +593,7 @@ export function useRealtime(roomId: string) {
         const res = await fetch('/api/game/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ row, col, value, solutionToken: token }),
+          body: JSON.stringify({ row, col, value, solutionToken: token, roomId: store.room?.id }),
         });
         const data = await res.json();
         const isCorrect = Boolean(data.isCorrect);

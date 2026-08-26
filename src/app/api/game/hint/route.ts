@@ -7,6 +7,7 @@ const hintSchema = z.object({
   row: z.number().int().min(0).max(8),
   col: z.number().int().min(0).max(8),
   solutionToken: z.string().min(20),
+  roomId: z.string().min(3).max(16).optional(),
 });
 
 export async function POST(request: Request) {
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
 
     const ip = getClientIp(request);
     // Maksimal 15 hint per 30 detik
-    if (!checkServerRateLimit(`hint:${ip}`, 15, 30000)) {
+    if (!(await checkServerRateLimit(`hint:${ip}`, 15, 30000))) {
       return NextResponse.json({ error: 'Terlalu banyak permintaan hint' }, { status: 429 });
     }
 
@@ -28,8 +29,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Payload tidak valid' }, { status: 400 });
     }
 
-    const { row, col, solutionToken } = validation.data;
-    const solution = decryptSolution(solutionToken);
+    const { row, col, solutionToken, roomId } = validation.data;
+    const solution = decryptSolution(solutionToken, { expectedRoomId: roomId });
 
     if (!solution) {
       return NextResponse.json(

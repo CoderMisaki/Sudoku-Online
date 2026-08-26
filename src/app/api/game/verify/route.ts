@@ -8,6 +8,7 @@ const verifySchema = z.object({
   col: z.number().int().min(0).max(8),
   value: z.number().int().min(1).max(9),
   solutionToken: z.string().min(20),
+  roomId: z.string().min(3).max(16).optional(),
 });
 
 export async function POST(request: Request) {
@@ -18,7 +19,7 @@ export async function POST(request: Request) {
 
     const ip = getClientIp(request);
     // Rate limit cepat (45 verifikasi per 10 detik) untuk mendukung fast-typing/burst move
-    if (!checkServerRateLimit(`verify:${ip}`, 45, 10000)) {
+    if (!(await checkServerRateLimit(`verify:${ip}`, 45, 10000))) {
       return NextResponse.json({ error: 'Input terlalu cepat (Rate limited)' }, { status: 429 });
     }
 
@@ -29,8 +30,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Payload tidak valid' }, { status: 400 });
     }
 
-    const { row, col, value, solutionToken } = validation.data;
-    const solution = decryptSolution(solutionToken);
+    const { row, col, value, solutionToken, roomId } = validation.data;
+    const solution = decryptSolution(solutionToken, { expectedRoomId: roomId });
 
     if (!solution) {
       return NextResponse.json(

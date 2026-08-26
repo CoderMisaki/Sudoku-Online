@@ -39,10 +39,7 @@ async function joinAsGuest(browser, roomId) {
 }
 
 (async () => {
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  });
+  const browser = await chromium.launch({ headless: true });
 
   // ===== S3: guest joins while host is still loading =====
   log('S3', '=== guest joins while host still loading puzzle ===');
