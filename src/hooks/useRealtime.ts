@@ -470,9 +470,11 @@ export function useRealtime(roomId: string) {
           // adopt wholesale so old higher revisions cannot reject it.
           store.replaceAllSnakesState(payload.snakesState as SnakesState);
         } else if (payload.room?.mode === 'competition') {
-          // Kosongkan grid lama agar memicu pengambilan puzzle baru
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          store.setGameData(null as any, null as any);
+          // Kosongkan grid lama agar memicu pengambilan puzzle baru.
+          // setGameData(null, null) memanggil checkConflicts(null) yang CRASH,
+          // sehingga dulu grid guest tidak pernah ter-reset (hanya host yang
+          // reset). Pakai clearGameData yang aman.
+          store.clearGameData();
         } else if (payload.initialGrid && payload.solutionToken) {
           store.startNextGame(payload.initialGrid, payload.solutionToken);
         }

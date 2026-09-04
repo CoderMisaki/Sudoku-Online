@@ -37,6 +37,14 @@ interface GameStore {
   solutionToken: string | null;
 
   setGameData: (grid: Grid, solutionToken: string) => void;
+  /**
+   * Hard-clear the sudoku board + solution token WITHOUT running conflict
+   * detection. Used when a client must discard its current puzzle so it can
+   * fetch a fresh one (e.g. competition "next game"). Previously the code
+   * called `setGameData(null, null)` which crashed inside `checkConflicts`
+   * (null.map), so guests kept their finished board while only the host reset.
+   */
+  clearGameData: () => void;
   setOptimisticMove: (row: number, col: number, value: number) => void;
   updateCellWithValidation: (row: number, col: number, value: number | null, playerId: string, isCorrect: boolean) => void;
   toggleNote: (row: number, col: number, note: number) => void;
@@ -163,6 +171,8 @@ export const useGameStore = create<GameStore>()(
         const validatedGrid = checkConflicts(grid);
         set({ grid: validatedGrid, solutionToken });
       },
+
+      clearGameData: () => set({ grid: null, solutionToken: null, selectedCell: null }),
 
       updateCellWithValidation: (row, col, value, playerId, isCorrect) => set((state) => {
         if (!state.grid || !state.room) return state;
@@ -511,8 +521,10 @@ export const useGameStore = create<GameStore>()(
       enterRoom: (roomId) => {
         const state = get();
         if (state.room?.id === roomId) {
-          // If re-entering the same room, reset ephemeral snakesState so host/guest sync freshly
-          set({ snakesState: undefined });
+          // Already inside this exact room (e.g. a page reload / re-render of an
+          // in-progress game). Keep room + grid + snakesState so a refresh does
+          // NOT wipe the running game back to a brand-new room. Ephemeral
+          // handshake state is reconciled by the realtime channel on subscribe.
           return;
         }
         set({
@@ -547,8 +559,12 @@ export const useGameStore = create<GameStore>()(
         grid: state.grid,
         solutionToken: state.solutionToken,
         messages: state.messages,
-        // NOTE: snakesState is intentionally NOT persisted in localStorage
-        // to prevent stale board layouts / revisions from desyncing multiplayer matches.
+        // Persist snakesState so a refresh / reload of an in-progress snakes & ladders
+        // room resumes the same board (positions, turn, obstacles) instead of resetting
+        // everyone to a brand-new game. Stale snapshots are already reconciled safely:
+        // updateSnakesState ignores lower revisions only for the SAME boardId+layout, and
+        // replaceAllSnakesState adopts any differently-boardId / differently-layout snapshot.
+        snakesState: state.snakesState,
       }),
     }
   )
