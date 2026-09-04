@@ -3,7 +3,7 @@ import { z } from 'zod';
 import crypto from 'crypto';
 import { checkServerRateLimit, validateSameOrigin, getClientIp } from '../../../../utils/serverSecurity';
 import { relocateTriggeredItem } from '../../../../utils/snakesAndLaddersData';
-import type { SnakesState, SnakeItem, WormholePair } from '../../../../types/game';
+import type { SnakesState, SnakeItem, WormholePair, LadderItem } from '../../../../types/game';
 
 const snakeSchema = z.object({
   id: z.string(),
@@ -115,6 +115,7 @@ export async function POST(request: Request) {
     let specialHitType: 'snake' | 'wormhole' | 'ladder' | 'mine' | undefined;
     let hitSnake: SnakeItem | undefined;
     let hitWormhole: WormholePair | undefined;
+    let hitLadder: LadderItem | undefined;
 
     const ladderHit = snakesState.ladders?.find((l) => l.start === steppedPos);
     const snakeHit = snakesState.snakes?.find((s) => s.head === steppedPos);
@@ -130,6 +131,7 @@ export async function POST(request: Request) {
       eventMessage = `🪜 ${playerLabel} memanjat tangga ke kotak ${finalPos}!`;
       updatedObstacles = relocateTriggeredItem(snakesState, 'ladder', ladderHit.id);
       specialHitType = 'ladder';
+      hitLadder = ladderHit;
     } else if (snakeHit) {
       finalPos = snakeHit.tail;
       eventMessage = `🐍 ${playerLabel} dimakan ular meluncur ke kotak ${finalPos}!`;
@@ -182,6 +184,7 @@ export async function POST(request: Request) {
       specialHitType,
       hitSnake,
       hitWormhole,
+      hitLadder,
       eventMessage,
       timestamp: Date.now(),
     };

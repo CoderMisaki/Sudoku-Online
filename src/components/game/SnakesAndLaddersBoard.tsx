@@ -4,12 +4,13 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGameStore } from '@/store/gameStore';
 import { Button } from '@/components/ui/Button';
-import { Dices, Trophy, SkipForward } from 'lucide-react';
+import { Dices, Trophy, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import {
   getTileCoordinates,
   generateInitialSnakesState,
 } from '@/utils/snakesAndLaddersData';
-import { SnakesState, Player, SnakeItem as Snake, WormholePair as Wormhole } from '@/types/game';
+import { sounds } from '@/utils/sounds';
+import { SnakesState, Player, SnakeItem as Snake, WormholePair as Wormhole, LadderItem as Ladder } from '@/types/game';
 import toast from 'react-hot-toast';
 
 interface SnakesActionPayload {
@@ -22,6 +23,7 @@ interface SnakesActionPayload {
   specialHitType?: 'snake' | 'wormhole' | 'ladder' | 'mine';
   hitSnake?: Snake;
   hitWormhole?: Wormhole;
+  hitLadder?: Ladder;
   eventMessage?: string;
   timestamp: number;
 }
@@ -43,6 +45,17 @@ interface TokenAnimOverride {
   scale?: number;
   rotate?: number;
   opacity?: number;
+  /** true = bidak sedang hop (lompat) walau posisi diatur manual (naik tangga). */
+  hop?: boolean;
+}
+
+/** Efek visual tangga yang sedang dipanjat -> lenyap -> muncul di tempat baru.
+ *  'done' = animasi selesai, render normal; menunggu dibersihkan effect sync. */
+interface LadderFx {
+  id: string;
+  mode: 'climb' | 'vanish' | 'reveal' | 'done';
+  /** Koordinat tangga LAMA (sebelum direlokasi server) untuk fase climb/vanish. */
+  ladder: Ladder;
 }
 
 const SNAKE_SPECIES = [
@@ -156,8 +169,8 @@ const ANIM = {
   DICE_MIN_ROLL_MS: 340,
   /** durasi dadu berputar di layar pemain lain */
   DICE_REMOTE_SHUFFLE_MS: 160,
-  /** jeda antar kotak saat bidak melangkah */
-  STEP_MS: 120,
+  /** jeda antar kotak saat bidak melangkah — dibuat santai, tidak buru-buru */
+  STEP_MS: 300,
   /** jeda kecil sebelum efek spesial dimainkan */
   EVENT_PAUSE_MS: 90,
   /** ular: jeda per titik spline (lebih besar = meluncur lebih pelan) */
@@ -168,12 +181,23 @@ const ANIM = {
   WORMHOLE_STEP_MS: 26,
   WORMHOLE_MID_MS: 110,
   WORMHOLE_RELOCATE_MS: 240,
-  /** tangga: durasi bidak memanjat ke kotak tujuan */
-  LADDER_CLIMB_MS: 460,
-  LADDER_SETTLE_MS: 110,
+  /** tangga: jeda per hop saat bidak melompat naik anak tangga */
+  LADDER_HOP_MS: 115,
+  /** tangga: durasi tangga memudar setelah bidak sampai di atas */
+  LADDER_VANISH_MS: 380,
+  /** tangga: durasi tangga baru (hasil relokasi) muncul kembali */
+  LADDER_REVEAL_MS: 320,
+  /** ranjau: durasi guncangan bidak saat menginjak ranjau */
+  MINE_SHAKE_MS: 420,
   /** batas kompensasi lag: di atas ini animasi di-fast-forward */
   MAX_CATCHUP_MS: 2500,
 };
+
+/** Jumlah hop naik tangga berdasarkan panjang tangga (dibatasi 4-6 hop). */
+function ladderHopCount(start: { x: number; y: number }, end: { x: number; y: number }): number {
+  const dist = Math.hypot(end.x - start.x, end.y - start.y);
+  return Math.min(6, Math.max(4, Math.round(dist / 9)));
+}
 
 const EMPTY_PLAYERS: Record<string, Player> = {};
 const EMPTY_FROZEN: Record<string, number> = {};
@@ -267,6 +291,24 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
   const [disappearingSnakeId, setDisappearingSnakeId] = useState<string | null>(null);
   const [relocatingWormholeId, setRelocatingWormholeId] = useState<string | null>(null);
   const [hopTick, setHopTick] = useState<Record<string, number>>({});
+  const [ladderFx, setLadderFx] = useState<LadderFx | null>(null);
+  const [sfxMuted, setSfxMuted] = useState(false);
+
+  // Buka AudioContext dari gesture pengguna pertama (kebijakan autoplay browser),
+  // lalu lepas listener-nya begitu audio berhasil dibuka.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sinkronkan preferensi mute dari localStorage setelah mount (hindari hydration mismatch)
+    setSfxMuted(sounds.isMuted());
+    const unlock = () => {
+      sounds.unlock();
+    };
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
 
   const frozenTurns = snakesState?.frozenTurns ?? EMPTY_FROZEN;
   const myFrozenCount = userId ? frozenTurns[userId] || 0 : 0;
@@ -316,6 +358,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       setVisualPositions(snakesState.playerPositions);
       lastProcessedPosRef.current = { ...snakesState.playerPositions };
       setTokenOverrides({});
+      setLadderFx(null);
       isAnimatingRef.current = false;
       setIsRollingLocal(false);
       setActionStatus(null);
@@ -344,6 +387,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       return filtered;
     });
     setTokenOverrides({});
+    setLadderFx(null);
   }, [snakesState?.playerPositions, snakesState?.revision, snakesState?.winners, snakesState?.winnerId, snakesState?.isAnimating, players]);
 
   const isAlreadyFinished = Boolean(userId && winners.includes(userId));
@@ -362,6 +406,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         type?: 'snake' | 'wormhole' | 'ladder' | 'mine';
         snakeObj?: Snake;
         wormholeObj?: Wormhole;
+        ladderObj?: Ladder;
       },
       eventLabel?: string,
       onComplete?: () => void,
@@ -390,6 +435,8 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         curr += steppedPos > curr ? 1 : -1;
         setVisualPositions((prev) => ({ ...prev, [targetUserId]: curr }));
         setHopTick((prev) => ({ ...prev, [targetUserId]: (prev[targetUserId] || 0) + 1 }));
+        // Jangan bunyikan langkah saat sedang fast-forward kompensasi lag.
+        if (debtMs <= 0) sounds.step(curr);
         await wait(ANIM.STEP_MS);
       }
 
@@ -406,6 +453,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         const snakeIdx = currentSnakes.findIndex((s) => s.id === sObj.id);
         const splinePoints = getSnakePoints(headCoords, tailCoords, (snakeIdx >= 0 ? snakeIdx : 0) + 1, 20);
 
+        sounds.snakeEaten();
         for (let i = 0; i < splinePoints.length; i++) {
           const pt = splinePoints[i];
           setTokenOverrides((prev) => ({
@@ -436,6 +484,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         const bhCoords = getTileCoordinates(wObj.blackHole);
         const whCoords = getTileCoordinates(wObj.whiteHole);
 
+        sounds.blackHoleSuck();
         for (let step = 1; step <= 8; step++) {
           const progress = step / 8;
           setTokenOverrides((prev) => ({
@@ -453,6 +502,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
         await wait(ANIM.WORMHOLE_MID_MS);
 
+        sounds.whiteHoleEmerge();
         for (let step = 1; step <= 8; step++) {
           const progress = step / 8;
           setTokenOverrides((prev) => ({
@@ -478,7 +528,82 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         setRelocatingWormholeId(wObj.id);
         await wait(ANIM.WORMHOLE_RELOCATE_MS);
         setRelocatingWormholeId(null);
+      } else if (specialHit.type === 'mine') {
+        // ── RANJAU: ledakan + bidak terguncang oleh capit ─────────────────
+        const mineCoords = getTileCoordinates(steppedPos);
+        sounds.mineBoom();
+        const shakeSteps = 4;
+        const perShake = Math.max(60, Math.floor(ANIM.MINE_SHAKE_MS / shakeSteps));
+        for (let s = 0; s < shakeSteps; s++) {
+          const dir = s % 2 === 0 ? 1 : -1;
+          setTokenOverrides((prev) => ({
+            ...prev,
+            [targetUserId]: {
+              x: mineCoords.x + dir * 1.3,
+              y: mineCoords.y - (s === 0 ? 1.2 : 0),
+              scale: s === 0 ? 1.15 : 1,
+              rotate: dir * 7,
+              opacity: 1,
+            },
+          }));
+          await wait(perShake);
+        }
+        setTokenOverrides((prev) => {
+          const copy = { ...prev };
+          delete copy[targetUserId];
+          return copy;
+        });
+        await wait(120);
+      } else if (specialHit.type === 'ladder' && specialHit.ladderObj) {
+        // ── TANGGA: bidak melompat-lompat per anak tangga. Tangga baru
+        // lenyap SETELAH bidak sampai di atas, lalu muncul kembali di lokasi
+        // barunya (hasil relokasi server) dengan sparkle singkat. ──────────
+        const lObj = specialHit.ladderObj;
+        const startCoords = getTileCoordinates(lObj.start);
+        const endCoords = getTileCoordinates(lObj.end);
+        const hops = ladderHopCount(startCoords, endCoords);
+
+        // State RESULT dari server sudah memuat tangga hasil relokasi; selama
+        // animasi kita sembunyikan tangga baru itu dan tetap menampilkan
+        // tangga lama (koordinat di ladderObj) supaya tetap terlihat dipanjat.
+        setLadderFx({ id: lObj.id, mode: 'climb', ladder: lObj });
+        await wait(ANIM.EVENT_PAUSE_MS);
+
+        for (let h = 1; h <= hops; h++) {
+          const t = h / hops;
+          const x = startCoords.x + (endCoords.x - startCoords.x) * t;
+          const y = startCoords.y + (endCoords.y - startCoords.y) * t;
+          if (debtMs <= 0) sounds.ladderHop(h);
+          setTokenOverrides((prev) => ({
+            ...prev,
+            [targetUserId]: { x, y, scale: 1, rotate: 0, opacity: 1, hop: true },
+          }));
+          setHopTick((prev) => ({ ...prev, [targetUserId]: (prev[targetUserId] || 0) + 1 }));
+          await wait(ANIM.LADDER_HOP_MS);
+        }
+
+        // Sampai di puncak: chime kemenangan kecil, lalu tangga memudar pergi.
+        sounds.ladderArrive();
+        setTokenOverrides((prev) => {
+          const copy = { ...prev };
+          delete copy[targetUserId];
+          return copy;
+        });
+        setVisualPositions((prev) => ({ ...prev, [targetUserId]: finalPos }));
+        setLadderFx({ id: lObj.id, mode: 'vanish', ladder: lObj });
+        sounds.ladderVanish();
+        await wait(ANIM.LADDER_VANISH_MS);
+
+        // Tangga baru (hasil relokasi) muncul kembali.
+        setLadderFx({ id: lObj.id, mode: 'reveal', ladder: lObj });
+        sounds.ladderReveal();
+        await wait(ANIM.LADDER_REVEAL_MS);
+        // 'done' = render normal; tetap menandai animasi sudah lewat supaya
+        // guard pendingLadder tidak menghidupkan lagi tangga lama sebelum
+        // state settle membersihkan ladderFx.
+        setLadderFx({ id: lObj.id, mode: 'done', ladder: lObj });
       } else if (finalPos !== steppedPos) {
+        // Fallback payload lama tanpa hitLadder: luncuran mulus seperti sebelumnya.
         await wait(ANIM.EVENT_PAUSE_MS);
         const finalCoords = getTileCoordinates(finalPos);
         setTokenOverrides((prev) => ({
@@ -491,14 +616,14 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             opacity: 1,
           },
         }));
-        await wait(ANIM.LADDER_CLIMB_MS);
+        await wait(460);
         setTokenOverrides((prev) => {
           const copy = { ...prev };
           delete copy[targetUserId];
           return copy;
         });
         setVisualPositions((prev) => ({ ...prev, [targetUserId]: finalPos }));
-        await wait(ANIM.LADDER_SETTLE_MS);
+        await wait(110);
       }
 
       lastProcessedPosRef.current[targetUserId] = finalPos;
@@ -531,6 +656,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       type: action.specialHitType,
       snakeObj: action.hitSnake,
       wormholeObj: action.hitWormhole,
+      ladderObj: action.hitLadder,
     };
 
     // Berapa lama payload ini sudah di perjalanan (broadcast + render).
@@ -549,6 +675,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       if (cancelled) return;
       setIsDiceRolling(false);
       setLocalDiceRoll(action.dice);
+      sounds.diceLand();
       requestAnimationFrame(() => {
         if (cancelled) return;
         animatePath(
@@ -570,6 +697,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
       setIsDiceRolling(true);
       remoteShuffle = setInterval(() => {
         setLocalDiceRoll(Math.floor(Math.random() * 6) + 1);
+        sounds.diceTick();
       }, ANIM.DICE_SHUFFLE_MS);
       const stopTimer = setTimeout(() => {
         if (remoteShuffle) clearInterval(remoteShuffle);
@@ -636,6 +764,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     // Visual random dice shuffle while rolling
     const shuffleInterval = setInterval(() => {
       setLocalDiceRoll(Math.floor(Math.random() * 6) + 1);
+      sounds.diceTick();
     }, ANIM.DICE_SHUFFLE_MS);
 
     const unlockAfterFailure = (errorMessage?: string) => {
@@ -705,6 +834,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
 
       setLocalDiceRoll(finalDice);
       setIsRollingLocal(false);
+      sounds.diceLand();
 
       if (actionPayload.specialHitType === 'mine') {
         toast.error('💥 Kamu menginjak Ranjau Capit! Freeze 3 giliran!');
@@ -734,6 +864,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
         type: actionPayload.specialHitType,
         snakeObj: actionPayload.hitSnake,
         wormholeObj: actionPayload.hitWormhole,
+        ladderObj: actionPayload.hitLadder,
       };
 
       // ── PHASE 2: RESULT (revision N+2, straight from the server). Contains the
@@ -824,6 +955,17 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
     }
   };
 
+  // Guard render-time: antara broadcast RESULT (yang sudah memuat tangga hasil
+  // relokasi) dan dimulainya animasi, tetap tampilkan tangga LAMA supaya tangga
+  // tidak berkedip pindah tempat duluan di layar pemain remote.
+  const lastLadderAction = snakesState?.lastAction;
+  const pendingLadder: Ladder | undefined =
+    !ladderFx &&
+    Boolean(snakesState?.isAnimating) &&
+    lastLadderAction?.specialHitType === 'ladder'
+      ? lastLadderAction.hitLadder
+      : undefined;
+
   return (
     <div className="flex flex-col items-center gap-3 sm:gap-4 w-full max-w-[640px] lg:max-w-[460px] xl:max-w-[500px] 2xl:max-w-[540px] mx-auto select-none">
       {winners.length > 0 && (
@@ -900,9 +1042,11 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               @keyframes spin-cw { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
               @keyframes spin-ccw { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
               @keyframes pulse-jet { 0%, 100% { opacity: 0.7; transform: scaleY(1); } 50% { opacity: 1; transform: scaleY(1.15); } }
+              @keyframes ladder-in { from { opacity: 0; transform: scale(0.88); } to { opacity: 1; transform: scale(1); } }
               .vortex-cw { transform-box: fill-box; transform-origin: center; animation: spin-cw 8s linear infinite; }
               .vortex-ccw { transform-box: fill-box; transform-origin: center; animation: spin-ccw 6s linear infinite; }
               .jet-beam { transform-box: fill-box; transform-origin: center; animation: pulse-jet 1.5s ease-in-out infinite; }
+              .ladder-reveal { transform-box: fill-box; transform-origin: center; animation: ladder-in 0.3s ease-out both; }
             `}</style>
 
             {SNAKE_SPECIES.map((species) => (
@@ -928,12 +1072,13 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               <stop offset="100%" stopColor="#000000" stopOpacity="0" />
             </radialGradient>
 
+            {/* Whitehole murni putih — tanpa semburat biru */}
             <radialGradient id="whPusaranGrad">
               <stop offset="0%" stopColor="#ffffff" />
-              <stop offset="25%" stopColor="#e0f2fe" />
-              <stop offset="50%" stopColor="#38bdf8" />
-              <stop offset="78%" stopColor="#2563eb" />
-              <stop offset="100%" stopColor="#1e3a8a" stopOpacity="0" />
+              <stop offset="32%" stopColor="#ffffff" />
+              <stop offset="58%" stopColor="#f4f4f5" />
+              <stop offset="82%" stopColor="#e4e4e7" stopOpacity="0.85" />
+              <stop offset="100%" stopColor="#d4d4d8" stopOpacity="0" />
             </radialGradient>
 
             <linearGradient id="trapMetalDark" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -948,10 +1093,20 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             </linearGradient>
           </defs>
 
-          {/* Tangga */}
+          {/* Tangga — saat dipanjat menampilkan tangga LAMA; setelah bidak
+              sampai di atas tangga memudar lenyap, lalu tangga baru (hasil
+              relokasi) muncul kembali dengan animasi fade-in. */}
           {snakesState?.ladders?.map((ladder) => {
-            const start = getTileCoordinates(ladder.start);
-            const end = getTileCoordinates(ladder.end);
+            const activeFx = ladderFx && ladderFx.mode !== 'done' ? ladderFx : null;
+            const fx: LadderFx | null =
+              activeFx && activeFx.id === ladder.id
+                ? activeFx
+                : pendingLadder && pendingLadder.id === ladder.id
+                ? { id: ladder.id, mode: 'climb', ladder: pendingLadder }
+                : null;
+            const source = fx && fx.mode !== 'reveal' ? fx.ladder : ladder;
+            const start = getTileCoordinates(source.start);
+            const end = getTileCoordinates(source.end);
             const dx = end.x - start.x;
             const dy = end.y - start.y;
             const len = Math.sqrt(dx * dx + dy * dy);
@@ -959,8 +1114,19 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
             const ny = (dx / len) * 0.6;
             const rungs = Math.max(3, Math.floor(len / 4.5));
 
+            const fxStyle: React.CSSProperties | undefined =
+              fx?.mode === 'vanish'
+                ? {
+                    opacity: 0,
+                    transform: 'scale(0.82)',
+                    transformOrigin: `${end.x}% ${end.y}%`,
+                    transition: `opacity ${ANIM.LADDER_VANISH_MS}ms ease-out, transform ${ANIM.LADDER_VANISH_MS}ms ease-out`,
+                  }
+                : undefined;
+            const fxClass = fx?.mode === 'reveal' ? 'ladder-reveal' : undefined;
+
             return (
-              <g key={ladder.id}>
+              <g key={ladder.id} style={fxStyle} className={fxClass}>
                 <line x1={start.x + nx} y1={start.y + ny} x2={end.x + nx} y2={end.y + ny} stroke="#d97706" strokeWidth="0.4" strokeLinecap="round" />
                 <line x1={start.x - nx} y1={start.y - ny} x2={end.x - nx} y2={end.y - ny} stroke="#d97706" strokeWidth="0.4" strokeLinecap="round" />
                 {Array.from({ length: rungs }, (_, r) => {
@@ -1074,17 +1240,18 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                   <circle cx="0" cy="0" r="1.3" fill="#000000" stroke="#18181b" strokeWidth="0.3" />
                 </g>
 
+                {/* Whitehole — pusaran cahaya putih bersih tanpa warna biru */}
                 <g transform={`translate(${whPos.x}, ${whPos.y})`}>
                   <circle cx="0" cy="0" r="4.3" fill="url(#whPusaranGrad)" />
                   <g className="vortex-ccw">
-                    <path d="M 0 0 C 0.5 1.5, 1.8 3.0, 0.6 3.6 C -0.8 4.2, -2.4 2.2, 0 0" fill="#38bdf8" opacity="0.6" />
-                    <path d="M 0 0 C -0.5 -1.5, -1.8 -3.0, -0.6 -3.6 C 0.8 -4.2, 2.4 -2.2, 0 0" fill="#38bdf8" opacity="0.6" />
+                    <path d="M 0 0 C 0.5 1.5, 1.8 3.0, 0.6 3.6 C -0.8 4.2, -2.4 2.2, 0 0" fill="#e4e4e7" opacity="0.9" />
+                    <path d="M 0 0 C -0.5 -1.5, -1.8 -3.0, -0.6 -3.6 C 0.8 -4.2, 2.4 -2.2, 0 0" fill="#e4e4e7" opacity="0.9" />
                   </g>
                   <g className="jet-beam">
-                    <path d="M -0.3 0 L 0 -4.2 L 0.3 0 L 0 4.2 Z" fill="#e0f2fe" opacity="0.8" />
+                    <path d="M -0.3 0 L 0 -4.2 L 0.3 0 L 0 4.2 Z" fill="#ffffff" opacity="0.9" />
                     <line x1="0" y1="-4.5" x2="0" y2="4.5" stroke="#ffffff" strokeWidth="0.25" strokeLinecap="round" />
                   </g>
-                  <circle cx="0" cy="0" r="1.4" fill="none" stroke="#38bdf8" strokeWidth="0.3" opacity="0.85" />
+                  <circle cx="0" cy="0" r="1.4" fill="none" stroke="#fafafa" strokeWidth="0.3" opacity="0.95" />
                   <circle cx="0" cy="0" r="0.85" fill="#ffffff" />
                 </g>
               </g>
@@ -1141,7 +1308,7 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                   left: leftPos,
                   top: topPos,
                   transform: 'translate(-50%, -50%)',
-                  transition: isOverridden ? 'none' : 'left 0.13s ease-in-out, top 0.13s ease-in-out',
+                  transition: isOverridden ? 'none' : 'left 0.28s ease-in-out, top 0.28s ease-in-out',
                   zIndex: isOverridden ? 40 : 30,
                 }}
               >
@@ -1168,10 +1335,12 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
                     key={`hop-${hopTick[pId] || 0}`}
                     initial={{ y: 0 }}
                     animate={{
-                      y: isOverridden ? 0 : [0, -6, 0],
+                      // hop: true dipakai saat memanjat tangga — bidak tetap
+                      // melompat walau posisinya diatur manual per anak tangga.
+                      y: isOverridden ? (override?.hop ? [0, -7, 0] : 0) : [0, -6, 0],
                     }}
                     transition={{
-                      duration: isOverridden ? 0.03 : 0.16,
+                      duration: isOverridden ? (override?.hop ? 0.12 : 0.03) : 0.28,
                       ease: 'easeOut',
                     }}
                     className="relative flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8"
@@ -1255,6 +1424,24 @@ export const SnakesAndLaddersBoard: React.FC<SnakesAndLaddersBoardProps> = ({ br
               {isBoardAnimating && !isMyTurn ? ' - Berjalan...' : ''}
             </span>
           </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const next = !sfxMuted;
+              sounds.setMuted(next);
+              setSfxMuted(next);
+              if (!next) {
+                sounds.unlock();
+                sounds.diceLand(); // preview kecil supaya user tahu suara aktif
+              }
+            }}
+            title={sfxMuted ? 'Nyalakan efek suara' : 'Matikan efek suara'}
+            aria-label={sfxMuted ? 'Nyalakan efek suara' : 'Matikan efek suara'}
+            className="w-9 h-9 flex items-center justify-center rounded-xl border border-border bg-background hover:bg-hover text-secondary hover:text-foreground transition-colors cursor-pointer shrink-0 touch-manipulation select-none"
+          >
+            {sfxMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+          </button>
         </div>
 
         {isAlreadyFinished ? (
