@@ -774,7 +774,8 @@ export default function RoomPage() {
                       p.rank === 2 ? '🥈 2' :
                       p.rank === 3 ? '🥉 3' : ''
                     ) : room?.mode === 'competition' ? (
-                      `${p.progress ?? 0}% · ${p.score ?? 0}`
+                      // Competition cukup tampilkan persentase progress (3% … 100%)
+                      `${p.progress ?? 0}%`
                     ) : (
                       p.score
                     )}
