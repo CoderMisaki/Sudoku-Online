@@ -129,6 +129,7 @@ export default function RoomPage() {
     broadcastSnakesState,
     broadcastAvatarUpdate,
     broadcastProfileUpdate,
+    broadcastPlayerStats,
     isTrulyOffline,
     connectionError,
     reconnect
@@ -773,7 +774,7 @@ export default function RoomPage() {
                       p.rank === 2 ? '🥈 2' :
                       p.rank === 3 ? '🥉 3' : ''
                     ) : room?.mode === 'competition' ? (
-                      `${p.progress ?? 0}%`
+                      `${p.progress ?? 0}% · ${p.score ?? 0}`
                     ) : (
                       p.score
                     )}
@@ -892,7 +893,7 @@ export default function RoomPage() {
 
             {/* Render Sesuai Mode Pilihan */}
             {room?.mode === 'snakes_and_ladders' ? (
-              <SnakesAndLaddersBoard broadcastSnakesState={broadcastSnakesState} broadcastSnakesDiceRoll={broadcastSnakesDiceRoll} />
+              <SnakesAndLaddersBoard broadcastSnakesState={broadcastSnakesState} broadcastSnakesDiceRoll={broadcastSnakesDiceRoll} broadcastPlayerStats={broadcastPlayerStats} />
             ) : viewMode === '3D' ? (
               <SudokuBoard3D
                 broadcastMove={broadcastMove}

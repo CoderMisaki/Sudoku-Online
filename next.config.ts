@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+const isDev = process.env.NODE_ENV !== 'production';
+
 const securityHeaders = [
   {
     key: 'X-DNS-Prefetch-Control',
@@ -9,10 +11,12 @@ const securityHeaders = [
     key: 'Strict-Transport-Security',
     value: 'max-age=63072000; includeSubDomains; preload',
   },
-  {
+  // Legacy fallback for browsers without CSP frame-ancestors support.
+  // Kept off in dev so local/preview iframes keep working.
+  ...(isDev ? [] : [{
     key: 'X-Frame-Options',
     value: 'DENY',
-  },
+  }]),
   {
     key: 'X-Content-Type-Options',
     value: 'nosniff',
