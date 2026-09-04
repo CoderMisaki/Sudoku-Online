@@ -390,6 +390,17 @@ export default function RoomPage() {
     let maxPlayers = 4;
     let isHost = sessionStorage.getItem(`sudoku_host_room_${roomId}`) === '1';
 
+    // Persisted state is restored synchronously by zustand/persist on store
+    // creation, so a page REFRESH of an in-progress room already contains the
+    // same `room`/`grid`/`snakesState` we were playing. Detect that so we do
+    // NOT rebuild a brand-new room (which was the "refresh resets everything"
+    // bug): only the very first entry into a freshly-created room has null here.
+    const storeNow = useGameStore.getState();
+    const persistedRoom =
+      storeNow.room && storeNow.room.id === roomId ? storeNow.room : null;
+    const isRoomHostPersisted =
+      Boolean(persistedRoom) && persistedRoom!.hostId === storedUserId;
+
     const roomConfigStr = sessionStorage.getItem(`sudoku_room_config_${roomId}`);
     if (roomConfigStr) {
       try {
@@ -403,6 +414,31 @@ export default function RoomPage() {
       } catch (e) {
         console.error('Error parsing room config:', e);
       }
+    }
+
+    // The persisted snapshot says we are the host of this exact room -> honor it
+    // (keeps us host even if the per-tab sessionStorage marker is gone, and
+    // preserves difficulty/mode/maxPlayers that the room was actually created with).
+    if (isRoomHostPersisted) {
+      isHost = true;
+      difficulty = persistedRoom!.difficulty;
+      mode = persistedRoom!.mode;
+      maxPlayers = persistedRoom!.maxPlayers || 4;
+    }
+
+    // If we already hold a live board for this exact room (i.e. we reloaded an
+    // ongoing match), resume it as-is instead of generating a new game. Guests
+    // reconnect and re-converge via the host's realtime sync_state broadcast.
+    const resumingGame =
+      isHost &&
+      Boolean(persistedRoom) &&
+      (persistedRoom!.mode === 'snakes_and_ladders'
+        ? Boolean(storeNow.snakesState)
+        : Boolean(storeNow.grid));
+
+    if (resumingGame) {
+      setLoading(false);
+      return;
     }
 
     if (isHost) {
