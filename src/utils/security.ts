@@ -1,10 +1,16 @@
 import crypto from 'crypto';
 
-// Hardcoded dedicated 256-bit Master Secret (tanpa bergantung pada .env)
-const MASTER_ENCRYPTION_SECRET = 'e4a7c8f921b3d5e0a6c2f8194b7e3d2c1598f4a7b0e6c3d9a1f2e5b8c4d7e0f3';
+// Master secret: prefer ROOM_SECRET_KEY from env, fall back to a built-in
+// constant so deployments without env config still boot (see sentinel.md).
+const FALLBACK_ENCRYPTION_SECRET = 'e4a7c8f921b3d5e0a6c2f8194b7e3d2c1598f4a7b0e6c3d9a1f2e5b8c4d7e0f3';
+
+let cachedKey: Buffer | null = null;
 
 function getMasterKey(): Buffer {
-  return crypto.createHash('sha256').update(MASTER_ENCRYPTION_SECRET).digest();
+  if (cachedKey) return cachedKey;
+  const secret = process.env.ROOM_SECRET_KEY || FALLBACK_ENCRYPTION_SECRET;
+  cachedKey = crypto.createHash('sha256').update(secret).digest();
+  return cachedKey;
 }
 
 const ALGORITHM = 'aes-256-gcm';
@@ -28,7 +34,11 @@ interface TokenPayload {
   nonce?: string;
 }
 
-const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — matches a room lifecycle
+/** Default token lifetime: 2 hours — comfortably longer than a match, short
+ *  enough that a leaked token cannot be replayed indefinitely. */
+const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
+/** Absolute ceiling accepted at decrypt time (defends against forged long TTLs). */
+const MAX_TTL_MS = 12 * 60 * 60 * 1000;
 
 export function encryptSolution(solutionGrid: number[][], opts: EncryptOptions = {}): string {
   try {
@@ -72,13 +82,13 @@ function parseTokenPayload(token: string): TokenPayload | null {
     const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
     const parsed = JSON.parse(decrypted.toString('utf8')) as TokenPayload & { timestamp?: number };
     if (!parsed.solution || !Array.isArray(parsed.solution)) return null;
-    // BackwardCompat: old tokens had only timestamp, derive expiresAt
-    if (typeof parsed.expiresAt !== 'number') {
-      const ts = typeof parsed.timestamp === 'number' ? parsed.timestamp : Date.now();
-      (parsed as TokenPayload).expiresAt = ts + DEFAULT_TTL_MS;
-      if (typeof (parsed as TokenPayload).timestamp !== 'number') (parsed as TokenPayload).timestamp = ts;
-    }
-    if (typeof parsed.timestamp !== 'number') (parsed as TokenPayload).timestamp = (parsed as TokenPayload).expiresAt - DEFAULT_TTL_MS;
+    // Tokens MUST carry explicit lifetime metadata. Legacy tokens without it
+    // are rejected instead of being silently granted a fresh TTL.
+    if (typeof parsed.expiresAt !== 'number' || typeof parsed.timestamp !== 'number') return null;
+    // Reject forged/absurd lifetimes.
+    if (parsed.expiresAt - parsed.timestamp > MAX_TTL_MS) return null;
+    // Reject tokens issued in the future (clock tampering), allow 5m skew.
+    if (parsed.timestamp > Date.now() + 5 * 60 * 1000) return null;
     return parsed as TokenPayload;
   } catch {
     return null;
@@ -101,9 +111,12 @@ export function decryptSolution(token: string, opts: DecryptOptions = {}): numbe
     console.warn('Token roomId mismatch:', { expected: opts.expectedRoomId, got: payload.roomId });
     return null;
   }
-  // If token has roomId but caller didn't supply expectedRoomId, we still enforce that
-  // the caller should supply roomId when verification is room-scoped.
-  // Callers that don't know roomId can still use token only if they pass same roomId.
+  // A room-scoped token can ONLY be redeemed by a caller that proves which room
+  // it is acting for. Missing roomId is treated as a mismatch.
+  if (payload.roomId && !opts.expectedRoomId) {
+    console.warn('Token room-scoped tetapi roomId tidak disertakan pemanggil');
+    return null;
+  }
   return payload.solution as number[][];
 }
 

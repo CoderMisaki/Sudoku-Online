@@ -233,11 +233,20 @@ export const useGameStore = create<GameStore>()(
           const currentPlayer = newRoom.players[playerId];
           let newRank = currentPlayer?.rank ?? null;
 
+          // Skor competition: +10 per sel benar, -5 per sel salah (sebelumnya
+          // mode ini tidak pernah menambah skor sama sekali -> "skor tidak jalan").
+          let newScore = currentPlayer?.score || 0;
+          if (value !== null) {
+            newScore += isCorrect ? 10 : -5;
+          }
+
           if (isComplete && !newRank) {
             const existingRanks = Object.values(newRoom.players)
               .map(p => p.rank)
               .filter((r): r is number => typeof r === 'number' && r > 0);
             newRank = existingRanks.length + 1;
+            // Bonus juara: 1st=100, 2nd=60, 3rd=30, sisanya 10
+            newScore += newRank === 1 ? 100 : newRank === 2 ? 60 : newRank === 3 ? 30 : 10;
           }
 
           if (newRoom.players[playerId]) {
@@ -249,6 +258,7 @@ export const useGameStore = create<GameStore>()(
                   ...newRoom.players[playerId],
                   progress: progPercent,
                   rank: newRank,
+                  score: newScore,
                 }
               }
             };
@@ -472,7 +482,9 @@ export const useGameStore = create<GameStore>()(
         Object.keys(newPlayers).forEach(playerId => {
           newPlayers[playerId] = {
             ...newPlayers[playerId],
-            score: 0,
+            // Skor bersifat kumulatif antar ronde dan HARUS cocok dengan payload
+            // room yang disiarkan host (yang juga mempertahankan skor).
+            score: newPlayers[playerId]?.score ?? 0,
             progress: 0,
             rank: null,
             hints: 3,
@@ -520,9 +532,11 @@ export const useGameStore = create<GameStore>()(
           }
         } catch {}
         try {
-          // Typed-safe wrapper around zustand persist clearStorage
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (useGameStore as any).persist?.clearStorage?.();
+          // Typed wrapper around the zustand persist API (no `as any`)
+          const persisted = useGameStore as unknown as {
+            persist?: { clearStorage?: () => void };
+          };
+          persisted.persist?.clearStorage?.();
         } catch {}
       },
     }),

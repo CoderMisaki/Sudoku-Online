@@ -118,6 +118,24 @@ export function useRealtime(roomId: string) {
     setDebugLogs((prev) => [logEntry, ...prev.slice(0, 49)]);
   }, []);
 
+  /**
+   * Payload sync_state dari host.
+   * COMPETITION ISOLATION: pada mode competition setiap pemain memegang puzzle
+   * sendiri, jadi grid & solutionToken host TIDAK PERNAH dikirim ke guest.
+   */
+  const buildSyncPayload = useCallback((senderId: string) => {
+    const store = useGameStore.getState();
+    const isCompetition = store.room?.mode === 'competition';
+    return {
+      room: store.room,
+      grid: isCompetition ? null : store.grid,
+      solutionToken: isCompetition ? null : store.solutionToken,
+      snakesState: store.snakesState,
+      messages: store.messages,
+      senderId,
+    };
+  }, []);
+
   // Toast notification for move answers (1.5 seconds)
   const triggerAnswerToast = useCallback((playerName: string, isCorrect: boolean) => {
     if (isCorrect) {
@@ -171,14 +189,7 @@ export function useRealtime(roomId: string) {
         channelRef.current.send({
           type: 'broadcast',
           event: 'sync_state',
-          payload: {
-            room: store.room,
-            grid: store.grid,
-            solutionToken: store.solutionToken,
-            snakesState: store.snakesState,
-            messages: store.messages,
-            senderId: currentUid,
-          },
+          payload: buildSyncPayload(currentUid ?? ''),
         }).catch((err) => {
           addLog(`[Host Broadcast] Gagal mengirim sync_state: ${String(err)}`);
         });
@@ -187,7 +198,7 @@ export function useRealtime(roomId: string) {
 
     prevGridRef.current = grid;
     prevSnakesStateRef.current = snakesState;
-  }, [grid, snakesState, addLog]);
+  }, [grid, snakesState, addLog, buildSyncPayload]);
 
   const connectChannel = useCallback(() => {
     const currentUserId = userIdRef.current || (typeof window !== 'undefined' ? getOrCreateUserId() : '');
@@ -344,14 +355,7 @@ export function useRealtime(roomId: string) {
           channel.send({
             type: 'broadcast',
             event: 'sync_state',
-            payload: {
-              room: store.room,
-              grid: store.grid,
-              solutionToken: store.solutionToken,
-              snakesState: store.snakesState,
-              messages: store.messages,
-              senderId: currentUserId,
-            },
+            payload: buildSyncPayload(currentUserId),
           });
         }
       })
@@ -375,7 +379,10 @@ export function useRealtime(roomId: string) {
           // jadi rekonsiliasi presence agar player tidak hilang / stuck disconnected.
           store.setRoom(applyPresenceToRoom(payload.room));
         }
-        if (payload.grid && payload.solutionToken) {
+        // COMPETITION ISOLATION: jangan pernah adopsi grid/solution milik host.
+        const isCompetitionRoom =
+          (payload.room?.mode ?? store.room?.mode) === 'competition';
+        if (!isCompetitionRoom && payload.grid && payload.solutionToken) {
           store.setGameData(payload.grid, payload.solutionToken);
         }
         if (payload.snakesState) {
@@ -398,8 +405,10 @@ export function useRealtime(roomId: string) {
         const senderName = store.room?.players[payload.userId]?.username || '';
 
         if (store.room?.mode === 'competition') {
-          // Competition: tiap client menghitung grid sendiri, jadi hanya tampilkan notifikasi.
-          triggerAnswerToast(senderName, payload.isCorrect);
+          // COMPETITION ISOLATION: setiap pemain punya papan sendiri.
+          // Jangan terapkan move lawan DAN jangan tampilkan notifikasi jawaban
+          // lawan (membocorkan benar/salah + ritme lawan). Progress % di panel
+          // Players sudah cukup sebagai info kompetisi.
           return;
         }
 
@@ -419,11 +428,15 @@ export function useRealtime(roomId: string) {
         store.toggleNote(payload.row, payload.col, payload.note);
       })
       .on('broadcast', { event: 'cursor_move' }, ({ payload }) => {
+        // COMPETITION ISOLATION: posisi kursor lawan tidak boleh bocor.
+        if (useGameStore.getState().room?.mode === 'competition') return;
         useGameStore.getState().updatePlayer(payload.userId, {
           cursor: { row: payload.row, col: payload.col },
         });
       })
       .on('broadcast', { event: 'cell_lock' }, ({ payload }) => {
+        // COMPETITION ISOLATION: tidak ada lock antar pemain (papan terpisah).
+        if (useGameStore.getState().room?.mode === 'competition') return;
         setLocks((prev) => ({
           ...prev,
           [`${payload.row}-${payload.col}`]: {
@@ -495,6 +508,25 @@ export function useRealtime(roomId: string) {
           }
           lastSnakesStateAtRef.current = Date.now();
         }
+      })
+      .on('broadcast', { event: 'player_stats' }, ({ payload }) => {
+        // Skor/progress otoritatif dari pemiliknya sendiri. Dipakai terutama di
+        // mode competition (papan terisolasi, jadi peer tidak bisa menghitung
+        // sendiri), tapi juga menjaga leaderboard mode lain tetap konsisten.
+        const { userId: pid, score, progress, rank } = (payload ?? {}) as {
+          userId?: string; score?: unknown; progress?: unknown; rank?: unknown;
+        };
+        if (!pid || typeof pid !== 'string') return;
+        const patch: Partial<Player> = {};
+        if (typeof score === 'number' && Number.isFinite(score)) patch.score = score;
+        if (typeof progress === 'number' && Number.isFinite(progress)) {
+          patch.progress = Math.max(0, Math.min(100, Math.round(progress)));
+        }
+        if (rank === null || (typeof rank === 'number' && Number.isFinite(rank))) {
+          patch.rank = rank as number | null;
+        }
+        if (Object.keys(patch).length === 0) return;
+        useGameStore.getState().updatePlayer(pid, patch);
       })
       .on('broadcast', { event: 'player_profile_update' }, ({ payload }) => {
         // { playerId, username?, avatar? } — username is mutable, playerId is identity.
@@ -573,14 +605,7 @@ export function useRealtime(roomId: string) {
             channel.send({
               type: 'broadcast',
               event: 'sync_state',
-              payload: {
-                room: store.room,
-                grid: store.grid,
-                solutionToken: store.solutionToken,
-                snakesState: store.snakesState,
-                messages: store.messages,
-                senderId: currentUserId,
-              },
+              payload: buildSyncPayload(currentUserId),
             }).catch((err) => {
               addLog(`[Host Sync] Gagal mengirim sync_state: ${String(err)}`);
             });
@@ -599,7 +624,7 @@ export function useRealtime(roomId: string) {
           }
         }
       });
-  }, [roomId, addLog, requestState, setRealtimeStatus, triggerAnswerToast]);
+  }, [roomId, addLog, requestState, setRealtimeStatus, triggerAnswerToast, buildSyncPayload]);
 
   // SMART AUTO RECONNECT (Network Online / Tab Focus / Visibility Change)
   useEffect(() => {
@@ -646,13 +671,13 @@ export function useRealtime(roomId: string) {
           if (lastAt === 0) {
             lastSnakesStateAtRef.current = Date.now();
             requestState();
-          } else if (Date.now() - lastAt > 5000) {
+          } else if (Date.now() - lastAt > 3000) {
             lastSnakesStateAtRef.current = Date.now();
             requestState();
           }
         }
       }
-    }, 2000);
+    }, 1200);
 
     return () => {
       isMountedRef.current = false;
@@ -692,10 +717,14 @@ export function useRealtime(roomId: string) {
         return;
       }
 
-      try {
-        const token = store.solutionToken;
-        if (!token) return;
+      const token = store.solutionToken;
+      if (!token) return;
 
+      // OPTIMISTIC RENDER: paint the digit immediately so typing feels instant.
+      // The server verdict arrives a moment later and reconciles the cell.
+      store.setOptimisticMove(row, col, value);
+
+      try {
         const res = await fetch('/api/game/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -704,9 +733,10 @@ export function useRealtime(roomId: string) {
         const data = await res.json();
         const isCorrect = Boolean(data.isCorrect);
 
-        store.updateCellWithValidation(row, col, value, currentUid, isCorrect);
+        const latest = useGameStore.getState();
+        latest.updateCellWithValidation(row, col, value, currentUid, isCorrect);
 
-        if (store.room?.mode !== 'snakes_and_ladders') {
+        if (latest.room?.mode !== 'snakes_and_ladders') {
           triggerAnswerToast(currentUname, isCorrect);
         }
 
@@ -715,8 +745,28 @@ export function useRealtime(roomId: string) {
           event: 'cell_move',
           payload: { row, col, value, userId: currentUid, isCorrect },
         });
+
+        // Selalu siarkan skor/progress milik sendiri supaya leaderboard hidup di
+        // semua mode — termasuk competition, di mana peer tidak boleh melihat
+        // papan kita tapi tetap harus melihat skornya.
+        const me = useGameStore.getState().room?.players[currentUid];
+        if (me) {
+          channelRef.current?.send({
+            type: 'broadcast',
+            event: 'player_stats',
+            payload: {
+              userId: currentUid,
+              score: me.score,
+              progress: me.progress ?? 0,
+              rank: me.rank ?? null,
+            },
+          });
+        }
       } catch (err) {
         console.error('Failed to verify move:', err);
+        // Roll the optimistic digit back so the board never lies.
+        useGameStore.getState().updateCellWithValidation(row, col, null, currentUid, false);
+        toast.error('Gagal memverifikasi jawaban. Coba lagi.');
       }
     },
     [triggerAnswerToast]
@@ -840,10 +890,11 @@ export function useRealtime(roomId: string) {
     } else {
       useGameStore.getState().updateSnakesState(newState);
     }
+    // Fire-and-forget: menunggu ack menambah ~1 RTT sebelum peer melihat langkah.
     channelRef.current?.send({
       type: 'broadcast',
       event: 'snakes_state_update',
-      payload: { snakesState: newState },
+      payload: { snakesState: newState, sentAt: Date.now() },
     });
   }, []);
 
@@ -917,6 +968,19 @@ export function useRealtime(roomId: string) {
     [addLog]
   );
 
+  /** Siarkan skor/rank milik sendiri (dipakai Ular Tangga & Sudoku). */
+  const broadcastPlayerStats = useCallback(
+    (stats: { score?: number; progress?: number; rank?: number | null }) => {
+      const currentUid = userIdRef.current || getOrCreateUserId();
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'player_stats',
+        payload: { userId: currentUid, ...stats },
+      });
+    },
+    []
+  );
+
   const broadcastAvatarUpdate = useCallback((avatar: string | null) => {
     broadcastProfileUpdate({ avatar });
   }, [broadcastProfileUpdate]);
@@ -934,6 +998,7 @@ export function useRealtime(roomId: string) {
     broadcastSnakesState,
     broadcastAvatarUpdate,
     broadcastProfileUpdate,
+    broadcastPlayerStats,
     requestState,
     realtimeStatus,
     isTrulyOffline,
