@@ -9,13 +9,14 @@ export type GameMode =
   | 'snakes_and_ladders'
   | 'tic_tac_toe'
   | 'arrow_classic'
-  | 'arrow_competition';
+  | 'arrow_competition'
+  | 'arrow_practice';
 
 /** Game yang memakai papan Arrow Puzzle Master (bukan papan Sudoku). */
-export type ArrowGameMode = 'arrow_classic' | 'arrow_competition';
+export type ArrowGameMode = 'arrow_classic' | 'arrow_competition' | 'arrow_practice';
 
 export const isArrowGameMode = (mode?: GameMode | null): mode is ArrowGameMode =>
-  mode === 'arrow_classic' || mode === 'arrow_competition';
+  mode === 'arrow_classic' || mode === 'arrow_competition' || mode === 'arrow_practice';
 
 export interface Player {
   id: string;

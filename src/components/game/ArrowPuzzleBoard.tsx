@@ -275,15 +275,32 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
   const pendingRef = useRef<Set<string>>(new Set());
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const variant = room?.mode === 'arrow_competition' ? 'competition' : 'classic';
+  const variant = room?.mode === 'arrow_classic' ? 'classic' : 'competition';
   const isClassic = variant === 'classic';
+  /** Practice: mode belajar — papan sendiri (seperti competition) + tombol bantuan Auto/All. */
+  const isPractice = room?.mode === 'arrow_practice';
   const isHost = Boolean(room && userId && room.hostId === userId);
   const difficultyKey = room?.difficulty ?? 'medium';
   const normalizedDifficulty = normalizeArrowDifficulty(difficultyKey);
 
+  // Seed papan. Mode Competition/Classic memakai seed deterministik (semua pemain
+  // dapat papan identik). Mode Practice memakai seed acak (Math.random) per ronde
+  // supaya soal tidak pernah sama dengan sebelumnya, sesuai kesulitan easy→evil.
+  // Seed acak DIBUAT di dalam effect (bukan saat render) agar komponen tetap murni.
+  const [practiceNonce, setPracticeNonce] = useState(0);
+  const practiceKey = `${room?.id ?? 'solo'}:${difficultyKey}:${room?.startedAt ?? 0}:${practiceNonce}`;
+  const [practiceSeed, setPracticeSeed] = useState('');
+  const prevPracticeKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isPractice) return;
+    if (prevPracticeKeyRef.current === practiceKey) return;
+    prevPracticeKeyRef.current = practiceKey;
+    setPracticeSeed(`practice:${practiceKey}:${Math.random().toString(36).slice(2, 10)}`);
+  }, [isPractice, practiceKey]);
+
   const seed = useMemo(
-    () => buildArrowSeed(room?.id ?? '', difficultyKey, room?.startedAt ?? 0),
-    [room?.id, difficultyKey, room?.startedAt]
+    () => (isPractice ? practiceSeed : buildArrowSeed(room?.id ?? '', difficultyKey, room?.startedAt ?? 0)),
+    [isPractice, practiceSeed, room?.id, difficultyKey, room?.startedAt]
   );
 
   useEffect(() => {
@@ -292,12 +309,20 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
   }, []);
 
   // ── Siapkan papan ──────────────────────────────────────────────────────────
+  const prevSeedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!room || !userId) return;
     if (isClassic && !isHost) return;
+    // Practice: tunggu seed acak siap (dibuat di effect di atas) sebelum menyusun papan.
+    if (isPractice && !practiceSeed) return;
 
     const current = useGameStore.getState().arrowPuzzleState;
-    if (current && current.variant === variant && current.difficulty === normalizedDifficulty) return;
+    const seedChanged = prevSeedRef.current !== null && prevSeedRef.current !== seed;
+    prevSeedRef.current = seed;
+    // Di mode Practice, seed acak berubah tiap ronde/“Papan Baru” → selalu buat papan baru.
+    if (current && current.variant === variant && current.difficulty === normalizedDifficulty && !seedChanged) {
+      return;
+    }
 
     const fresh = createArrowRound(difficultyKey, variant, seed, current?.revision ?? 0);
     replaceAllArrowPuzzleState(fresh);
@@ -311,6 +336,8 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
     variant,
     difficultyKey,
     normalizedDifficulty,
+    practiceSeed,
+    isPractice,
     replaceAllArrowPuzzleState,
     broadcastArrowPuzzleState,
   ]);
@@ -515,19 +542,24 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
   const handleNewBoard = useCallback(() => {
     if (!room || !userId) return;
     stopAuto();
-    const current = useGameStore.getState().arrowPuzzleState;
-    const fresh = createArrowRound(
-      difficultyKey,
-      variant,
-      `${seed}#${Math.random().toString(36).slice(2, 8)}`,
-      current?.revision ?? 0
-    );
-    replaceAllArrowPuzzleState(fresh);
-    if (isClassic && broadcastArrowPuzzleState) broadcastArrowPuzzleState(fresh);
+    if (isPractice) {
+      // Practice: minta papan acak baru (seed Math.random dibuat di effect terkait).
+      setPracticeNonce((n) => n + 1);
+    } else {
+      const current = useGameStore.getState().arrowPuzzleState;
+      const fresh = createArrowRound(
+        difficultyKey,
+        variant,
+        `${seed}#${Math.random().toString(36).slice(2, 8)}`,
+        current?.revision ?? 0
+      );
+      replaceAllArrowPuzzleState(fresh);
+      if (isClassic && broadcastArrowPuzzleState) broadcastArrowPuzzleState(fresh);
+    }
     setLastReason(null);
     setShakes({});
     toast.success('Papan Arrow baru dibuat!', { icon: '🔄' });
-  }, [room, userId, stopAuto, difficultyKey, variant, seed, isClassic, replaceAllArrowPuzzleState, broadcastArrowPuzzleState]);
+  }, [room, userId, stopAuto, isPractice, difficultyKey, variant, seed, isClassic, replaceAllArrowPuzzleState, broadcastArrowPuzzleState]);
 
   if (!arrowState) {
     return (
@@ -552,7 +584,7 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
       <div className="w-full bg-card border border-border rounded-2xl px-4 py-3 shadow-md">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <span className="w-9 h-9 rounded-xl bg-amber-400 text-slate-900 font-black flex items-center justify-center shadow-sm">
+            <span className="w-9 h-9 rounded-xl bg-foreground text-background font-black flex items-center justify-center shadow-sm">
               {isClassic ? <Users className="w-4 h-4" /> : <Swords className="w-4 h-4" />}
             </span>
             <div className="leading-tight">
@@ -560,7 +592,11 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
                 Arrow Puzzle · {cfg.label}
               </p>
               <p className="text-[11px] text-secondary">
-                {isClassic ? 'Classic — satu papan, kerja sama' : 'Competition — papan sendiri, adu cepat'}
+                {isClassic
+                  ? 'Classic — satu papan, kerja sama'
+                  : isPractice
+                  ? 'Practice — belajar bebas, tombol Auto & All tersedia'
+                  : 'Competition — papan sendiri, adu cepat'}
               </p>
             </div>
           </div>
@@ -579,7 +615,7 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
           </div>
           <div className="h-2.5 rounded-full bg-secondary/15 overflow-hidden">
             <motion.div
-              className="h-full bg-gradient-to-r from-amber-400 to-orange-400"
+              className="h-full bg-gradient-to-r from-foreground to-secondary"
               initial={false}
               animate={{ width: `${myProgress}%` }}
               transition={{ type: 'spring', stiffness: 180, damping: 24 }}
@@ -600,12 +636,12 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
             <div
               key={entry.player.id}
               className={`flex items-center gap-2 text-xs px-2 py-1 rounded-lg ${
-                entry.player.id === userId ? 'bg-amber-400/10' : ''
+                entry.player.id === userId ? 'bg-foreground/10' : ''
               }`}
             >
               <span className="w-5 text-center">
                 {i === 0 && entry.progress === 100 ? (
-                  <Crown className="w-3.5 h-3.5 text-amber-500 mx-auto" />
+                  <Crown className="w-3.5 h-3.5 text-foreground mx-auto" />
                 ) : (
                   <span className="text-secondary">{i + 1}</span>
                 )}
@@ -684,7 +720,7 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
                 animate={{ scale: 1, rotate: 0 }}
                 transition={{ type: 'spring', stiffness: 260, damping: 16 }}
               >
-                <Trophy className="w-12 h-12 text-amber-500" />
+                <Trophy className="w-12 h-12 text-foreground" />
               </motion.div>
               <div>
                 <h3 className="font-black text-xl text-slate-900">Puzzle Complete!</h3>
@@ -722,7 +758,7 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
       </div>
 
       {/* Bar kontrol */}
-      <div className="flex items-center justify-between gap-2 bg-amber-400 text-slate-900 p-3 rounded-2xl shadow-md w-full">
+      <div className="flex items-center justify-between gap-2 bg-foreground text-background p-3 rounded-2xl shadow-md w-full">
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -736,18 +772,18 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
               }
             }}
             title={sfxMuted ? 'Nyalakan efek suara' : 'Matikan efek suara'}
-            className="w-9 h-9 flex items-center justify-center rounded-xl bg-white/70 hover:bg-white transition-colors cursor-pointer"
+            className="w-9 h-9 flex items-center justify-center rounded-xl bg-background/15 hover:bg-background/25 transition-colors cursor-pointer"
           >
             {sfxMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
-          <div className="hidden sm:flex items-center gap-1.5 text-[11px] bg-white/70 px-3 py-1.5 rounded-xl">
-            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+          <div className="hidden sm:flex items-center gap-1.5 text-[11px] bg-background/15 px-3 py-1.5 rounded-xl">
+            <Sparkles className="w-3.5 h-3.5 text-secondary" />
             <span className="font-semibold">Keluar +{ARROW_CORRECT_POINTS} · Terhalang -5 → -10 → -20</span>
           </div>
         </div>
 
         <div className="flex items-center gap-1.5">
-          {!puzzleDone && (
+          {!puzzleDone && isPractice && (
             <>
               <button
                 type="button"
@@ -755,7 +791,7 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
                 onClick={handleAuto}
                 disabled={Boolean(autoRunning)}
                 title="Keluarkan satu arrow yang bebas (tanpa poin)"
-                className="h-9 px-3 rounded-xl bg-white/80 hover:bg-white text-xs font-bold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                className="h-9 px-3 rounded-xl bg-background text-foreground hover:bg-background/90 text-xs font-bold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
               >
                 <Wand2 className="w-3.5 h-3.5" /> Auto
               </button>
@@ -765,7 +801,7 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
                 onClick={handleAll}
                 disabled={Boolean(autoRunning)}
                 title="Selesaikan seluruh puzzle otomatis (tanpa poin)"
-                className="h-9 px-3 rounded-xl bg-slate-900 text-white hover:bg-slate-800 text-xs font-bold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                className="h-9 px-3 rounded-xl bg-background text-foreground hover:bg-background/90 text-xs font-bold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
               >
                 <FastForward className="w-3.5 h-3.5" /> All
               </button>
