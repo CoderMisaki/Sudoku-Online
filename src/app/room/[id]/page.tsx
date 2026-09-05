@@ -2,6 +2,7 @@
 
 import { generateInitialSnakesState } from "../../../utils/snakesAndLaddersData";
 import { createInitialTicTacToeState } from "../../../utils/ticTacToe";
+import { buildArrowSeed, createArrowRound, isArrowPuzzleFinished } from "../../../utils/arrowPuzzle";
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
@@ -19,6 +20,7 @@ import { SudokuBoard } from '../../../components/game/SudokuBoard';
 import { SudokuBoard3D } from '../../../components/game/SudokuBoard3D';
 import { SnakesAndLaddersBoard } from '../../../components/game/SnakesAndLaddersBoard';
 import { TicTacToeBoard } from '../../../components/game/TicTacToeBoard';
+import { ArrowPuzzleBoard } from '../../../components/game/ArrowPuzzleBoard';
 import {
   Copy,
   Users,
@@ -41,7 +43,7 @@ import {
 } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
 import { getStoredAvatar } from '../../../utils/avatar';
-import { Difficulty, GameMode, RoomState, Player } from '../../../types/game';
+import { Difficulty, GameMode, RoomState, Player, isArrowGameMode } from '../../../types/game';
 import toast from 'react-hot-toast';
 
 export default function RoomPage() {
@@ -130,6 +132,8 @@ export default function RoomPage() {
     broadcastSnakesDiceRoll,
     broadcastSnakesState,
     broadcastTicTacToeState,
+    broadcastArrowPuzzleState,
+    sendArrowMove,
     broadcastAvatarUpdate,
     broadcastProfileUpdate,
     broadcastPlayerStats,
@@ -143,14 +147,22 @@ export default function RoomPage() {
   const snakesWinners = useGameStore(state => state.snakesState?.winners);
   const snakesWinnerId = useGameStore(state => state.snakesState?.winnerId);
   const ticTacToeWinner = useGameStore(state => state.ticTacToeState?.winner);
+  const arrowPuzzleState = useGameStore(state => state.arrowPuzzleState);
 
-  // Munculkan Next Game jika game selesai (Ular Tangga, Tic Tac Toe, atau Sudoku)
+  // Munculkan Next Game jika game selesai (Ular Tangga, Tic Tac Toe, Arrow, atau Sudoku)
   const canTriggerNextGame = React.useMemo(() => {
     if (room?.mode === 'snakes_and_ladders') {
       return Boolean((snakesWinners && snakesWinners.length > 0) || snakesWinnerId);
     }
     if (room?.mode === 'tic_tac_toe') {
       return Boolean(ticTacToeWinner);
+    }
+    if (room?.mode === 'arrow_classic') {
+      return Boolean(arrowPuzzleState?.completed);
+    }
+    if (room?.mode === 'arrow_competition') {
+      // Tiap pemain punya papan sendiri: Next Game muncul begitu pemain ini finis.
+      return Boolean(arrowPuzzleState && userId && isArrowPuzzleFinished(arrowPuzzleState, userId));
     }
     if (!grid) return false;
     for (let r = 0; r < 9; r++) {
@@ -160,7 +172,7 @@ export default function RoomPage() {
       }
     }
     return true;
-  }, [grid, room?.mode, snakesWinners, snakesWinnerId, ticTacToeWinner]);
+  }, [grid, room?.mode, snakesWinners, snakesWinnerId, ticTacToeWinner, arrowPuzzleState, userId]);
 
   const solutionToken = useGameStore(state => state.solutionToken);
 
@@ -274,7 +286,25 @@ export default function RoomPage() {
         broadcastNextGame(null, null, updatedRoom, null, newTicTacToeState);
         toast.success('Game Tic Tac Toe baru dimulai!', { id: 'nextGame' });
       }
-      // MODE 3: SUDOKU COMPETITION
+      // MODE 3: ARROW PUZZLE MASTER (Classic ko-op / Competition papan sendiri)
+      else if (isArrowGameMode(gameMode)) {
+        const variant = gameMode === 'arrow_classic' ? 'classic' : 'competition';
+        const roundStartedAt = updatedRoom.startedAt ?? Date.now();
+        const arrowSeed = buildArrowSeed(roomId, diff, roundStartedAt);
+        const baseRevision = useGameStore.getState().arrowPuzzleState?.revision ?? 0;
+        const freshArrow = createArrowRound(diff, variant, arrowSeed, baseRevision);
+
+        useGameStore.getState().replaceAllArrowPuzzleState(freshArrow);
+        // Classic: papan host dibagikan. Competition: tiap pemain menyusun sendiri.
+        broadcastNextGame(null, null, updatedRoom, null, null, gameMode === 'arrow_classic' ? freshArrow : null);
+        toast.success(
+          gameMode === 'arrow_classic'
+            ? 'Arrow Puzzle Classic baru dimulai!'
+            : 'Arrow Competition baru dimulai!',
+          { id: 'nextGame' }
+        );
+      }
+      // MODE 4: SUDOKU COMPETITION
       else if (gameMode === 'competition') {
         broadcastNextGame(null, null, updatedRoom, null, null);
         const res = await fetch('/api/game/create-room', {
@@ -290,7 +320,7 @@ export default function RoomPage() {
           toast.error('Gagal membuat game baru', { id: 'nextGame' });
         }
       }
-      // MODE 4: SUDOKU COLLABORATIVE / CLASSIC / RACE / ZEN
+      // MODE 5: SUDOKU COLLABORATIVE / CLASSIC / RACE / ZEN
       else {
         const res = await fetch('/api/game/create-room', {
           method: 'POST',
@@ -443,6 +473,8 @@ export default function RoomPage() {
         ? Boolean(storeNow.snakesState)
         : persistedRoom!.mode === 'tic_tac_toe'
         ? Boolean(storeNow.ticTacToeState)
+        : isArrowGameMode(persistedRoom!.mode)
+        ? Boolean(storeNow.arrowPuzzleState)
         : Boolean(storeNow.grid));
 
     if (resumingGame) {
@@ -499,6 +531,11 @@ export default function RoomPage() {
           storedUserId
         );
         useGameStore.getState().replaceAllTicTacToeState(initialTicTacToe);
+        setLoading(false);
+      } else if (isArrowGameMode(mode)) {
+        // Papan Arrow Puzzle dibuat oleh <ArrowPuzzleBoard />.
+        // Mode Classic: host menyiarkan ke semua pemain. Mode Competition: tiap
+        // pemain menyusun papan sendiri dari seed ronde yang sama.
         setLoading(false);
       } else {
         fetch('/api/game/create-room', {
@@ -685,7 +722,12 @@ export default function RoomPage() {
   }
 
   // Tampilan Menunggu Host dengan opsi sinkronisasi ulang
-  if (!grid && room?.mode !== 'snakes_and_ladders' && room?.mode !== 'tic_tac_toe') {
+  if (
+    !grid &&
+    room?.mode !== 'snakes_and_ladders' &&
+    room?.mode !== 'tic_tac_toe' &&
+    !isArrowGameMode(room?.mode)
+  ) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-6 text-center space-y-4">
         <div className="space-y-2">
@@ -727,7 +769,13 @@ export default function RoomPage() {
       <header className="border-b border-border bg-card px-3 sm:px-6 py-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 sm:gap-4">
           <h1 className="text-base sm:text-xl font-bold truncate">
-            {room?.mode === 'tic_tac_toe' ? 'Tic Tac Toe' : room?.mode === 'snakes_and_ladders' ? 'Ular Tangga' : 'Sudoku'}
+            {room?.mode === 'tic_tac_toe'
+              ? 'Tic Tac Toe'
+              : room?.mode === 'snakes_and_ladders'
+              ? 'Ular Tangga'
+              : isArrowGameMode(room?.mode)
+              ? 'Arrow Puzzle Master'
+              : 'Sudoku'}
           </h1>
           <div className="flex items-center gap-1.5 text-xs text-secondary bg-background px-2.5 py-1 rounded-full border border-border">
             <span className="hidden sm:inline">Code:</span>
@@ -841,6 +889,8 @@ export default function RoomPage() {
                       p.rank === 3 ? '🥉 3' : ''
                     ) : room?.mode === 'competition' ? (
                       `${p.progress ?? 0}%`
+                    ) : room?.mode === 'arrow_competition' ? (
+                      `${p.progress ?? 0}% · ${p.score}`
                     ) : (
                       p.score
                     )}
@@ -921,14 +971,27 @@ export default function RoomPage() {
                       ? `Juara 1 telah keluar! Menunggu host untuk Next Game...`
                       : room?.mode === 'tic_tac_toe'
                       ? `Ronde selesai! Menunggu host untuk Next Game...`
+                      : isArrowGameMode(room?.mode)
+                      ? `Papan Arrow selesai! Menunggu host untuk Next Game...`
                       : `Game selesai! Menunggu host...`}
                   </div>
                 )}
-                <p className="text-secondary text-sm">Mode: {room?.mode === 'tic_tac_toe' ? 'Tic Tac Toe' : (room?.mode || 'collaborative')}</p>
+                <p className="text-secondary text-sm">
+                  Mode:{' '}
+                  {room?.mode === 'tic_tac_toe'
+                    ? 'Tic Tac Toe'
+                    : room?.mode === 'arrow_classic'
+                    ? 'Arrow Classic (Ko-op)'
+                    : room?.mode === 'arrow_competition'
+                    ? 'Arrow Competition'
+                    : room?.mode || 'collaborative'}
+                </p>
               </div>
 
               {/* Toggle Switch 2D / 3D (Hanya untuk Sudoku) */}
-              {room?.mode !== 'snakes_and_ladders' && room?.mode !== 'tic_tac_toe' && (
+              {room?.mode !== 'snakes_and_ladders' &&
+                room?.mode !== 'tic_tac_toe' &&
+                !isArrowGameMode(room?.mode) && (
                 <div className="flex items-center bg-card border border-border p-1 rounded-xl gap-1 shadow-sm">
                   <button
                     onClick={() => setViewMode('2D')}
@@ -967,6 +1030,12 @@ export default function RoomPage() {
                 broadcastTicTacToeState={broadcastTicTacToeState}
                 broadcastPlayerStats={broadcastPlayerStats}
               />
+            ) : isArrowGameMode(room?.mode) ? (
+              <ArrowPuzzleBoard
+                broadcastArrowPuzzleState={broadcastArrowPuzzleState}
+                sendArrowMove={sendArrowMove}
+                broadcastPlayerStats={broadcastPlayerStats}
+              />
             ) : viewMode === '3D' ? (
               <SudokuBoard3D
                 broadcastMove={broadcastMove}
@@ -995,7 +1064,9 @@ export default function RoomPage() {
             </div>
 
             {/* CONTROLS (Hanya Ditampilkan Pada Mode Sudoku) */}
-            {room?.mode !== 'snakes_and_ladders' && room?.mode !== 'tic_tac_toe' && (
+            {room?.mode !== 'snakes_and_ladders' &&
+              room?.mode !== 'tic_tac_toe' &&
+              !isArrowGameMode(room?.mode) && (
               <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" onClick={handleHint} disabled={(room?.mode !== 'zen' && hintsRemaining <= 0) || isSpectator}>
@@ -1160,6 +1231,8 @@ export default function RoomPage() {
                 <option value="zen">Zen (Santai)</option>
                 <option value="snakes_and_ladders">Snakes &amp; Ladders (Ular Tangga)</option>
                 <option value="tic_tac_toe">Tic Tac Toe</option>
+                <option value="arrow_classic">Arrow Puzzle Master — Classic (Ko-op)</option>
+                <option value="arrow_competition">Arrow Puzzle Master — Competition</option>
               </select>
             </div>
 

@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "verify:arrow": "tsc src/utils/arrowPuzzle.ts --outDir .tmp-arrow-build --module commonjs --target ES2020 --moduleResolution node --skipLibCheck --esModuleInterop && node .jules/verify-arrow-puzzle.js",
+    "verify:arrow-ui": "tsc -p .jules/tsconfig.json && node .jules/verify-arrow-ui.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",

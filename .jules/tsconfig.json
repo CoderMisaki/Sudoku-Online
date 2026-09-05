@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "jsx": "react-jsx",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "outDir": "../.tmp-arrow-build",
+    "baseUrl": "..",
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "files": ["../src/components/game/ArrowPuzzleBoard.tsx"]
+}

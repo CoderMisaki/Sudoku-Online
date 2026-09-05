@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Output kompilasi sementara milik skrip verifikasi (npm run verify:arrow*)
+    ".tmp-*/**",
   ]),
 ]);
 

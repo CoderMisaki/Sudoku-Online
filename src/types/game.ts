@@ -1,5 +1,21 @@
 export type Difficulty = 'easy' | 'medium' | 'hard' | 'expert' | 'evil' | '3x3' | '8x8';
-export type GameMode = 'classic' | 'learning' | 'collaborative' | 'race' | 'zen' | 'competition' | 'snakes_and_ladders' | 'tic_tac_toe';
+export type GameMode =
+  | 'classic'
+  | 'learning'
+  | 'collaborative'
+  | 'race'
+  | 'zen'
+  | 'competition'
+  | 'snakes_and_ladders'
+  | 'tic_tac_toe'
+  | 'arrow_classic'
+  | 'arrow_competition';
+
+/** Game yang memakai papan Arrow Puzzle Master (bukan papan Sudoku). */
+export type ArrowGameMode = 'arrow_classic' | 'arrow_competition';
+
+export const isArrowGameMode = (mode?: GameMode | null): mode is ArrowGameMode =>
+  mode === 'arrow_classic' || mode === 'arrow_competition';
 
 export interface Player {
   id: string;
@@ -128,4 +144,61 @@ export interface TicTacToeState {
   playerO: TicTacToePlayerInfo;
   revision: number;
   lastMove?: { row: number; col: number; symbol: TicTacToeSymbol; timestamp: number } | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Arrow Puzzle Master Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Arah panah sebagai indeks: 0 = Atas, 1 = Kanan, 2 = Bawah, 3 = Kiri.
+ * Lihat ARROW_DIRS di utils/arrowPuzzle.ts untuk vektor (dr, dc) tiap indeks.
+ */
+export type ArrowDirection = 0 | 1 | 2 | 3;
+
+export interface ArrowCoord {
+  row: number;
+  col: number;
+}
+
+/** Varian permainan di dalam Arrow Puzzle Master. */
+export type ArrowPuzzleVariant = 'classic' | 'competition';
+
+export interface ArrowPuzzleState {
+  /** Identitas papan — berbeda tiap puzzle baru supaya state lama tidak dianggap "lebih baru". */
+  boardId: string;
+  /** Kunci deterministik: seed yang sama menghasilkan puzzle yang sama (dipakai mode Competition). */
+  seed: string;
+  size: number;
+  /** Panah tiap sel. `null` = tembok / sel tertutup yang tidak bisa dimasuki. */
+  arrows: (ArrowDirection | null)[][];
+  start: ArrowCoord;
+  goal: ArrowCoord;
+  /** Satu-satunya jalur sah START -> GOAL (dipakai untuk menilai tap benar/salah). */
+  solutionPath: ArrowCoord[];
+  variant: ArrowPuzzleVariant;
+  difficulty: Difficulty;
+
+  /** CLASSIC (ko-op): satu jejak bersama, semua pemain maju bareng secara realtime. */
+  currentPath: ArrowCoord[];
+  /** COMPETITION: jejak tiap pemain (papan terpisah, tidak saling bocor). */
+  playerPaths: Record<string, ArrowCoord[]>;
+  /** Jumlah tap salah beruntun per pemain -> penalti 5, 10, 20, 40, ... (kelipatan 2x). */
+  wrongStreak: Record<string, number>;
+  /** Pemain yang menyelesaikan puzzle (Classic: penentu langkah terakhir). */
+  winnerId: string | null;
+  /** Urutan pemain yang finis (Competition: Juara 1, 2, 3, dst). */
+  winners: string[];
+  /** Classic: puzzle sudah dituntaskan bersama. */
+  completed: boolean;
+
+  revision: number;
+  lastMove?: {
+    row: number;
+    col: number;
+    userId: string;
+    username: string;
+    correct: boolean;
+    timestamp: number;
+  } | null;
 }

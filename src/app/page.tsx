@@ -140,10 +140,15 @@ export default function Home() {
       }
       setMaxPlayers(2);
     } else {
+      // Arrow Puzzle Master & Sudoku sama-sama memakai Easy .. Evil.
       if (difficulty === '3x3' || difficulty === '8x8') {
         setDifficulty('medium');
       }
-      setMaxPlayers(4);
+      // Arrow Puzzle boleh 2-8 pemain (Classic ko-op / Competition papan sendiri),
+      // jadi pilihan jumlah pemain tidak dipaksa kembali ke 4.
+      if (newMode !== 'arrow_classic' && newMode !== 'arrow_competition') {
+        setMaxPlayers(4);
+      }
     }
   };
 
@@ -256,7 +261,8 @@ export default function Home() {
         <div className="space-y-3">
           <h1 className="text-4xl font-bold tracking-tight">Sudoku Together</h1>
           <p className="text-secondary text-sm">
-            Mainkan Sudoku, Ular Tangga, &amp; Tic Tac Toe secara multiplayer real-time bersama teman-temanmu.
+            Mainkan Sudoku, Ular Tangga, Tic Tac Toe, &amp; Arrow Puzzle Master secara
+            multiplayer real-time bersama teman-temanmu.
           </p>
         </div>
 
@@ -348,6 +354,8 @@ export default function Home() {
               <option value="zen">Zen (Santai)</option>
               <option value="snakes_and_ladders">Snakes &amp; Ladders (Ular Tangga)</option>
               <option value="tic_tac_toe">Tic Tac Toe</option>
+              <option value="arrow_classic">Arrow Puzzle Master — Classic (Ko-op)</option>
+              <option value="arrow_competition">Arrow Puzzle Master — Competition</option>
             </select>
           </div>
 
@@ -376,6 +384,18 @@ export default function Home() {
             {mode === 'tic_tac_toe' && (
               <p className="text-[11px] text-secondary mt-1">
                 * Tic Tac Toe otomatis bermain lawan Bot jika sendirian di room.
+              </p>
+            )}
+            {mode === 'arrow_classic' && (
+              <p className="text-[11px] text-secondary mt-1">
+                * Arrow Classic: satu papan panah dikerjakan bareng-bareng secara realtime.
+                Benar +10, salah beruntun -5, -10, -20, ... (kelipatan 2x).
+              </p>
+            )}
+            {mode === 'arrow_competition' && (
+              <p className="text-[11px] text-secondary mt-1">
+                * Arrow Competition: tiap pemain dapat papan sendiri, adu cepat menuju GOAL
+                seperti Sudoku Competition.
               </p>
             )}
           </div>

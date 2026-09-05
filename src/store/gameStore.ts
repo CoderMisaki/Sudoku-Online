@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Grid, RoomState, Player, ChatMessage, SnakesState, TicTacToeState } from '../types/game';
+import { Grid, RoomState, Player, ChatMessage, SnakesState, TicTacToeState, ArrowPuzzleState, isArrowGameMode } from '../types/game';
 import { checkConflicts } from '../utils/sudoku';
 import { generateInitialSnakesState, areSnakesLayoutsEqual } from '../utils/snakesAndLaddersData';
 import { createInitialTicTacToeState } from '../utils/ticTacToe';
+import { createArrowRound, buildArrowSeed } from '../utils/arrowPuzzle';
 
 // Debug logging off by default. Enable with: localStorage.setItem('sudoku_debug_snakes', '1')
 const isSnakesDebugEnabled = (): boolean => {
@@ -55,6 +56,7 @@ interface GameStore {
   messages: ChatMessage[];
   snakesState?: SnakesState;
   ticTacToeState?: TicTacToeState;
+  arrowPuzzleState?: ArrowPuzzleState;
   addMessage: (msg: ChatMessage) => void;
   setMessages: (msgs: ChatMessage[]) => void;
 
@@ -72,6 +74,12 @@ interface GameStore {
   replaceAllSnakesState: (state: SnakesState) => void;
   updateTicTacToeState: (state: Partial<TicTacToeState>) => void;
   replaceAllTicTacToeState: (state: TicTacToeState) => void;
+  /** Merge sebagian state Arrow Puzzle (langkah pemain, streak salah, dsb). */
+  updateArrowPuzzleState: (state: Partial<ArrowPuzzleState>) => void;
+  /** Adopsi snapshot penuh Arrow Puzzle dari otoritas (host / hasil langkah lokal). */
+  replaceAllArrowPuzzleState: (state: ArrowPuzzleState) => void;
+  /** Buang papan Arrow Puzzle (dipakai mode Competition saat ronde baru). */
+  clearArrowPuzzleState: () => void;
   enterRoom: (roomId: string) => void;
   clearPersistedStorage: () => void;
 }
@@ -412,6 +420,7 @@ export const useGameStore = create<GameStore>()(
       selectedCell: null,
       snakesState: undefined,
       ticTacToeState: undefined,
+      arrowPuzzleState: undefined,
       setSelectedCell: (cell) => set({ selectedCell: cell }),
       updateSnakesState: (updates) => set((state) => {
         const current = state.snakesState as SnakesState | undefined;
@@ -525,7 +534,57 @@ export const useGameStore = create<GameStore>()(
         };
         return { ticTacToeState: next };
       }),
-      resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null, snakesState: undefined, ticTacToeState: undefined }),
+      updateArrowPuzzleState: (updates) => set((state) => {
+        const current = state.arrowPuzzleState;
+        const incomingBoardId = updates.boardId;
+        const incomingRevision = updates.revision;
+
+        const isDifferentBoard = Boolean(
+          incomingBoardId && current?.boardId && incomingBoardId !== current.boardId
+        );
+
+        if (!isDifferentBoard && current && typeof incomingRevision === 'number' && typeof current.revision === 'number') {
+          if (incomingRevision <= current.revision) return state;
+        }
+
+        let nextRevision = incomingRevision;
+        if (typeof nextRevision !== 'number' && current && typeof current.revision === 'number' && !isDifferentBoard) {
+          nextRevision = current.revision + 1;
+        } else if (typeof nextRevision !== 'number') {
+          nextRevision = 1;
+        }
+
+        const merged: ArrowPuzzleState = {
+          ...(current as ArrowPuzzleState),
+          ...updates,
+          revision: nextRevision,
+        };
+        return { arrowPuzzleState: merged };
+      }),
+      replaceAllArrowPuzzleState: (incoming) => set((state) => {
+        const current = state.arrowPuzzleState;
+        // Tolak snapshot basi dari papan yang SAMA; papan baru selalu diterima.
+        if (
+          current &&
+          incoming.boardId &&
+          current.boardId &&
+          incoming.boardId === current.boardId &&
+          typeof incoming.revision === 'number' &&
+          typeof current.revision === 'number' &&
+          incoming.revision < current.revision
+        ) {
+          return state;
+        }
+        const next: ArrowPuzzleState = {
+          ...incoming,
+          revision: typeof incoming.revision === 'number'
+            ? incoming.revision
+            : Math.max(current?.revision ?? 0, 0) + 1,
+        };
+        return { arrowPuzzleState: next };
+      }),
+      clearArrowPuzzleState: () => set({ arrowPuzzleState: undefined }),
+      resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null, snakesState: undefined, ticTacToeState: undefined, arrowPuzzleState: undefined }),
 
       startNextGame: (newGrid, newSolutionToken) => set((state) => {
         if (!state.room) return state;
@@ -533,8 +592,11 @@ export const useGameStore = create<GameStore>()(
         const newPlayers = { ...state.room.players };
         const isSnakesMode = state.room.mode === 'snakes_and_ladders';
         const isTicTacToeMode = state.room.mode === 'tic_tac_toe';
+        const isArrowMode = isArrowGameMode(state.room.mode);
+        const newStartedAt = Date.now();
         let newSnakesState = state.snakesState;
         let newTicTacToeState = state.ticTacToeState;
+        let newArrowPuzzleState = state.arrowPuzzleState;
 
         if (isSnakesMode) {
           const fresh = generateInitialSnakesState(state.room.difficulty, Object.keys(newPlayers));
@@ -551,6 +613,15 @@ export const useGameStore = create<GameStore>()(
             ...fresh,
             revision: Math.max(fresh.revision ?? 1, (state.ticTacToeState?.revision ?? 0) + 1),
           };
+        } else if (isArrowMode) {
+          // Ronde baru Arrow Puzzle. Seed memakai startedAt yang sama di semua
+          // client, jadi mode Competition tetap membagikan papan identik.
+          newArrowPuzzleState = createArrowRound(
+            state.room.difficulty,
+            state.room.mode === 'arrow_classic' ? 'classic' : 'competition',
+            buildArrowSeed(state.room.id, state.room.difficulty, newStartedAt),
+            state.arrowPuzzleState?.revision ?? 0
+          );
         }
 
         Object.keys(newPlayers).forEach(playerId => {
@@ -568,18 +639,21 @@ export const useGameStore = create<GameStore>()(
           };
         });
 
+        const isBoardlessMode = isTicTacToeMode || isArrowMode;
+
         return {
           room: {
             ...state.room,
             players: newPlayers,
-            startedAt: Date.now(),
+            startedAt: newStartedAt,
             status: 'playing'
           },
-          grid: isTicTacToeMode ? null : checkConflicts(newGrid),
-          solutionToken: isTicTacToeMode ? null : newSolutionToken,
+          grid: isBoardlessMode ? null : checkConflicts(newGrid),
+          solutionToken: isBoardlessMode ? null : newSolutionToken,
           selectedCell: null,
           snakesState: isSnakesMode ? newSnakesState : undefined,
           ticTacToeState: isTicTacToeMode ? newTicTacToeState : undefined,
+          arrowPuzzleState: isArrowMode ? newArrowPuzzleState : undefined,
         };
       }),
 
@@ -600,6 +674,7 @@ export const useGameStore = create<GameStore>()(
           selectedCell: null,
           snakesState: undefined,
           ticTacToeState: undefined,
+          arrowPuzzleState: undefined,
         });
       },
 
@@ -628,6 +703,8 @@ export const useGameStore = create<GameStore>()(
         // Persist snakesState & ticTacToeState so a refresh / reload of an in-progress room resumes the same board
         snakesState: state.snakesState,
         ticTacToeState: state.ticTacToeState,
+        // Papan Arrow Puzzle ikut dipersist supaya refresh tidak menghapus progress
+        arrowPuzzleState: state.arrowPuzzleState,
       }),
     }
   )
