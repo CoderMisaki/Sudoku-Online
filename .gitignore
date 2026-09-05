@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# artefak sementara skrip verifikasi (.jules/verify-arrow-*.js)
+.tmp-*
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

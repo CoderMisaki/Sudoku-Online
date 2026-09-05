@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
-import { ChatMessage, Grid, RoomState, SnakesState, TicTacToeState, Player } from '../types/game';
+import { ChatMessage, Grid, RoomState, SnakesState, TicTacToeState, Player, ArrowPuzzleState, isArrowGameMode } from '../types/game';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getOrCreateUserId } from '../utils/uuid';
 import { getStoredAvatar, isSafeDataUrl } from '../utils/avatar';
 import { areSnakesLayoutsEqual } from '../utils/snakesAndLaddersData';
+import { applyArrowMove, getArrowProgress, ARROW_TEAM_BONUS } from '../utils/arrowPuzzle';
 import toast from 'react-hot-toast';
 
 const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
@@ -26,18 +27,22 @@ export function useRealtime(roomId: string) {
   // Last time we received ANY authoritative snakes state (sync_state or update).
   // Used by the reconciliation poll to detect silent divergence.
   const lastSnakesStateAtRef = useRef<number>(0);
+  // Waktu terakhir menerima state Arrow Puzzle otoritatif (rekonsiliasi mode Classic).
+  const lastArrowStateAtRef = useRef<number>(0);
 
   const userId = useGameStore((state) => state.userId);
   const username = useGameStore((state) => state.username);
   const grid = useGameStore((state) => state.grid);
   const snakesState = useGameStore((state) => state.snakesState);
   const ticTacToeState = useGameStore((state) => state.ticTacToeState);
+  const arrowPuzzleState = useGameStore((state) => state.arrowPuzzleState);
 
   const userIdRef = useRef(userId);
   const usernameRef = useRef(username);
   const prevGridRef = useRef(grid);
   const prevSnakesStateRef = useRef(snakesState);
   const prevTicTacToeStateRef = useRef(ticTacToeState);
+  const prevArrowPuzzleStateRef = useRef(arrowPuzzleState);
 
   useEffect(() => {
     userIdRef.current = userId;
@@ -128,12 +133,16 @@ export function useRealtime(roomId: string) {
   const buildSyncPayload = useCallback((senderId: string) => {
     const store = useGameStore.getState();
     const isCompetition = store.room?.mode === 'competition';
+    // ARROW COMPETITION ISOLATION: tiap pemain memegang papan sendiri, jadi papan
+    // Arrow tidak pernah dikirim ke guest. Mode Classic sebaliknya: satu papan bersama.
+    const isArrowCompetition = store.room?.mode === 'arrow_competition';
     return {
       room: store.room,
       grid: isCompetition ? null : store.grid,
       solutionToken: isCompetition ? null : store.solutionToken,
       snakesState: store.snakesState,
       ticTacToeState: store.ticTacToeState,
+      arrowPuzzleState: isArrowCompetition ? null : store.arrowPuzzleState,
       messages: store.messages,
       senderId,
     };
@@ -186,8 +195,9 @@ export function useRealtime(roomId: string) {
       const isGridJustReady = Boolean(grid && !prevGridRef.current && store.solutionToken);
       const isSnakesJustReady = Boolean(snakesState && !prevSnakesStateRef.current);
       const isTicTacToeJustReady = Boolean(ticTacToeState && !prevTicTacToeStateRef.current);
+      const isArrowJustReady = Boolean(arrowPuzzleState && !prevArrowPuzzleStateRef.current);
 
-      if (isGridJustReady || isSnakesJustReady || isTicTacToeJustReady) {
+      if (isGridJustReady || isSnakesJustReady || isTicTacToeJustReady || isArrowJustReady) {
         addLog(`[Host Broadcast] Membagikan puzzle/state ke semua player.`);
 
         channelRef.current.send({
@@ -203,7 +213,8 @@ export function useRealtime(roomId: string) {
     prevGridRef.current = grid;
     prevSnakesStateRef.current = snakesState;
     prevTicTacToeStateRef.current = ticTacToeState;
-  }, [grid, snakesState, ticTacToeState, addLog, buildSyncPayload]);
+    prevArrowPuzzleStateRef.current = arrowPuzzleState;
+  }, [grid, snakesState, ticTacToeState, arrowPuzzleState, addLog, buildSyncPayload]);
 
   const connectChannel = useCallback(() => {
     const currentUserId = userIdRef.current || (typeof window !== 'undefined' ? getOrCreateUserId() : '');
@@ -231,6 +242,8 @@ export function useRealtime(roomId: string) {
           ? Boolean(currentState.snakesState)
           : currentState.room?.mode === 'tic_tac_toe'
           ? Boolean(currentState.ticTacToeState)
+          : isArrowGameMode(currentState.room?.mode)
+          ? Boolean(currentState.arrowPuzzleState)
           : Boolean(currentState.grid);
 
       if (!hasBoard && typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -405,6 +418,10 @@ export function useRealtime(roomId: string) {
         if (payload.ticTacToeState) {
           store.replaceAllTicTacToeState(payload.ticTacToeState as TicTacToeState);
         }
+        if (payload.arrowPuzzleState) {
+          store.replaceAllArrowPuzzleState(payload.arrowPuzzleState as ArrowPuzzleState);
+          lastArrowStateAtRef.current = Date.now();
+        }
         if (payload.messages && Array.isArray(payload.messages)) {
           // Dedupe by id — sync_state can arrive repeatedly (reconciliation,
           // reconnects) and must not duplicate chat history.
@@ -485,6 +502,12 @@ export function useRealtime(roomId: string) {
           store.replaceAllSnakesState(payload.snakesState as SnakesState);
         } else if (payload.room?.mode === 'tic_tac_toe' && payload.ticTacToeState) {
           store.replaceAllTicTacToeState(payload.ticTacToeState as TicTacToeState);
+        } else if (payload.room?.mode === 'arrow_classic' && payload.arrowPuzzleState) {
+          store.replaceAllArrowPuzzleState(payload.arrowPuzzleState as ArrowPuzzleState);
+          lastArrowStateAtRef.current = Date.now();
+        } else if (payload.room?.mode === 'arrow_competition') {
+          // Papan kompetisi dibuat ulang lokal oleh tiap pemain (seed = startedAt baru).
+          store.clearArrowPuzzleState();
         } else if (payload.room?.mode === 'competition') {
           // Kosongkan grid lama agar memicu pengambilan puzzle baru.
           store.clearGameData();
@@ -530,6 +553,78 @@ export function useRealtime(roomId: string) {
           } else {
             useGameStore.getState().updateTicTacToeState(incoming);
           }
+        }
+      })
+      .on('broadcast', { event: 'arrow_puzzle_state_update' }, ({ payload }) => {
+        if (!payload?.arrowPuzzleState) return;
+        const incoming = payload.arrowPuzzleState as ArrowPuzzleState;
+        const current = useGameStore.getState().arrowPuzzleState;
+        if (incoming.boardId && current?.boardId && incoming.boardId !== current.boardId) {
+          useGameStore.getState().replaceAllArrowPuzzleState(incoming);
+        } else {
+          useGameStore.getState().updateArrowPuzzleState(incoming);
+        }
+        lastArrowStateAtRef.current = Date.now();
+      })
+      .on('broadcast', { event: 'arrow_move' }, ({ payload }) => {
+        const store = useGameStore.getState();
+        // COMPETITION ISOLATION: mode kompetisi memakai papan sendiri, tanpa langkah lawan.
+        if (store.room?.mode !== 'arrow_classic') return;
+        const current = store.arrowPuzzleState;
+        const actorId = typeof payload?.userId === 'string' ? payload.userId : '';
+        if (!current || !actorId || actorId === userIdRef.current) return;
+
+        const row = Number(payload?.row);
+        const col = Number(payload?.col);
+        if (!Number.isInteger(row) || !Number.isInteger(col)) return;
+        if (row < 0 || row >= current.size || col < 0 || col >= current.size) return;
+
+        // Jejak lokal tidak sinkron dengan pengirim -> minta snapshot host.
+        if (typeof payload?.basePathLength === 'number' && payload.basePathLength !== current.currentPath.length) {
+          requestState();
+        }
+
+        const actorName = store.room?.players[actorId]?.username || 'Pemain';
+        // Setiap client menilai langkah dari papan yang sama, jadi hasilnya identik.
+        const result = applyArrowMove(current, actorId, { row, col }, actorName);
+        if (result.state !== current) {
+          store.replaceAllArrowPuzzleState(result.state);
+          useGameStore.getState().updatePlayer(actorId, {
+            progress: getArrowProgress(result.state, actorId),
+          });
+          lastArrowStateAtRef.current = Date.now();
+        }
+
+        // Puzzle Classic tuntas oleh pemain lain -> bonus tim masuk ke skor sendiri.
+        if (result.justCompleted && userIdRef.current && userIdRef.current !== actorId) {
+          const me = userIdRef.current;
+          const myPlayer = useGameStore.getState().room?.players[me];
+          const myScore = (myPlayer?.score ?? 0) + ARROW_TEAM_BONUS;
+          const myProgress = getArrowProgress(result.state, me);
+          useGameStore.getState().updatePlayer(me, { score: myScore, progress: myProgress });
+          channelRef.current?.send({
+            type: 'broadcast',
+            event: 'player_stats',
+            payload: { userId: me, score: myScore, progress: myProgress, rank: myPlayer?.rank ?? null },
+          });
+          toast.success(`Puzzle tuntas bersama! Bonus tim +${ARROW_TEAM_BONUS}`, {
+            duration: 2600,
+            icon: '🤝',
+          });
+        }
+
+        if (result.correct) {
+          toast.success(`${actorName}: Langkah benar (+10)`, {
+            duration: 1400,
+            position: 'top-center',
+            id: `arrow-${actorId}-${payload?.ts ?? Date.now()}`,
+          });
+        } else {
+          toast.error(`${actorName}: ${result.reason} (${-result.penalty})`, {
+            duration: 1600,
+            position: 'top-center',
+            id: `arrow-${actorId}-${payload?.ts ?? Date.now()}`,
+          });
         }
       })
       .on('broadcast', { event: 'player_stats' }, ({ payload }) => {
@@ -613,6 +708,8 @@ export function useRealtime(roomId: string) {
               ? Boolean(store.snakesState)
               : store.room?.mode === 'tic_tac_toe'
               ? Boolean(store.ticTacToeState)
+              : isArrowGameMode(store.room?.mode)
+              ? Boolean(store.arrowPuzzleState)
               : Boolean(store.grid);
 
           const isHost = Boolean(store.room && store.room.hostId === currentUserId);
@@ -665,6 +762,8 @@ export function useRealtime(roomId: string) {
           ? Boolean(store.snakesState)
           : store.room?.mode === 'tic_tac_toe'
           ? Boolean(store.ticTacToeState)
+          : isArrowGameMode(store.room?.mode)
+          ? Boolean(store.arrowPuzzleState)
           : Boolean(store.grid);
 
       if (!hasBoard && statusRef.current === 'SUBSCRIBED') {
@@ -687,6 +786,20 @@ export function useRealtime(roomId: string) {
             lastSnakesStateAtRef.current = Date.now();
             requestState();
           }
+        }
+      }
+
+      // Mode Arrow Classic: papan bersama, jadi guest rutin memastikan sinkron.
+      if (
+        store.room?.mode === 'arrow_classic' &&
+        hasBoard &&
+        statusRef.current === 'SUBSCRIBED' &&
+        store.room.hostId !== (store.userId || '')
+      ) {
+        const lastAt = lastArrowStateAtRef.current;
+        if (lastAt === 0 || Date.now() - lastAt > 3000) {
+          lastArrowStateAtRef.current = Date.now();
+          requestState();
         }
       }
     }, 1200);
@@ -830,7 +943,8 @@ export function useRealtime(roomId: string) {
       solutionToken: string | null,
       updatedRoom?: RoomState,
       snakesState?: SnakesState | null,
-      ticTacToeState?: TicTacToeState | null
+      ticTacToeState?: TicTacToeState | null,
+      arrowPuzzleState?: ArrowPuzzleState | null
     ) => {
       if (channelRef.current && statusRef.current === 'SUBSCRIBED') {
         channelRef.current.send({
@@ -842,6 +956,7 @@ export function useRealtime(roomId: string) {
             room: updatedRoom,
             snakesState,
             ticTacToeState,
+            arrowPuzzleState,
           },
         });
       }
@@ -915,6 +1030,38 @@ export function useRealtime(roomId: string) {
       payload: { ticTacToeState: newState, sentAt: Date.now() },
     });
   }, []);
+
+  /** Siarkan papan Arrow Puzzle utuh (reset papan / adopsi papan baru di mode Classic). */
+  const broadcastArrowPuzzleState = useCallback((newState: ArrowPuzzleState) => {
+    const current = useGameStore.getState().arrowPuzzleState;
+    if (newState.boardId && current?.boardId && newState.boardId !== current.boardId) {
+      useGameStore.getState().replaceAllArrowPuzzleState(newState);
+    } else {
+      useGameStore.getState().updateArrowPuzzleState(newState);
+    }
+    lastArrowStateAtRef.current = Date.now();
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'arrow_puzzle_state_update',
+      payload: { arrowPuzzleState: newState, sentAt: Date.now() },
+    });
+  }, []);
+
+  /**
+   * Kirim satu tap pemain Arrow (mode Classic). Penerima menilai sendiri dari
+   * papan bersama sehingga semua client sampai pada hasil yang sama.
+   */
+  const sendArrowMove = useCallback(
+    (row: number, col: number, basePathLength: number) => {
+      const currentUid = userIdRef.current || getOrCreateUserId();
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'arrow_move',
+        payload: { userId: currentUid, row, col, basePathLength, ts: Date.now() },
+      });
+    },
+    []
+  );
 
   const broadcastProfileUpdate = useCallback(
     (profile: { username?: string; avatar?: string | null }) => {
@@ -1004,6 +1151,8 @@ export function useRealtime(roomId: string) {
     broadcastSnakesDiceRoll,
     broadcastSnakesState,
     broadcastTicTacToeState,
+    broadcastArrowPuzzleState,
+    sendArrowMove,
     broadcastAvatarUpdate,
     broadcastProfileUpdate,
     broadcastPlayerStats,

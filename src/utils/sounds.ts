@@ -577,6 +577,79 @@ class SoundFX {
       /* abaikan */
     }
   }
+
+  // ─────────────────────── ARROW PUZZLE MASTER ───────────────────────────────
+  /** Langkah benar: "whoosh" pendek yang nadanya naik mengikuti urutan langkah. */
+  arrowStep(seq: number): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      const base = 392 * Math.pow(2, Math.min(seq, 12) / 24); // naik perlahan tiap langkah
+      this.tone(ctx, this.master, t, {
+        type: 'triangle',
+        freq: base,
+        freqEnd: base * 1.5,
+        dur: 0.11,
+        gain: 0.16,
+      });
+      this.noiseBurst(ctx, this.master, t, {
+        type: 'highpass',
+        freq: 1800,
+        freqEnd: 3200,
+        dur: 0.07,
+        gain: 0.05,
+      });
+    } catch {
+      /* abaikan */
+    }
+  }
+
+  /** Langkah salah: buzz kasar, makin dalam nadanya seiring salah beruntun. */
+  arrowWrong(streak: number): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      const base = 220 / Math.pow(2, Math.min(streak, 5) / 6);
+      this.tone(ctx, this.master, t, {
+        type: 'sawtooth',
+        freq: base,
+        freqEnd: base * 0.55,
+        dur: 0.26,
+        gain: 0.11,
+      });
+      this.noiseBurst(ctx, this.master, t, {
+        type: 'lowpass',
+        freq: 900,
+        freqEnd: 320,
+        dur: 0.18,
+        gain: 0.09,
+      });
+    } catch {
+      /* abaikan */
+    }
+  }
+
+  /** Puzzle Arrow tuntas: fanfare empat nada + shimmer. */
+  arrowComplete(): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      const notes = [587.33, 739.99, 880, 1174.66]; // D5, F#5, A5, D6
+      notes.forEach((f, i) => {
+        this.tone(ctx, this.master!, t + i * 0.09, {
+          freq: f,
+          dur: 0.4,
+          gain: 0.12,
+          shimmerSend: 0.5,
+        });
+      });
+    } catch {
+      /* abaikan */
+    }
+  }
 }
 
 /** Singleton — satu engine untuk seluruh aplikasi. */
