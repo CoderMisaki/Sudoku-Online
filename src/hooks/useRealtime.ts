@@ -628,20 +628,45 @@ export function useRealtime(roomId: string) {
         }
       })
       .on('broadcast', { event: 'player_stats' }, ({ payload }) => {
-        const { userId: pid, score, progress, rank } = (payload ?? {}) as {
-          userId?: string; score?: unknown; progress?: unknown; rank?: unknown;
+        const { userId: pid, score, progress, rank, finishedAt, startedAt } = (payload ?? {}) as {
+          userId?: string; score?: unknown; progress?: unknown; rank?: unknown; finishedAt?: unknown; startedAt?: unknown;
         };
         if (!pid || typeof pid !== 'string') return;
+        // Paket statistik dari ronde lama tidak boleh menghidupkan kembali
+        // ranking setelah Next Game.
+        if (typeof startedAt === 'number' && startedAt !== useGameStore.getState().room?.startedAt) return;
         const patch: Partial<Player> = {};
         if (typeof score === 'number' && Number.isFinite(score)) patch.score = score;
         if (typeof progress === 'number' && Number.isFinite(progress)) {
           patch.progress = Math.max(0, Math.min(100, Math.round(progress)));
         }
-        if (rank === null || (typeof rank === 'number' && Number.isFinite(rank))) {
-          patch.rank = rank as number | null;
+        const existingPlayer = useGameStore.getState().room?.players[pid];
+        if (typeof rank === 'number' && Number.isFinite(rank)) {
+          patch.rank = rank;
+        } else if (rank === null && typeof existingPlayer?.finishedAt !== 'number') {
+          patch.rank = null;
+        }
+        if (typeof finishedAt === 'number' && Number.isFinite(finishedAt)) {
+          patch.finishedAt = finishedAt;
         }
         if (Object.keys(patch).length === 0) return;
-        useGameStore.getState().updatePlayer(pid, patch);
+        const store = useGameStore.getState();
+        store.updatePlayer(pid, patch);
+
+        // Recompute all finished ranks from the same ordered set. This resolves
+        // simultaneous finishes deterministically and repairs old clients that
+        // broadcast rank 1 before seeing the other player's finish claim.
+        if (store.room?.mode === 'arrow_competition') {
+          const players = Object.values(useGameStore.getState().room?.players ?? {})
+            .filter((p) => typeof p.finishedAt === 'number')
+            .sort((a, b) => (a.finishedAt as number) - (b.finishedAt as number) || a.id.localeCompare(b.id));
+          players.forEach((p, index) => {
+            const expectedRank = index + 1;
+            if (p.rank !== expectedRank) {
+              useGameStore.getState().updatePlayer(p.id, { rank: expectedRank });
+            }
+          });
+        }
       })
       .on('broadcast', { event: 'player_profile_update' }, ({ payload }) => {
         const { playerId, username, avatar } = (payload ?? {}) as {
@@ -1124,12 +1149,12 @@ export function useRealtime(roomId: string) {
   );
 
   const broadcastPlayerStats = useCallback(
-    (stats: { score?: number; progress?: number; rank?: number | null }) => {
+    (stats: { score?: number; progress?: number; rank?: number | null; finishedAt?: number }) => {
       const currentUid = userIdRef.current || getOrCreateUserId();
       channelRef.current?.send({
         type: 'broadcast',
         event: 'player_stats',
-        payload: { userId: currentUid, ...stats },
+        payload: { userId: currentUid, startedAt: useGameStore.getState().room?.startedAt, ...stats },
       });
     },
     []

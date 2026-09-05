@@ -26,6 +26,8 @@ export interface Player {
   score: number;
   progress?: number; // Persentase progress (0 - 100)
   rank?: number | null; // Peringkat juara (1, 2, 3, 4, dst)
+  /** Timestamp lokal saat pemain menyelesaikan ronde; dipakai tie-break deterministik. */
+  finishedAt?: number;
   hints: number;
   streak?: number;
   lastCorrectMoveAt?: number;

@@ -247,6 +247,7 @@ export default function RoomPage() {
               hints: 3,
               progress: 0,
               rank: undefined,
+              finishedAt: undefined,
               cursor: undefined,
             },
           ])

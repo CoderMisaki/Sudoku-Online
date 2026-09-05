@@ -46,7 +46,7 @@ interface ArrowPuzzleBoardProps {
   /** Mode Classic: kirim satu tap arrow supaya pemain lain melihat arrow yang sama keluar. */
   sendArrowMove?: (arrowId: string, baseRevision: number) => void;
   /** Sinkronkan skor/progress/peringkat milik sendiri ke pemain lain. */
-  broadcastPlayerStats?: (stats: { score?: number; progress?: number; rank?: number | null }) => void;
+  broadcastPlayerStats?: (stats: { score?: number; progress?: number; rank?: number | null; finishedAt?: number }) => void;
 }
 
 const EMPTY_PLAYERS: Record<string, Player> = {};
@@ -368,12 +368,16 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
   const [boardSnapshot, setBoardSnapshot] = useState<{ boardId: string; initialRemoved: string[] } | null>(null);
   const [finishedExitIds, setFinishedExitIds] = useState<string[]>([]);
   const boardId = arrowState?.boardId ?? null;
-  if (boardId && boardSnapshot?.boardId !== boardId) {
-    // Papan baru: catat arrow yang sudah keluar sebelum kita melihatnya (tidak dianimasikan).
+  useEffect(() => {
+    if (!boardId || boardSnapshot?.boardId === boardId) return;
+    // Reset bookkeeping setelah ronde baru ter-render. Sebelumnya setState
+    // dilakukan saat render, memicu render berantai tepat ketika Next Game.
     setBoardSnapshot({ boardId, initialRemoved: removedIds });
     setFinishedExitIds([]);
     setShowComplete(false);
-  }
+    lockedRef.current.clear();
+    pendingRef.current.clear();
+  }, [boardId, boardSnapshot?.boardId, removedIds]);
 
   const exiting = useMemo<ExitingArrow[]>(() => {
     if (!arrowState || !boardSnapshot || boardSnapshot.boardId !== arrowState.boardId) return [];
@@ -422,8 +426,8 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
   }, [activePlayers, arrowState, isClassic]);
 
   const publishStats = useCallback(
-    (score: number, progress: number, rank?: number | null) => {
-      broadcastPlayerStats?.({ score, progress, rank: rank ?? null });
+    (score: number, progress: number, rank?: number | null, finishedAt?: number) => {
+      broadcastPlayerStats?.({ score, progress, rank: rank ?? null, finishedAt });
     },
     [broadcastPlayerStats]
   );
@@ -453,9 +457,23 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
       const me = useGameStore.getState().room?.players[userId];
       const newScore = (me?.score ?? 0) + result.scoreDelta;
       const newProgress = getArrowProgress(result.state, userId);
-      const newRank = result.rank ?? me?.rank ?? null;
-      updatePlayer(userId, { score: newScore, progress: newProgress, rank: newRank });
-      publishStats(newScore, newProgress, newRank);
+      // Rank tidak boleh hanya berasal dari state lokal: dua pemain bisa selesai
+      // pada frame yang sama. Simpan waktu selesai agar seluruh client memakai
+      // tie-break yang sama (timestamp lalu user id), bukan dua-duanya juara 1.
+      const finishAt = result.justFinished ? Date.now() : me?.finishedAt;
+      const finishedPlayers = Object.values(useGameStore.getState().room?.players ?? {})
+        .filter((p) => typeof p.finishedAt === 'number');
+      const newRank = finishAt
+        ? finishedPlayers.filter((p) => (p.finishedAt as number) < finishAt ||
+            ((p.finishedAt as number) === finishAt && p.id < userId)).length + 1
+        : (result.rank ?? me?.rank ?? null);
+      updatePlayer(userId, {
+        score: newScore,
+        progress: newProgress,
+        rank: newRank,
+        ...(finishAt ? { finishedAt: finishAt } : {}),
+      });
+      publishStats(newScore, newProgress, newRank, finishAt);
 
       if (isClassic && result.correct) sendArrowMove?.(arrowId, baseRevision);
 
@@ -467,7 +485,7 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
           if (isClassic) {
             toast.success(`Semua arrow keluar! Bonus tim +${ARROW_TEAM_BONUS}`, { duration: 3200, icon: '🤝' });
           } else {
-            toast.success(`Puzzle Complete! Peringkat ${result.rank ?? '-'} (+${result.scoreDelta} poin)`, {
+            toast.success(`Puzzle Complete! Peringkat ${newRank ?? '-'} (+${result.scoreDelta} poin)`, {
               duration: 3200,
               icon: '🏆',
             });
