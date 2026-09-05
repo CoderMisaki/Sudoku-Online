@@ -16,13 +16,23 @@ export class SyncClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private lastPong = 0;
   private lastPing = 0;
+  /** Called after each successful (re)open, so callers can resync state. */
+  private onOpen?: () => void;
 
-  constructor(room: string, userId: string, username: string, onMsg: (raw: string) => void, onState: (s: SyncState, err?: string) => void) {
+  constructor(
+    room: string,
+    userId: string,
+    username: string,
+    onMsg: (raw: string) => void,
+    onState: (s: SyncState, err?: string) => void,
+    onOpen?: () => void,
+  ) {
     this.room = room;
     this.userId = userId;
     this.username = username;
     this.onMsg = onMsg;
     this.onState = onState;
+    this.onOpen = onOpen;
   }
 
   connect() {
@@ -31,6 +41,14 @@ export class SyncClient {
   }
 
   private openSocket() {
+    // Tear down any previous socket first: without this a reconnect scheduled
+    // while an old socket is still closing leaves two live message listeners.
+    if (this.ws) {
+      const old = this.ws;
+      this.ws = null;
+      old.onopen = null; old.onmessage = null; old.onclose = null; old.onerror = null;
+      try { old.close(); } catch { /* already closed */ }
+    }
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const url = `${proto}://${window.location.host}/ws/harvest`;
     if (this.retry > 0) this.onState('reconnecting');
@@ -46,8 +64,12 @@ export class SyncClient {
     ws.onopen = () => {
       this.retry = 0;
       this.onState('open');
+      // hello re-establishes the session; the server replies with hello_ack and,
+      // for an existing character, a full snapshot — so reconnect never resets
+      // inventory/gold and never creates a duplicate character.
       this.send({ t: 'hello', room: this.room, userId: this.userId, username: this.username });
       this.startHeartbeat();
+      this.onOpen?.();
     };
     ws.onmessage = (ev) => {
       try {
@@ -59,6 +81,7 @@ export class SyncClient {
       }
     };
     ws.onclose = () => {
+      if (this.ws !== ws) return; // superseded socket — ignore its close
       this.stopHeartbeat();
       if (!this.closed) {
         this.scheduleReconnect();
@@ -104,10 +127,25 @@ export class SyncClient {
 
   isOpen() { return !!this.ws && this.ws.readyState === WebSocket.OPEN; }
 
+  /** Force an immediate reconnect attempt (e.g. tab became visible again). */
+  reconnectNow() {
+    if (this.closed) return;
+    if (this.isOpen()) return;
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    this.retry = 0;
+    this.openSocket();
+  }
+
   close() {
     this.closed = true;
     this.stopHeartbeat();
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    try { this.ws?.close(1000, 'bye'); } catch {}
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) {
+      ws.onopen = null; ws.onmessage = null; ws.onclose = null; ws.onerror = null;
+      try { ws.close(1000, 'bye'); } catch { /* already closed */ }
+    }
+    this.onState('closed');
   }
 }

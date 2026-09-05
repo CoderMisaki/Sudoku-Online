@@ -1,20 +1,28 @@
 "use client";
 // Orientation gate, loading & error screens.
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Smartphone, RefreshCw } from 'lucide-react';
 
+/**
+ * Rotate overlay. It is purely presentational: visibility is decided by the
+ * authoritative orientation detector, never by a timer or animation state.
+ * It sits *on top of* the running game — the world, socket and player state
+ * underneath are left completely intact.
+ */
 export function OrientationGate() {
-  const [angle, setAngle] = useState(0);
-  useEffect(() => {
-    const iv = setInterval(() => setAngle((a) => (a + 360) % 720), 1400);
-    return () => clearInterval(iv);
-  }, []);
   return (
-    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-gradient-to-b from-[#101a2e] via-[#14243d] to-[#0f1a2c] text-white text-center px-6">
-      <div
-        className="relative w-20 h-32 sm:w-24 sm:h-36 rounded-xl border-4 border-emerald-300/80 bg-emerald-400/10 flex items-center justify-center"
-        style={{ transform: `rotate(${angle}deg)`, transition: 'transform 1.2s ease-in-out' }}
-      >
+    <div
+      className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-6 bg-gradient-to-b from-[#101a2e] via-[#14243d] to-[#0f1a2c] text-white text-center px-6"
+      role="alertdialog"
+      aria-live="assertive"
+      aria-label="Putar perangkat ke landscape"
+      style={{
+        paddingTop: 'calc(env(safe-area-inset-top) + 24px)',
+        paddingBottom: 'calc(env(safe-area-inset-bottom) + 24px)',
+      }}
+    >
+      {/* CSS-only hint animation — decorative, never used as orientation state. */}
+      <div className="relative w-20 h-32 sm:w-24 sm:h-36 rounded-xl border-4 border-emerald-300/80 bg-emerald-400/10 flex items-center justify-center harvest-rotate-hint">
         <div className="w-8 h-8 rounded-full border-4 border-emerald-300/80" />
         <div className="absolute top-1/2 -translate-y-1/2 left-1/2 -translate-x-1/2 w-10 h-1 bg-emerald-300/60 rounded-full" />
       </div>
@@ -23,13 +31,23 @@ export function OrientationGate() {
         <p className="text-sm sm:text-base text-white/80 max-w-xs">
           Putar perangkatmu ke mode <b className="text-emerald-300">landscape</b> untuk bermain.
         </p>
+        <p className="text-[11px] text-white/45 max-w-xs">
+          Progress kamu aman — game langsung lanjut begitu perangkat diputar.
+        </p>
       </div>
-      <button
-        onClick={() => setAngle((a) => a + 90)}
-        className="text-xs text-white/60 hover:text-white transition-colors flex items-center gap-1.5 cursor-pointer"
-      >
-        <Smartphone className="w-3.5 h-3.5" /> Rotate device → enjoy the world
-      </button>
+      <span className="text-xs text-white/50 flex items-center gap-1.5">
+        <Smartphone className="w-3.5 h-3.5" /> Menunggu orientasi landscape...
+      </span>
+      <style jsx>{`
+        .harvest-rotate-hint {
+          animation: harvestRotateHint 2.4s ease-in-out infinite;
+        }
+        @keyframes harvestRotateHint {
+          0%, 30% { transform: rotate(0deg); }
+          55%, 85% { transform: rotate(90deg); }
+          100% { transform: rotate(0deg); }
+        }
+      `}</style>
     </div>
   );
 }
@@ -61,11 +79,6 @@ export function LoadingScreen({ status }: { status: string }) {
 }
 
 export function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
-  const [t, setT] = useState(0);
-  useEffect(() => {
-    const iv = setInterval(() => setT((x) => x + 1), 40);
-    return () => clearInterval(iv);
-  }, []);
   return (
     <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-[#101a2e] text-white text-center px-6">
       <div className="w-16 h-16 rounded-2xl bg-red-500/15 border border-red-400/30 flex items-center justify-center text-3xl">⚠️</div>
@@ -77,7 +90,7 @@ export function ErrorScreen({ message, onRetry }: { message: string; onRetry: ()
         onClick={onRetry}
         className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold text-sm transition-colors cursor-pointer active:scale-95"
       >
-        <RefreshCw className="w-4 h-4" style={{ transform: `rotate(${t}deg)` }} /> Muat Ulang
+        <RefreshCw className="w-4 h-4" /> Muat Ulang
       </button>
     </div>
   );

@@ -1,27 +1,43 @@
 "use client";
 // All game menu panels: inventory, map, quests, journal, relationships, skills,
 // crafting, cooking, house, shop, rancher, upgrade, community, museum, festival, help, settings.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { X, Minus, Plus, ChevronRight } from 'lucide-react';
 import { useHarvestStore } from './store';
 import { UIApi } from './api';
 import { audio } from './audio';
 import { makeItemIcon } from './sprites';
-import { rleDecode } from './sprites';
 import { MenuId } from './types';
-import { TILE } from './types';
+import type { DeviceClass } from './orientation';
+import { WorldMap } from './WorldMap';
+import { PlayersPanel } from './PlayersPanel';
 
-export function Menus({ api }: { api: UIApi }) {
+export function Menus({ api, device }: { api: UIApi; device: DeviceClass }) {
   const menu = useHarvestStore((s) => s.menu);
   const setMenu = useHarvestStore((s) => s.setMenu);
   if (!menu) return null;
+  // The map is a full-screen modal on phones so it is actually usable by touch.
+  const fullScreen = device === 'mobile' && (menu === 'map' || menu === 'inventory' || menu === 'players');
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center p-2 sm:p-4 pointer-events-auto">
+    <div
+      className="absolute inset-0 z-30 flex items-center justify-center pointer-events-auto"
+      style={{
+        padding: fullScreen ? 0 : undefined,
+        paddingTop: `calc(env(safe-area-inset-top) + ${fullScreen ? 0 : 8}px)`,
+        paddingBottom: `calc(env(safe-area-inset-bottom) + ${fullScreen ? 0 : 8}px)`,
+        paddingLeft: `calc(env(safe-area-inset-left) + ${fullScreen ? 0 : 8}px)`,
+        paddingRight: `calc(env(safe-area-inset-right) + ${fullScreen ? 0 : 8}px)`,
+      }}
+    >
       <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" onClick={() => { audio.play('close'); setMenu(null); }} />
-      <div className="relative w-[min(96vw,760px)] max-h-[92dvh] overflow-hidden rounded-3xl bg-[#0f1a2c]/97 border border-white/15 shadow-2xl flex flex-col">
+      <div
+        className={`relative bg-[#0f1a2c]/97 border border-white/15 shadow-2xl flex flex-col overflow-hidden ${
+          fullScreen ? 'w-full h-full rounded-none' : 'w-[min(96vw,760px)] max-h-[92dvh] rounded-3xl'
+        }`}
+      >
         <MenuHeader menu={menu} onClose={() => { audio.play('close'); setMenu(null); }} />
-        <div className="flex-1 overflow-y-auto p-3 sm:p-4">
-          <MenuContent menu={menu} api={api} />
+        <div className={`flex-1 min-h-0 ${menu === 'map' ? 'overflow-hidden p-2 sm:p-3' : 'overflow-y-auto p-3 sm:p-4'}`}>
+          <MenuContent menu={menu} api={api} device={device} />
         </div>
       </div>
     </div>
@@ -29,7 +45,7 @@ export function Menus({ api }: { api: UIApi }) {
 }
 
 const TITLES: Record<string, string> = {
-  inventory: 'Inventory', map: 'Peta Dunia', quests: 'Quest', journal: 'Koleksi & Journal',
+  inventory: 'Inventory', map: 'Peta Dunia', players: 'Pemain Online', quests: 'Quest', journal: 'Koleksi & Journal',
   relationships: 'Hubungan', skills: 'Skill', crafting: 'Crafting', cooking: 'Memasak',
   settings: 'Pengaturan', house: 'Rumahku', shop: 'Toko Desa', rancher: 'Ranch',
   upgrade: 'Tempa Alat', community: 'Proyek Komunitas', museum: 'Museum', festival: 'Festival', help: 'Bantuan',
@@ -47,10 +63,11 @@ function MenuHeader({ menu, onClose }: { menu: MenuId; onClose: () => void }) {
   );
 }
 
-function MenuContent({ menu, api }: { menu: MenuId; api: UIApi }) {
+function MenuContent({ menu, api, device }: { menu: MenuId; api: UIApi; device: DeviceClass }) {
   switch (menu) {
     case 'inventory': return <InventoryPanel api={api} />;
-    case 'map': return <MapPanel api={api} />;
+    case 'map': return <WorldMap api={api} device={device} />;
+    case 'players': return <PlayersPanel />;
     case 'quests': return <QuestsPanel api={api} />;
     case 'journal': return <JournalPanel />;
     case 'relationships': return <RelationshipsPanel api={api} />;
@@ -77,138 +94,197 @@ function Chip({ children, tone = 'default' }: { children: React.ReactNode; tone?
 }
 
 // ── Inventory ──
+/** Item category → user-facing tab. Derived from the server's item defs. */
+const CAT_TABS: { id: string; label: string; cats: string[] }[] = [
+  { id: 'all', label: 'Semua', cats: [] },
+  { id: 'tools', label: 'Tools', cats: ['tool'] },
+  { id: 'seeds', label: 'Seeds', cats: ['seed'] },
+  { id: 'crops', label: 'Crops', cats: ['crop'] },
+  { id: 'fish', label: 'Fish', cats: ['fish'] },
+  { id: 'mining', label: 'Mining', cats: ['mineral'] },
+  { id: 'materials', label: 'Materials', cats: ['forage', 'product', 'fert', 'bait', 'insect'] },
+  { id: 'food', label: 'Food', cats: ['meal'] },
+  { id: 'furniture', label: 'Furniture', cats: ['furniture'] },
+  { id: 'quest', label: 'Quest', cats: ['special'] },
+];
+
+const CAT_LABEL: Record<string, string> = {
+  tool: 'Tool', seed: 'Seed', crop: 'Crop', fish: 'Fish', mineral: 'Mining',
+  forage: 'Material', product: 'Material', fert: 'Material', bait: 'Material',
+  insect: 'Material', meal: 'Food', furniture: 'Furniture', special: 'Quest Item',
+};
+
+const MAX_STACK = 99;
+
 function InventoryPanel({ api }: { api: UIApi }) {
   const me = useHarvestStore((s) => s.me);
   const defs = useHarvestStore((s) => s.defs);
+  const prices = useHarvestStore((s) => s.prices);
   const selected = useHarvestStore((s) => s.selectedItem);
   const setSelectedItem = useHarvestStore((s) => s.setSelectedItem);
   const toast = useHarvestStore((s) => s.toast);
+  const [tab, setTab] = useState('all');
+  const [detail, setDetail] = useState<string | null>(null);
+
+  const items = useMemo(() => {
+    if (!me || !defs) return [];
+    const active = CAT_TABS.find((t) => t.id === tab);
+    return me.inv.filter((it) => {
+      const def = defs.items[it.id];
+      if (!def) return false;
+      if (!active || active.cats.length === 0) return true;
+      return active.cats.includes(def.cat);
+    });
+  }, [me, defs, tab]);
+
   if (!me || !defs) return null;
-  const handleUse = (id: string, qty: number) => {
-    const def = defs.items[id];
-    if (qty <= 0) return;
-    if (id.startsWith('seed_') || id.startsWith('tool_') || id === 'fert_basic' || id === 'fert_rich') {
-      setSelectedItem(id);
-      api.select(id);
-      audio.play('click');
-      toast('info', `${def.name} dipilih — arahkan ke tanah & tekan Aksi.`);
-      return;
-    }
-    if (def.cat === 'meal') {
-      api.action('eat', { item: id });
-      audio.play('cook');
-      return;
-    }
-    // Forage/fish/crop: sellable — offer sell via shop NPC. Selecting for gift not needed.
-    toast('info', `${def.name} bisa dijual di Toko (Fen) atau diberikan sebagai hadiah.`);
+
+  const usedSlots = me.inv.length;
+  const capacityPct = Math.min(100, (usedSlots / me.invMax) * 100);
+
+  const equip = (id: string) => {
+    setSelectedItem(id);
+    api.select(id);
+    audio.play('click');
   };
-  const countSlots = me.inv.length;
+
+  // Every mutation below is a *request*. The server validates and the resulting
+  // 'inv'/'gold' events update the UI — the client never mutates gold/inventory.
+  const use = (id: string) => {
+    const def = defs.items[id];
+    if (!def) return;
+    if (def.cat === 'meal') { api.action('eat', { item: id }); audio.play('cook'); return; }
+    if (def.cat === 'tool' || def.cat === 'seed' || def.cat === 'fert' || def.cat === 'bait') {
+      equip(id);
+      toast('info', `${def.name} dipilih — arahkan lalu tekan Aksi.`);
+      return;
+    }
+    if (def.cat === 'furniture') { api.action('place', { item: id }); return; }
+    toast('info', `${def.name} bisa dijual di Toko atau diberikan sebagai hadiah.`);
+  };
+
+  const discard = (id: string, qty: number) => {
+    const def = defs.items[id];
+    if (def?.cat === 'tool') { toast('warn', 'Alat tidak bisa dibuang.'); return; }
+    api.transact('drop', { item: id, qty });
+    audio.play('click');
+    setDetail(null);
+  };
+
+  const detailDef = detail ? defs.items[detail] : null;
+  const detailSlot = detail ? me.inv.find((i) => i.id === detail) : null;
+
   return (
     <div className="space-y-3">
-      <p className="text-[11px] text-white/50">Slot {countSlots}/{me.invMax} · Klik item untuk memilih / menggunakan.</p>
-      <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2">
-        {me.inv.map((it) => {
-          const def = defs.items[it.id];
-          if (!def) return null;
-          const active = selected === it.id;
+      {/* capacity */}
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-white/60 shrink-0">Slot {usedSlots}/{me.invMax}</span>
+        <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+          <div className="h-full rounded-full transition-all" style={{ width: `${capacityPct}%`, background: capacityPct > 90 ? '#ef4444' : '#34d399' }} />
+        </div>
+        <span className="text-[11px] font-bold text-amber-300 shrink-0 tabular-nums">{me.gold.toLocaleString('id-ID')} G</span>
+      </div>
+
+      {/* category tabs */}
+      <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
+        {CAT_TABS.map((t) => {
+          const count = t.cats.length === 0
+            ? me.inv.length
+            : me.inv.filter((i) => t.cats.includes(defs.items[i.id]?.cat || '')).length;
           return (
             <button
-              key={it.id}
-              onClick={() => { audio.play('click'); handleUse(it.id, it.qty); }}
-              className={`relative flex flex-col items-center gap-1 rounded-2xl border p-2 cursor-pointer transition-all active:scale-95 ${
-                active ? 'bg-emerald-400/15 border-emerald-300/60 shadow-[0_0_10px_rgba(52,211,153,0.3)]' : 'bg-white/[0.04] border-white/10 hover:bg-white/[0.09]'
+              key={t.id}
+              onClick={() => { audio.play('click'); setTab(t.id); }}
+              className={`px-2.5 py-1 rounded-xl text-[10px] font-bold whitespace-nowrap cursor-pointer transition-colors shrink-0 ${
+                tab === t.id ? 'bg-emerald-500 text-emerald-950' : 'bg-white/5 text-white/55 hover:bg-white/10'
               }`}
-              title={def.name}
             >
-              <img src={makeItemIcon(def.cat, def.color, it.id)} alt={def.name} className="w-9 h-9" draggable={false} />
-              <span className="text-[9px] text-white/80 truncate w-full text-center">{def.name}</span>
-              <span className="text-[9px] text-white/50 font-mono">x{it.qty}</span>
+              {t.label} {count > 0 && <span className="opacity-60">{count}</span>}
             </button>
           );
         })}
       </div>
+
+      {/* grid */}
+      {items.length === 0 ? (
+        <p className="text-[11px] text-white/40 italic py-6 text-center">Tidak ada item di kategori ini.</p>
+      ) : (
+        <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2">
+          {items.map((it) => {
+            const def = defs.items[it.id];
+            const active = selected === it.id;
+            const full = it.qty >= MAX_STACK;
+            return (
+              <button
+                key={it.id}
+                onClick={() => { audio.play('click'); setDetail(detail === it.id ? null : it.id); }}
+                className={`relative flex flex-col items-center gap-1 rounded-2xl border p-2 cursor-pointer transition-all active:scale-95 ${
+                  active ? 'bg-emerald-400/15 border-emerald-300/60 shadow-[0_0_10px_rgba(52,211,153,0.3)]'
+                    : detail === it.id ? 'bg-sky-400/10 border-sky-300/50'
+                    : 'bg-white/[0.04] border-white/10 hover:bg-white/[0.09]'
+                }`}
+                title={def.name}
+              >
+                <img src={makeItemIcon(def.cat, def.color, it.id)} alt={def.name} className="w-9 h-9" draggable={false} />
+                <span className="text-[9px] text-white/80 truncate w-full text-center">{def.name}</span>
+                <span className={`text-[9px] font-mono ${full ? 'text-amber-300' : 'text-white/50'}`}>x{it.qty}</span>
+                {active && <span className="absolute top-1 right-1 text-[8px] text-emerald-300">✔</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* detail / actions */}
+      {detailDef && detailSlot && (
+        <div className="rounded-2xl border border-white/12 bg-white/[0.04] p-3 space-y-2">
+          <div className="flex items-start gap-3">
+            <img src={makeItemIcon(detailDef.cat, detailDef.color, detail!)} alt="" className="w-11 h-11 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-white truncate">{detailDef.name}</p>
+              <div className="flex flex-wrap gap-1 mt-1">
+                <Chip>{CAT_LABEL[detailDef.cat] || detailDef.cat}</Chip>
+                <Chip>Jumlah {detailSlot.qty}/{MAX_STACK}</Chip>
+                {prices[detail!] && <Chip tone="ok">Jual {prices[detail!].sell} G</Chip>}
+                {prices[detail!] && <Chip>Beli {prices[detail!].buy} G</Chip>}
+                {detailDef.rare && <Chip tone="ok">Langka ✨</Chip>}
+              </div>
+              {detailDef.buff && (
+                <p className="text-[10px] text-emerald-300 mt-1">+{detailDef.buff.stam} stamina · speed ×{detailDef.buff.speed}</p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => use(detail!)} className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[11px] font-bold cursor-pointer active:scale-95 transition-transform">
+              {detailDef.cat === 'meal' ? 'Makan' : detailDef.cat === 'furniture' ? 'Letakkan' : 'Gunakan'}
+            </button>
+            {(detailDef.cat === 'tool' || detailDef.cat === 'seed' || detailDef.cat === 'fert' || detailDef.cat === 'bait') && (
+              <button onClick={() => equip(detail!)} className="px-3 py-1.5 rounded-xl bg-sky-500/25 border border-sky-300/35 text-sky-200 text-[11px] font-bold cursor-pointer active:scale-95 transition-transform">
+                Quick Slot
+              </button>
+            )}
+            {detailDef.cat !== 'tool' && (
+              <>
+                <button onClick={() => discard(detail!, 1)} className="px-3 py-1.5 rounded-xl bg-white/8 border border-white/12 text-white/70 text-[11px] font-bold cursor-pointer active:scale-95 transition-transform">
+                  Buang 1
+                </button>
+                {detailSlot.qty > 1 && (
+                  <button onClick={() => discard(detail!, detailSlot.qty)} className="px-3 py-1.5 rounded-xl bg-rose-500/20 border border-rose-300/30 text-rose-200 text-[11px] font-bold cursor-pointer active:scale-95 transition-transform">
+                    Buang semua ({detailSlot.qty})
+                  </button>
+                )}
+              </>
+            )}
+            <button onClick={() => setDetail(null)} className="px-3 py-1.5 rounded-xl bg-white/5 text-white/50 text-[11px] font-bold cursor-pointer">Tutup</button>
+          </div>
+        </div>
+      )}
+
       <div className="text-[11px] text-white/45 bg-white/[0.03] rounded-xl p-3 space-y-1">
-        <p><b className="text-white/70">Tips:</b> Benih & alat dipilih → tekan tombol Aksi besar di kanan bawah.</p>
-        <p>Makanan: klik → langsung dimakan (buff stamina).</p>
+        <p><b className="text-white/70">Tips:</b> Klik item untuk detail, harga, dan aksi.</p>
+        <p>Benih & alat: pilih → tekan tombol Aksi. Makanan: langsung dimakan (buff stamina).</p>
         <p>Hasil panen / ikan / mineral: jual di <b className="text-white/70">Fen</b> (village plaza).</p>
       </div>
-    </div>
-  );
-}
-
-// ── Map ──
-const MAP_COLORS: Record<number, string> = {
-  [TILE.grass]: '#79b356', [TILE.path]: '#b3996e', [TILE.soil]: '#8a5a33', [TILE.water]: '#3f86c8',
-  [TILE.sand]: '#e6d3a3', [TILE.rock]: '#8d8d94', [TILE.forest]: '#4f7d3f', [TILE.flower]: '#9cc86b',
-  [TILE.mountain]: '#8a8278', [TILE.plaza]: '#c9b8a3',
-};
-function MapPanel({ api }: { api: UIApi }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const world = api.getEngine()?.getWorldState() || null;
-  const me = useHarvestStore((s) => s.me);
-  const meta = useHarvestStore((s) => s.worldMeta);
-  const setMenu = useHarvestStore((s) => s.setMenu);
-  const [markers, setMarkers] = useState<{ id: string; x: number; y: number }[]>([]);
-  useEffect(() => {
-    const iv = setInterval(() => setMarkers(api.getEngine()?.getRemotePositions() || []), 1000);
-    return () => clearInterval(iv);
-  }, [api]);
-  useEffect(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const ctx = cv.getContext('2d')!;
-    const W = world?.size[0] || 224;
-    const H = world?.size[1] || 224;
-    cv.width = W; cv.height = H;
-    if (world) {
-      const grid = rleDecode(world.tileRLE, W * H);
-      const img = ctx.createImageData(W, H);
-      for (let i = 0; i < W * H; i++) {
-        const col = MAP_COLORS[grid[i]] || '#000';
-        const r = parseInt(col.slice(1, 3), 16), g = parseInt(col.slice(3, 5), 16), b = parseInt(col.slice(5, 7), 16);
-        img.data[i * 4] = r; img.data[i * 4 + 1] = g; img.data[i * 4 + 2] = b; img.data[i * 4 + 3] = 255;
-      }
-      ctx.putImageData(img, 0, 0);
-    }
-    const draw = () => {
-      // markers
-      if (me) {
-        ctx.fillStyle = '#0ea5e9';
-        ctx.beginPath(); ctx.arc(me.x, me.y, 3, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.stroke();
-      }
-      for (const p of markers) {
-        if (p.id === me?.id) continue;
-        ctx.fillStyle = '#f59e0b';
-        ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI * 2); ctx.fill();
-      }
-      if (world) {
-        ctx.fillStyle = '#f2c94c';
-        ctx.font = '6px monospace';
-        ctx.fillText('⛏', world.mineDoor.x - 2, world.mineDoor.y + 2);
-        ctx.fillText('🏘', world.villageCenter.x - 2, world.villageCenter.y + 2);
-        ctx.fillText('🌾', world.farmArea.x0 + 10, world.farmArea.y0 + 5);
-      }
-    };
-    draw();
-  }, [world, me, markers]);
-  return (
-    <div className="space-y-3">
-      <p className="text-[11px] text-white/50">📍 Kamu = biru · Pemain lain = oranye. Klik titik untuk info tidak tersedia di peta mini.</p>
-      <div className="rounded-2xl overflow-hidden border border-white/10 bg-black/30 p-1.5">
-        <canvas ref={canvasRef} className="w-full rounded-xl" style={{ imageRendering: 'pixelated' }} />
-      </div>
-      <div className="flex flex-wrap gap-1.5 text-[10px] text-white/60">
-        <Chip>🌊 Air: mancing</Chip>
-        <Chip>⛏ Tambang: pegunungan kanan-atas</Chip>
-        <Chip>🌾 Farm: bawah-kiri</Chip>
-        <Chip>🏘 Village: tengah</Chip>
-        <Chip>🌸 Secret Grove: utara tengah</Chip>
-        <Chip>🏖 Beach: tenggara</Chip>
-      </div>
-      <button onClick={() => setMenu(meta.festival.active ? 'festival' : 'community')} className="w-full px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/80 text-xs font-bold cursor-pointer transition-colors">
-        Lihat {meta.festival.active ? 'Festival aktif' : 'Proyek Komunitas'}
-      </button>
     </div>
   );
 }
@@ -677,16 +753,23 @@ function ShopPanel({ api }: { api: UIApi }) {
   if (!defs || !me) return null;
   const buyIds = Object.keys(prices).filter((id) => ['seed', 'fert', 'bait'].includes(defs.items[id]?.cat || ''));
   const sellIds = me.inv.map((i) => i.id).filter((id) => defs.items[id]?.cat !== 'tool' && defs.items[id]?.cat !== 'furniture' && defs.items[id]?.cat !== 'seed');
+  // Buy/sell are *requests* carrying an idempotency key: a double click can
+  // never charge twice. Gold and inventory only change when the server says so.
   const buy = (id: string) => {
     const n = qty[id] || 1;
-    api.action('buy', { item: id, qty: n });
+    const price = (prices[id]?.buy || 0) * n;
+    if (me.gold < price) { useHarvestStore.getState().toast('warn', 'Tidak cukup uang.'); return; }
+    api.transact('buy', { item: id, qty: n });
     audio.play('buy');
   };
   const sell = (id: string) => {
-    const n = Math.min(qty[id] || 1, me.inv.find((i) => i.id === id)?.qty || 1);
-    api.action('sell', { item: id, qty: n });
+    const owned = me.inv.find((i) => i.id === id)?.qty || 0;
+    const n = Math.min(qty[id] || 1, owned);
+    if (n < 1) { useHarvestStore.getState().toast('warn', 'Item tidak dimiliki.'); return; }
+    api.transact('sell', { item: id, qty: n });
     audio.play('sell');
   };
+  const ownedOf = (id: string) => me.inv.find((i) => i.id === id)?.qty || 0;
   const qtyPicker = (id: string) => (
     <div className="flex items-center gap-1">
       <button onClick={() => { audio.play('click'); setQty((q) => ({ ...q, [id]: Math.max(1, (q[id] || 1) - 1) })); }} className="w-6 h-6 rounded-lg bg-white/10 text-white/70 flex items-center justify-center cursor-pointer"><Minus className="w-3 h-3" /></button>
@@ -716,7 +799,7 @@ function ShopPanel({ api }: { api: UIApi }) {
                 <img src={makeItemIcon(def.cat, def.color, id)} className="w-8 h-8" alt="" />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-bold text-white truncate">{def.name} <span className="text-[9px] text-amber-300">G {price}</span></p>
-                  <p className="text-[9px] text-white/45">Jual kembali G {prices[id]?.sell || 0}</p>
+                  <p className="text-[9px] text-white/45">Jual kembali G {prices[id]?.sell || 0} · Dimiliki {ownedOf(id)}</p>
                 </div>
                 {qtyPicker(id)}
                 <button onClick={() => buy(id)} disabled={!canAfford} className={`px-3 py-1.5 rounded-xl text-[11px] font-bold shrink-0 ${canAfford ? 'bg-emerald-500 hover:bg-emerald-400 text-emerald-950 cursor-pointer' : 'bg-white/5 text-white/30 cursor-not-allowed'}`}>

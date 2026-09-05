@@ -1,10 +1,11 @@
 import { create } from 'zustand';
 import {
   ConnectionStatus, Screen, PlayerState, Defs, InteractionHint, UiToast, ChatLine,
-  DialogueState, MenuId, EventMsg, WorldState,
+  DialogueState, MenuId, EventMsg, WorldState, Conversation, ChatChannel,
 } from './types';
 
 const MAX_TOASTS = 5;
+const MAX_CHAT = 120;
 
 interface HarvestState {
   status: ConnectionStatus;
@@ -27,6 +28,10 @@ interface HarvestState {
   dialogue: DialogueState | null;
   toasts: UiToast[];
   chat: ChatLine[];
+  /** peerId → conversation metadata (unread counts, last activity) */
+  conversations: Record<string, Conversation>;
+  /** null = public channel, otherwise the peer id of a private conversation */
+  activeChannel: string | null;
   settings: { music: number; sfx: number; quality: 'high' | 'low'; showFps: boolean };
   fps: number;
   mine: { active: boolean; depth: number; S: number; grid: number[]; ores: Record<string, string> } | null;
@@ -49,6 +54,8 @@ interface HarvestState {
   toast: (kind: UiToast['kind'], msg: string) => void;
   dismissToast: (id: number) => void;
   pushChat: (line: ChatLine) => void;
+  setActiveChannel: (peerId: string | null) => void;
+  markConversationRead: (peerId: string) => void;
   setSettings: (p: Partial<HarvestState['settings']>) => void;
   setFps: (fps: number) => void;
   setMine: (m: HarvestState['mine']) => void;
@@ -81,6 +88,8 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
   dialogue: null,
   toasts: [],
   chat: [],
+  conversations: {},
+  activeChannel: null,
   settings: { music: 0.5, sfx: 0.8, quality: 'high', showFps: false },
   fps: 60,
   mine: null,
@@ -182,7 +191,45 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
       }
       case 'can_propose': st.toast('heart', `${st.defs?.npcs?.find(n => n.id === e.npc)?.name || 'Seseorang'} menerima lamaranmu!`); break;
       case 'marriage': st.toast('heart', `${e.name} menikah dengan ${e.npc}! 💍`); break;
-      case 'chat': set({ chat: [...st.chat.slice(-49), { id: chatId++, playerId: e.playerId as string, name: e.name as string, text: e.text as string, ts: e.ts as number }] }); break;
+      case 'chat': {
+        const channel = (e.channel as ChatChannel) || 'public';
+        const playerId = String(e.playerId || '');
+        const targetPlayerId = e.targetPlayerId ? String(e.targetPlayerId) : undefined;
+        const line: ChatLine = {
+          id: String(e.id ?? `local-${chatId++}`),
+          channel,
+          playerId,
+          name: String(e.name || 'Player'),
+          text: String(e.text || ''),
+          ts: Number(e.ts) || Date.now(),
+          targetPlayerId,
+          targetName: e.targetName ? String(e.targetName) : undefined,
+        };
+        const chat = [...st.chat.filter((m) => m.id !== line.id), line].slice(-MAX_CHAT);
+        update.chat = chat;
+
+        if (channel === 'private') {
+          const outgoing = playerId === st.userId;
+          const peerId = outgoing ? (targetPlayerId || '') : playerId;
+          const peerName = outgoing ? (line.targetName || peerId) : line.name;
+          if (peerId) {
+            const prev = st.conversations[peerId];
+            const isActive = st.activeChannel === peerId && st.chatOpen;
+            update.conversations = {
+              ...st.conversations,
+              [peerId]: {
+                peerId,
+                peerName,
+                unread: outgoing || isActive ? (prev?.unread || 0) : (prev?.unread || 0) + 1,
+                lastTs: line.ts,
+              },
+            };
+            if (!outgoing && !isActive) st.toast('info', `💬 Pesan pribadi dari ${peerName}`);
+          }
+        }
+        break;
+      }
+      case 'chat_error': st.toast('warn', String(e.msg || 'Pesan gagal dikirim.')); break;
       case 'weather': update['worldMeta'] = { ...st.worldMeta, weather: e.weather as string }; break;
       case 'time': update['worldMeta'] = { ...st.worldMeta, timeMin: e.time as number, day: e.day as number, season: e.season as string }; break;
       case 'season': update['worldMeta'] = { ...st.worldMeta, season: e.season as string }; break;
@@ -251,7 +298,25 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
     setTimeout(() => get().dismissToast(id), 4200);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter(t => t.id !== id) })),
-  pushChat: (line) => set((s) => ({ chat: [...s.chat.slice(-49), line] })),
+  pushChat: (line) => set((s) => {
+    // Dedup by server id: the local optimistic echo is replaced by the
+    // authoritative copy instead of appearing twice.
+    const withoutDupe = s.chat.filter((m) => m.id !== line.id);
+    return { chat: [...withoutDupe, line].slice(-MAX_CHAT) };
+  }),
+  setActiveChannel: (peerId) => set((s) => {
+    if (!peerId) return { activeChannel: null };
+    const conv = s.conversations[peerId];
+    return {
+      activeChannel: peerId,
+      conversations: conv ? { ...s.conversations, [peerId]: { ...conv, unread: 0 } } : s.conversations,
+    };
+  }),
+  markConversationRead: (peerId) => set((s) => {
+    const conv = s.conversations[peerId];
+    if (!conv || conv.unread === 0) return s;
+    return { conversations: { ...s.conversations, [peerId]: { ...conv, unread: 0 } } };
+  }),
   setSettings: (p) => set((s) => ({ settings: { ...s.settings, ...p } })),
   setFps: (fps) => set({ fps }),
   setMine: (m) => set({ mine: m }),
@@ -262,7 +327,14 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
   reset: () => set({
     status: 'connecting', screen: 'orientation', errorMsg: '', me: null, defs: null, prices: {},
     worldMeta: initialMeta, playersShort: {}, interaction: { kind: null, label: '', x: 0, y: 0 },
-    menu: null, dialogue: null, toasts: [], chat: [], mine: null, festivalBanner: null, wasInGame: false,
+    menu: null, dialogue: null, toasts: [], chat: [], conversations: {}, activeChannel: null,
+    mine: null, festivalBanner: null, wasInGame: false,
     fishing: { phase: 'idle', startAt: 0, biteAt: 0 }, selectedItem: null, chatOpen: false,
   }),
 }));
+
+// Expose the store for automated end-to-end tests / debugging. Read-only usage;
+// never referenced by application code.
+if (typeof window !== 'undefined') {
+  (window as unknown as { __harvestStore?: typeof useHarvestStore }).__harvestStore = useHarvestStore;
+}
