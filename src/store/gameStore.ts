@@ -634,6 +634,7 @@ export const useGameStore = create<GameStore>()(
             score: newPlayers[playerId]?.score ?? 0,
             progress: 0,
             rank: null,
+            finishedAt: undefined,
             hints: 3,
             streak: 0,
             lastCorrectMoveAt: 0,
