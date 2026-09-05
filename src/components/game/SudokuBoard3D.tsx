@@ -244,15 +244,22 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
     if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
     if (!grid || !userId || isStunned) return;
 
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-      e.preventDefault();
+    // Navigasi: panah + WASD (PC). Mobile/tab memakai joystick/D-pad (lihat room page).
+    const navDir =
+      e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W' ? 'up'
+      : e.key === 'ArrowDown' || e.key === 's' || e.key === 'S' ? 'down'
+      : e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A' ? 'left'
+      : e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D' ? 'right'
+      : null;
+    if (navDir) {
+      if (e.key.startsWith('Arrow')) e.preventDefault();
       const current = selectedCell || { row: 0, col: 0 };
       let newRow = current.row;
       let newCol = current.col;
-      if (e.key === 'ArrowUp') newRow = Math.max(0, current.row - 1);
-      if (e.key === 'ArrowDown') newRow = Math.min(8, current.row + 1);
-      if (e.key === 'ArrowLeft') newCol = Math.max(0, current.col - 1);
-      if (e.key === 'ArrowRight') newCol = Math.min(8, current.col + 1);
+      if (navDir === 'up') newRow = Math.max(0, current.row - 1);
+      if (navDir === 'down') newRow = Math.min(8, current.row + 1);
+      if (navDir === 'left') newCol = Math.max(0, current.col - 1);
+      if (navDir === 'right') newCol = Math.min(8, current.col + 1);
       handleCellClick(newRow, newCol);
       return;
     }
@@ -413,7 +420,7 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
       return raycaster.intersectObjects(tiles.map(t => t.mesh));
     };
 
-    const onPointerMove = (e: MouseEvent) => {
+    const onPointerMove = (e: PointerEvent | MouseEvent) => {
       const intersects = getRaycastIntersect(e.clientX, e.clientY);
       if (intersects.length > 0) {
         const hitMesh = intersects[0].object as THREE.Mesh;
@@ -424,7 +431,7 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
       }
     };
 
-    const onPointerDown = (e: MouseEvent) => {
+    const onPointerDown = (e: PointerEvent) => {
       const intersects = getRaycastIntersect(e.clientX, e.clientY);
       if (intersects.length > 0) {
         const hitMesh = intersects[0].object as THREE.Mesh;
@@ -434,7 +441,9 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
     };
 
     const domElement = renderer.domElement;
-    domElement.addEventListener('mousemove', onPointerMove, { passive: true });
+    domElement.style.touchAction = 'manipulation';
+    domElement.addEventListener('mousemove', onPointerMove as (e: MouseEvent) => void, { passive: true });
+    domElement.addEventListener('pointermove', onPointerMove as (e: PointerEvent) => void, { passive: true });
     domElement.addEventListener('pointerdown', onPointerDown);
 
     // Render & Animation Loop (Smooth Lerp + Micro Shake)
@@ -443,6 +452,11 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
 
     const animate = (currentTime: number) => {
       animationFrameId = requestAnimationFrame(animate);
+      // Hemat baterai/ smooth: lewati render saat tab tidak terlihat
+      if (typeof document !== 'undefined' && document.hidden) {
+        lastTime = currentTime;
+        return;
+      }
       const delta = Math.min((currentTime - lastTime) / 1000, 0.1);
       lastTime = currentTime;
       const currentSelected = selectedCellRef.current;
@@ -495,21 +509,40 @@ export const SudokuBoard3D: React.FC<SudokuBoard3DProps> = ({
     };
     animationFrameId = requestAnimationFrame(animate);
 
-    // Auto Responsive Resize Handler
+    // Auto Responsive Resize Handler — tahan rotasi (mode miring) & container 0px.
+    // Tanpa guard ini, rotasi HP bisa membuat aspect NaN dan papan "stuck" hitam.
     const handleResize = () => {
       if (!container) return;
-      camera.aspect = container.clientWidth / container.clientHeight;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (!w || !h) return;
+      camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      renderer.setSize(container.clientWidth, container.clientHeight);
+      renderer.setSize(w, h);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
     };
 
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
+    window.addEventListener('orientationchange', handleResize);
+    window.addEventListener('resize', handleResize);
+    // Baca ulang setelah rotasi selesai (layout mobile butuh jeda)
+    let orientTimer: ReturnType<typeof setTimeout> | null = null;
+    const handleOrientDelayed = () => {
+      if (orientTimer) clearTimeout(orientTimer);
+      orientTimer = setTimeout(handleResize, 300);
+    };
+    window.addEventListener('orientationchange', handleOrientDelayed);
 
     return () => {
       cancelAnimationFrame(animationFrameId);
       resizeObserver.disconnect();
-      domElement.removeEventListener('mousemove', onPointerMove);
+      window.removeEventListener('orientationchange', handleResize);
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleOrientDelayed);
+      if (orientTimer) clearTimeout(orientTimer);
+      domElement.removeEventListener('mousemove', onPointerMove as (e: MouseEvent) => void);
+      domElement.removeEventListener('pointermove', onPointerMove as (e: PointerEvent) => void);
       domElement.removeEventListener('pointerdown', onPointerDown);
 
       tiles.forEach(t => {

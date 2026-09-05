@@ -82,15 +82,22 @@ export const SudokuBoard: React.FC<SudokuBoardProps> = ({
       if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
       if (!grid || !userId) return;
 
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-        e.preventDefault();
+      // Navigasi: panah + WASD (PC). Mobile/tab memakai joystick/D-pad (lihat room page).
+      const navDir =
+        e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W' ? 'up'
+        : e.key === 'ArrowDown' || e.key === 's' || e.key === 'S' ? 'down'
+        : e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A' ? 'left'
+        : e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D' ? 'right'
+        : null;
+      if (navDir) {
+        if (e.key.startsWith('Arrow')) e.preventDefault();
         const current = selectedCell || { row: 0, col: 0 };
         let newRow = current.row;
         let newCol = current.col;
-        if (e.key === 'ArrowUp') newRow = Math.max(0, current.row - 1);
-        if (e.key === 'ArrowDown') newRow = Math.min(8, current.row + 1);
-        if (e.key === 'ArrowLeft') newCol = Math.max(0, current.col - 1);
-        if (e.key === 'ArrowRight') newCol = Math.min(8, current.col + 1);
+        if (navDir === 'up') newRow = Math.max(0, current.row - 1);
+        if (navDir === 'down') newRow = Math.min(8, current.row + 1);
+        if (navDir === 'left') newCol = Math.max(0, current.col - 1);
+        if (navDir === 'right') newCol = Math.min(8, current.col + 1);
         handleCellClick(newRow, newCol);
         return;
       }

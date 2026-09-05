@@ -21,6 +21,14 @@ import { SudokuBoard3D } from '../../../components/game/SudokuBoard3D';
 import { SnakesAndLaddersBoard } from '../../../components/game/SnakesAndLaddersBoard';
 import { TicTacToeBoard } from '../../../components/game/TicTacToeBoard';
 import { ArrowPuzzleBoard } from '../../../components/game/ArrowPuzzleBoard';
+import { VirtualJoystick } from '../../../components/game/VirtualJoystick';
+import { OrientationHint } from '../../../components/game/OrientationHint';
+import { GameChat } from '../../../components/game/GameChat';
+import { LiveMiniMap } from '../../../components/game/LiveMiniMap';
+import { InventoryPanel } from '../../../components/game/InventoryPanel';
+import { useOrientation } from '../../../hooks/useOrientation';
+import { useUnifiedControls, type MoveDir } from '../../../hooks/useUnifiedControls';
+import { getShopItem } from '../../../data/shop';
 import {
   Copy,
   Users,
@@ -32,14 +40,15 @@ import {
   WifiOff,
   Edit2,
   Eraser,
-  MessageCircle,
   ArrowLeft,
   ArrowUp,
   ArrowDown,
   ArrowRight,
   RotateCw,
   Box,
-  Grid as GridIcon
+  Grid as GridIcon,
+  Keyboard,
+  Gamepad2
 } from 'lucide-react';
 import { isSupabaseEnvValid } from '../../../services/supabase';
 import { getStoredAvatar } from '../../../utils/avatar';
@@ -58,7 +67,6 @@ export default function RoomPage() {
   const resetGame = useGameStore(state => state.resetGame);
   const setGameData = useGameStore(state => state.setGameData);
   const selectedCell = useGameStore(state => state.selectedCell);
-  const messages = useGameStore(state => state.messages);
   const player = useGameStore(state => state.room?.players[userId || '']);
   const hintsRemaining = player?.hints ?? 3;
   const isSpectator = Boolean(player?.isSpectator);
@@ -124,6 +132,8 @@ export default function RoomPage() {
     broadcastMove,
     broadcastNote,
     broadcastCursor,
+    broadcastPos,
+    broadcastWallet,
     lockCell,
     locks,
     broadcastChat,
@@ -142,7 +152,9 @@ export default function RoomPage() {
     reconnect
   } = useRealtime(roomId);
 
-  const [chatInput, setChatInput] = useState('');
+  // Orientasi robust (perbaikan bug "mode miring tidak terbaca"): tidak pernah memblokir game.
+  const { isLandscape, device, isTouch } = useOrientation();
+  void isLandscape;
 
   const snakesWinners = useGameStore(state => state.snakesState?.winners);
   const snakesWinnerId = useGameStore(state => state.snakesState?.winnerId);
@@ -352,40 +364,7 @@ export default function RoomPage() {
     }
   };
 
-  const [newMsgNotif, setNewMsgNotif] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const prevMsgCountRef = useRef<number>(0);
-  const joinTimestampRef = useRef<number>(0);
-
-  useEffect(() => {
-    if (joinTimestampRef.current === 0) {
-      joinTimestampRef.current = Date.now();
-    }
-  }, []);
-
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      const el = chatContainerRef.current;
-      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
-      if (isNearBottom) {
-        el.scrollTop = el.scrollHeight;
-      }
-    }
-
-    if (messages.length > prevMsgCountRef.current) {
-      if (prevMsgCountRef.current > 0) {
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg && lastMsg.userId !== userId && lastMsg.timestamp >= joinTimestampRef.current) {
-          setTimeout(() => setNewMsgNotif(true), 0);
-          const timer = setTimeout(() => setNewMsgNotif(false), 2000);
-          prevMsgCountRef.current = messages.length;
-          return () => clearTimeout(timer);
-        }
-      }
-      prevMsgCountRef.current = messages.length;
-    }
-  }, [messages, userId]);
 
   useEffect(() => {
     if (!room?.startedAt) return;
@@ -406,19 +385,10 @@ export default function RoomPage() {
     return `${mins}:${secs}`;
   };
 
-  const handleChatSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (chatInput.trim()) {
-      broadcastChat(chatInput.trim());
-      setChatInput('');
-      const textarea = document.getElementById('chat-textarea');
-      if (textarea) textarea.style.height = '40px';
-
-      if (chatContainerRef.current) {
-        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-      }
-    }
-  };
+  // Chat publik + pribadi (whisper) — diteruskan ke GameChat.
+  const handleChatSend = useCallback((text: string, toUserId?: string | null) => {
+    broadcastChat(text, toUserId ?? null);
+  }, [broadcastChat]);
 
   useEffect(() => {
     if (!roomId || isInitializedRef.current) return;
@@ -511,6 +481,9 @@ export default function RoomPage() {
             hints: 3,
             status: 'online',
             avatar: hostAvatar,
+            coins: 150,
+            inventory: [],
+            pos: { x: 50, y: 50 },
           },
         },
         createdAt: Date.now(),
@@ -575,6 +548,24 @@ export default function RoomPage() {
       setTimeout(() => setLoading(false), 0);
     }
   }, [roomId, router]);
+
+  // ANTI-STUCK: loading tidak boleh lebih dari 8 detik apa pun yang terjadi
+  // (perbaikan bug "game tidak mulai / stuck"). Setelah itu paksa tampilkan
+  // layar reconnect yang punya tombol aksi, bukan spinner abadi.
+  useEffect(() => {
+    if (!loading) return;
+    const t = setTimeout(() => setLoading(false), 8000);
+    return () => clearTimeout(t);
+  }, [loading]);
+
+  // Pastikan ekonomi (koin + inventory) selalu ada untuk pemain sendiri.
+  const roomKey = room?.id;
+  useEffect(() => {
+    if (!userId || !roomKey) return;
+    try {
+      useGameStore.getState().ensurePlayerEconomy(userId);
+    } catch {}
+  }, [userId, roomKey]);
 
   const copyRoomCode = () => {
     navigator.clipboard.writeText(roomId);
@@ -685,6 +676,109 @@ export default function RoomPage() {
       lockCell(newRow, newCol);
     }
   }, [selectedCell, broadcastCursor, lockCell, isSpectator, room?.mode]);
+
+  // ── Gerakan avatar bebas (arena minimap) — smooth + throttle realtime ──
+  const posThrottleRef = useRef(0);
+  const moveAvatarBy = useCallback((dx: number, dy: number) => {
+    if (isSpectator || !userId) return;
+    const st = useGameStore.getState();
+    const cur = st.room?.players[userId]?.pos ?? { x: 50, y: 50 };
+    const nx = Math.max(0, Math.min(100, cur.x + dx));
+    const ny = Math.max(0, Math.min(100, cur.y + dy));
+    const now = Date.now();
+    // Update lokal tiap frame (mulus), siarkan maksimal ~12x/detik (hemat bandwidth)
+    st.updatePlayer(userId, { pos: { x: nx, y: ny }, lastMoveAt: now });
+    if (now - posThrottleRef.current > 80) {
+      posThrottleRef.current = now;
+      broadcastPos(nx, ny);
+    }
+  }, [isSpectator, userId, broadcastPos]);
+
+  // Langkah keyboard (WASD/panah PC): HANYA avatar arena. Seleksi sel Sudoku
+  // ditangani handler keyboard milik papan 2D/3D — dipisah agar tidak double-fire.
+  const handleKeyMove = useCallback((dir: MoveDir) => {
+    if (isSpectator) return;
+    const step = 2.2;
+    if (dir === 'up') moveAvatarBy(0, -step);
+    else if (dir === 'down') moveAvatarBy(0, step);
+    else if (dir === 'left') moveAvatarBy(-step, 0);
+    else moveAvatarBy(step, 0);
+  }, [isSpectator, moveAvatarBy]);
+
+  // Langkah joystick / D-pad mobile: avatar arena + seleksi sel (bila mode sudoku).
+  // Papan tidak mendengar joystick, jadi di sini tidak ada double-fire.
+  const handleUnifiedMove = useCallback((dir: MoveDir) => {
+    if (isSpectator) return;
+    handleKeyMove(dir);
+    const m = useGameStore.getState().room?.mode;
+    if (m !== 'snakes_and_ladders' && m !== 'tic_tac_toe' && m !== 'arrow_classic' && m !== 'arrow_competition' && m !== 'arrow_practice') {
+      handleArrowNavigate(dir);
+    }
+  }, [isSpectator, handleKeyMove, handleArrowNavigate]);
+
+  const { move: unifiedMove, analog: unifiedAnalog } = useUnifiedControls({
+    onMove: handleUnifiedMove,
+    onKeyMove: handleKeyMove,
+    onAnalog: (x, y) => {
+      // Analog kontinu -> avatar meluncur mulus (deadzone kecil)
+      if (Math.hypot(x, y) < 0.12) return;
+      moveAvatarBy(x * 1.6, y * 1.6);
+    },
+    disabled: isSpectator,
+  });
+
+  // Beli & pakai item shop (tersinkron realtime via wallet_update + player_stats)
+  const handleBuyItem = useCallback((itemId: string): boolean => {
+    if (!userId) return false;
+    const item = getShopItem(itemId);
+    if (!item) return false;
+    const ok = useGameStore.getState().buyShopItem(userId, itemId, item.price);
+    if (ok) {
+      broadcastWallet();
+      toast.success(`${item.icon} ${item.name} dibeli!`);
+    }
+    return ok;
+  }, [userId, broadcastWallet]);
+
+  const handleUseItem = useCallback((itemId: string) => {
+    if (!userId) return;
+    const st = useGameStore.getState();
+    const item = getShopItem(itemId);
+    if (!item) return;
+    if (!(st.room?.players[userId]?.inventory ?? []).includes(itemId)) {
+      toast.error('Item tidak ada di inventory');
+      return;
+    }
+    // Efek langsung yang berguna — selain kosmetik yang otomatis aktif
+    if (itemId === 'hint_plus') {
+      st.updatePlayer(userId, { hints: (st.room?.players[userId]?.hints ?? 0) + 1 });
+      st.consumeShopItem(userId, itemId);
+      toast.success('💡 Hint +1 ditambahkan!');
+    } else if (itemId === 'coffee') {
+      st.addCoins(userId, 10);
+      st.consumeShopItem(userId, itemId);
+      toast.success('☕ +10 koin! Semangat!');
+    } else if (itemId === 'shield') {
+      st.updatePlayer(userId, { stunnedUntil: 0, streak: st.room?.players[userId]?.streak ?? 0 });
+      st.consumeShopItem(userId, itemId);
+      toast.success('🛡️ Shield aktif — stun berikutnya ditahan!');
+    } else if (itemId === 'teleport') {
+      // Ular tangga: maju acak 1-6 dari posisi sekarang
+      const snakes = st.snakesState;
+      const curPos = userId ? snakes?.playerPositions?.[userId] ?? 0 : 0;
+      const jump = 1 + Math.floor(Math.random() * 6);
+      const next = Math.min(100, curPos + jump);
+      if (snakes) {
+        st.updateSnakesState({ playerPositions: { ...snakes.playerPositions, [userId]: next } });
+      }
+      st.consumeShopItem(userId, itemId);
+      toast.success(`🌀 Teleport +${jump} ke kotak ${next}!`);
+    } else {
+      // Kosmetik / pasif: tetap dimiliki, tidak habis dipakai
+      toast.success(`${item.icon} ${item.name} sudah aktif otomatis!`);
+    }
+    broadcastWallet();
+  }, [userId, broadcastWallet]);
 
   const handleNumpadClick = useCallback((num: number) => {
     if (isSpectator || !selectedCell || !userId) return;
@@ -891,7 +985,10 @@ export default function RoomPage() {
                       </span>
                     )}
                   </div>
-                  <span className="font-mono font-bold">
+                  <span className="font-mono font-bold flex items-center gap-1.5">
+                    <span className="text-[11px] text-amber-600 dark:text-amber-400" title={`${p.coins ?? 150} koin`}>
+                      🪙{p.coins ?? 150}
+                    </span>
                     {p.rank && p.rank > 0 ? (
                       p.rank === 1 ? '🥇 1' :
                       p.rank === 2 ? '🥈 2' :
@@ -909,63 +1006,21 @@ export default function RoomPage() {
             </div>
           </Card>
 
-          <Card className="flex-shrink-0 flex flex-col overflow-hidden h-[380px] w-full">
-            <div className="p-3 border-b border-border bg-background/50 flex-shrink-0">
-              <h2 className="font-semibold text-sm flex items-center justify-between w-full">
-                <div className="flex items-center gap-2">
-                  <MessageCircle className="w-4 h-4" /> Chat
-                </div>
-                {newMsgNotif && (
-                  <span className="text-xs bg-foreground text-background font-semibold px-2 py-0.5 rounded-full animate-pulse transition-opacity duration-300 flex items-center gap-1 shadow-sm">
-                    ✉️ +1
-                  </span>
-                )}
-              </h2>
-            </div>
-            <div ref={chatContainerRef}
-              className="flex-1 p-3 flex flex-col overflow-y-auto space-y-2 text-xs sm:text-sm min-h-0">
-              {messages.length === 0 ? (
-                <div className="text-secondary italic text-center my-auto">No messages yet.</div>
-              ) : (
-                messages.map(msg => (
-                  <div key={msg.id} className="flex flex-col">
-                    <span className="font-semibold text-[11px] text-secondary">{msg.username}</span>
-                    <span className="bg-secondary/10 px-2.5 py-1 rounded-md w-fit max-w-full break-words text-xs">{msg.text}</span>
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="p-2.5 border-t border-border flex-shrink-0">
-              <form onSubmit={handleChatSubmit} className="flex items-center gap-2">
-                <textarea
-                  id="chat-textarea"
-                  value={chatInput}
-                  onChange={e => {
-                    setChatInput(e.target.value);
-                    e.target.style.height = '40px';
-                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
-                  }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleChatSubmit(e as unknown as React.FormEvent);
-                    }
-                  }}
-                  placeholder="Type a message..."
-                  className="flex-1 bg-background border border-border rounded-lg px-3 py-1.5 text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-foreground resize-none min-h-[40px] max-h-[120px] overflow-y-auto"
-                  rows={1}
-                />
-                <Button type="submit" size="sm" className="h-8 px-3 text-xs flex-shrink-0">
-                  Send
-                </Button>
-              </form>
-            </div>
-          </Card>
+          {/* Chat publik + pribadi (whisper) */}
+          <GameChat onSend={handleChatSend} />
+
+          {/* Map realtime: semua pergerakan terlihat live */}
+          <LiveMiniMap />
+
+          {/* Inventory + shop koin */}
+          <InventoryPanel onBuy={handleBuyItem} onUse={handleUseItem} />
         </div>
 
         {/* Center: Game Board */}
         <div className="lg:col-span-3 flex flex-col items-center justify-center">
           <div className="w-full max-w-2xl flex flex-col items-center gap-6">
+            {/* Saran orientasi non-blokir — game tetap jalan portrait maupun landscape */}
+            <OrientationHint className="w-full" />
             <div className="w-full flex justify-between items-end">
               <div>
                 <h2 className="text-2xl font-bold">{room?.difficulty?.toUpperCase() || 'MEDIUM'}</h2>
@@ -1128,6 +1183,56 @@ export default function RoomPage() {
                 </div>
               </div>
             )}
+
+            {/* ── KONTROL PERANGKAT: joystick (mobile/tab) • WASD+panah (PC) ── */}
+            <div className="w-full rounded-2xl border border-border bg-card p-3 sm:p-4 flex flex-col sm:flex-row items-center gap-4">
+              {isTouch || device !== 'desktop' ? (
+                <>
+                  <VirtualJoystick onMove={unifiedMove} onAnalog={unifiedAnalog} size={124} />
+                  <div className="flex-1 text-center sm:text-left space-y-1.5">
+                    <p className="text-sm font-bold flex items-center justify-center sm:justify-start gap-1.5">
+                      <Gamepad2 className="w-4 h-4" /> Kontrol {device === 'tablet' ? 'Tablet' : 'Mobile'}: Analog
+                    </p>
+                    <p className="text-xs text-secondary leading-relaxed">
+                      Seret joystick untuk bergerak — avatar di map & seleksi sel ikut bergerak realtime.
+                      Bisa juga ketuk tombol D-pad di bawah papan.
+                    </p>
+                    <div className="flex items-center justify-center sm:justify-start gap-1.5 pt-1">
+                      <span className="text-[11px] text-secondary font-medium">D-pad:</span>
+                      {(['left', 'up', 'down', 'right'] as const).map((d) => (
+                        <button
+                          key={d}
+                          onClick={() => unifiedMove(d)}
+                          disabled={isSpectator}
+                          aria-label={`Gerak ${d}`}
+                          className="w-9 h-9 rounded-lg border border-border bg-background hover:bg-hover font-bold transition-colors disabled:opacity-50 cursor-pointer"
+                        >
+                          {d === 'left' ? '◀' : d === 'up' ? '▲' : d === 'down' ? '▼' : '▶'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 text-center sm:text-left space-y-1.5">
+                  <p className="text-sm font-bold flex items-center justify-center sm:justify-start gap-1.5">
+                    <Keyboard className="w-4 h-4" /> Kontrol PC: Keyboard
+                  </p>
+                  <p className="text-xs text-secondary leading-relaxed">
+                    <kbd className="px-1.5 py-0.5 rounded border border-border bg-background font-mono text-[11px]">W</kbd>{' '}
+                    <kbd className="px-1.5 py-0.5 rounded border border-border bg-background font-mono text-[11px]">A</kbd>{' '}
+                    <kbd className="px-1.5 py-0.5 rounded border border-border bg-background font-mono text-[11px]">S</kbd>{' '}
+                    <kbd className="px-1.5 py-0.5 rounded border border-border bg-background font-mono text-[11px]">D</kbd>{' '}
+                    atau{' '}
+                    <kbd className="px-1.5 py-0.5 rounded border border-border bg-background font-mono text-[11px]">↑</kbd>{' '}
+                    <kbd className="px-1.5 py-0.5 rounded border border-border bg-background font-mono text-[11px]">←</kbd>{' '}
+                    <kbd className="px-1.5 py-0.5 rounded border border-border bg-background font-mono text-[11px]">↓</kbd>{' '}
+                    <kbd className="px-1.5 py-0.5 rounded border border-border bg-background font-mono text-[11px]">→</kbd>{' '}
+                    untuk bergerak — tahan untuk jalan kontinu yang mulus.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </main>

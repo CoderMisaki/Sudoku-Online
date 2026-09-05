@@ -45,10 +45,49 @@
   }
 }
 
+html {
+  /* Mencegah zoom ganda yang bikin kontrol terasa lag di mobile */
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  /* Mulus di semua device: scroll halus + tidak ada overscroll chaining */
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+  /* Notch / gesture bar di mobile landscape */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Kanvas & papan game: GPU-friendly, tanpa flicker saat rotasi */
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+/* Joystick & kontrol sentuh: jangan pernah memicu scroll/zoom browser */
+.touch-none {
+  touch-action: none;
+}
+
+/* Transisi posisi avatar di minimap — terasa mulus 60fps */
+.minimap-token {
+  will-change: left, top;
+  transform: translateZ(0);
+}
+
+/* Kurangi animasi untuk pengguna yang sensitif gerak (tetap fungsional) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 @keyframes collab-wrong-blink {

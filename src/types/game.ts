@@ -36,6 +36,14 @@ export interface Player {
   cursor?: { row: number; col: number } | null;
   isSpectator?: boolean;
   avatar?: string | null; // Data URL compressed avatar (64-128px), null = fallback
+  /** Posisi avatar bebas di arena/map (0..100, 0..100). Disinkron realtime via pos_update. */
+  pos?: { x: number; y: number } | null;
+  /** Koin untuk membeli item shop. Disinkron realtime via wallet_update. */
+  coins?: number;
+  /** ID item yang dimiliki. Disinkron realtime via inventory_update. */
+  inventory?: string[];
+  /** Terakhir bergerak — dipakai minimap & efek smooth. */
+  lastMoveAt?: number;
 }
 
 export interface CellData {
@@ -71,7 +79,29 @@ export interface ChatMessage {
   username: string;
   text: string;
   timestamp: number;
+  /** Bila diisi -> chat pribadi (whisper) hanya untuk user ini. undefined = publik. */
+  toUserId?: string | null;
+  toUsername?: string | null;
+  /** true = pesan pribadi. */
+  isPrivate?: boolean;
 }
+
+/** Item yang bisa dibeli/disimpan di inventory. */
+export interface ShopItem {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  icon: string;
+  effect?: string;
+  category: 'powerup' | 'cosmetic' | 'utility';
+}
+
+/** Orientasi layar yang terbaca secara robust di semua device. */
+export type ScreenOrientationKind = 'landscape' | 'portrait' | 'unknown';
+
+/** Jenis perangkat untuk memilih skema kontrol. */
+export type DeviceKind = 'mobile' | 'tablet' | 'desktop';
 
 export interface SnakeOrLadder {
   from: number;

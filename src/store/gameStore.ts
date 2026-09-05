@@ -82,6 +82,13 @@ interface GameStore {
   clearArrowPuzzleState: () => void;
   enterRoom: (roomId: string) => void;
   clearPersistedStorage: () => void;
+  /** Ekonomi: pastikan pemain punya koin & inventory default (tidak pernah 0 permanen). */
+  ensurePlayerEconomy: (playerId: string) => void;
+  addCoins: (playerId: string, amount: number) => void;
+  /** Beli item shop. Return false bila koin kurang. */
+  buyShopItem: (playerId: string, itemId: string, price: number) => boolean;
+  /** Pakai/hapus satu item dari inventory. Return false bila tidak punya. */
+  consumeShopItem: (playerId: string, itemId: string) => boolean;
 }
 
 export const useGameStore = create<GameStore>()(
@@ -114,7 +121,10 @@ export const useGameStore = create<GameStore>()(
                   isHost: false,
                   score: 0,
                   hints: 3,
-                  status: 'online'
+                  status: 'online',
+                  coins: 150,
+                  inventory: [],
+                  pos: null,
                 }),
                 ...data
               }
@@ -122,6 +132,62 @@ export const useGameStore = create<GameStore>()(
           }
         };
       }),
+
+      ensurePlayerEconomy: (playerId) => set((state) => {
+        if (!state.room?.players[playerId]) return state;
+        const p = state.room.players[playerId];
+        if (typeof p.coins === 'number' && Array.isArray(p.inventory)) return state;
+        return {
+          room: {
+            ...state.room,
+            players: {
+              ...state.room.players,
+              [playerId]: {
+                ...p,
+                coins: typeof p.coins === 'number' ? p.coins : 150,
+                inventory: Array.isArray(p.inventory) ? p.inventory : [],
+              },
+            },
+          },
+        };
+      }),
+
+      addCoins: (playerId, amount) => set((state) => {
+        if (!state.room?.players[playerId]) return state;
+        const p = state.room.players[playerId];
+        const next = Math.max(0, (p.coins ?? 150) + amount);
+        return {
+          room: {
+            ...state.room,
+            players: { ...state.room.players, [playerId]: { ...p, coins: next } },
+          },
+        };
+      }),
+
+      buyShopItem: (playerId, itemId, price) => {
+        const st = get();
+        const p = st.room?.players[playerId];
+        if (!p) return false;
+        const coins = p.coins ?? 150;
+        if (coins < price) return false;
+        st.updatePlayer(playerId, {
+          coins: coins - price,
+          inventory: [...(p.inventory ?? []), itemId],
+        });
+        return true;
+      },
+
+      consumeShopItem: (playerId, itemId) => {
+        const st = get();
+        const p = st.room?.players[playerId];
+        if (!p) return false;
+        const inv = [...(p.inventory ?? [])];
+        const idx = inv.indexOf(itemId);
+        if (idx < 0) return false;
+        inv.splice(idx, 1);
+        st.updatePlayer(playerId, { inventory: inv });
+        return true;
+      },
 
       updatePlayerProgress: (playerId, progress, rank) => set((state) => {
         if (!state.room || !state.room.players[playerId]) return state;
@@ -358,6 +424,23 @@ export const useGameStore = create<GameStore>()(
               };
             }
           }
+        }
+
+        // Bonus koin tiap jawaban benar — uang selalu cukup untuk belanja.
+        // x2 bila pemain punya item "extra_roll".
+        if (value !== null && isCorrect && newRoom.players[playerId]) {
+          const p = newRoom.players[playerId];
+          const mult = (p.inventory ?? []).includes('extra_roll') ? 2 : 1;
+          const reward = 5 * mult;
+          const winBonus =
+            typeof p.rank === 'number' && p.rank > 0 ? 50 : 0;
+          newRoom = {
+            ...newRoom,
+            players: {
+              ...newRoom.players,
+              [playerId]: { ...p, coins: (p.coins ?? 150) + reward + winBonus },
+            },
+          };
         }
 
         return {

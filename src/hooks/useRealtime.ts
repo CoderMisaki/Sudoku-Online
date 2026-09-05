@@ -479,7 +479,45 @@ export function useRealtime(roomId: string) {
         }));
       })
       .on('broadcast', { event: 'chat_message' }, ({ payload }) => {
-        useGameStore.getState().addMessage(payload);
+        const msg = (payload ?? {}) as Partial<ChatMessage>;
+        if (!msg || typeof msg.text !== 'string' || typeof msg.userId !== 'string') return;
+        const clean: ChatMessage = {
+          id: typeof msg.id === 'string' ? msg.id.slice(0, 32) : Math.random().toString(36).substring(2, 9),
+          userId: msg.userId.slice(0, 64),
+          username: typeof msg.username === 'string' ? msg.username.slice(0, 20) : '',
+          text: msg.text.slice(0, 500),
+          timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
+          toUserId: typeof msg.toUserId === 'string' ? msg.toUserId.slice(0, 64) : null,
+          toUsername: typeof msg.toUsername === 'string' ? msg.toUsername.slice(0, 20) : null,
+          isPrivate: msg.isPrivate === true,
+        };
+        useGameStore.getState().addMessage(clean);
+      })
+      .on('broadcast', { event: 'pos_update' }, ({ payload }) => {
+        const p = (payload ?? {}) as { userId?: unknown; x?: unknown; y?: unknown };
+        if (typeof p.userId !== 'string') return;
+        if (typeof p.x !== 'number' || typeof p.y !== 'number') return;
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
+        useGameStore.getState().updatePlayer(p.userId, {
+          pos: {
+            x: Math.max(0, Math.min(100, p.x)),
+            y: Math.max(0, Math.min(100, p.y)),
+          },
+          lastMoveAt: Date.now(),
+        });
+      })
+      .on('broadcast', { event: 'wallet_update' }, ({ payload }) => {
+        const p = (payload ?? {}) as { userId?: unknown; coins?: unknown; inventory?: unknown };
+        if (typeof p.userId !== 'string') return;
+        const patch: Partial<Player> = {};
+        if (typeof p.coins === 'number' && Number.isFinite(p.coins)) {
+          patch.coins = Math.max(0, Math.min(99999, Math.floor(p.coins)));
+        }
+        if (Array.isArray(p.inventory) && p.inventory.every((i) => typeof i === 'string')) {
+          patch.inventory = (p.inventory as string[]).slice(0, 50);
+        }
+        if (Object.keys(patch).length === 0) return;
+        useGameStore.getState().updatePlayer(p.userId, patch);
       })
       .on('broadcast', { event: 'player_leave_room' }, ({ payload }) => {
         useGameStore.getState().updatePlayer(payload.userId, { status: 'left' });
@@ -628,8 +666,9 @@ export function useRealtime(roomId: string) {
         }
       })
       .on('broadcast', { event: 'player_stats' }, ({ payload }) => {
-        const { userId: pid, score, progress, rank, finishedAt, startedAt } = (payload ?? {}) as {
+        const { userId: pid, score, progress, rank, finishedAt, startedAt, coins, inventory, pos } = (payload ?? {}) as {
           userId?: string; score?: unknown; progress?: unknown; rank?: unknown; finishedAt?: unknown; startedAt?: unknown;
+          coins?: unknown; inventory?: unknown; pos?: unknown;
         };
         if (!pid || typeof pid !== 'string') return;
         // Paket statistik dari ronde lama tidak boleh menghidupkan kembali
@@ -648,6 +687,25 @@ export function useRealtime(roomId: string) {
         }
         if (typeof finishedAt === 'number' && Number.isFinite(finishedAt)) {
           patch.finishedAt = finishedAt;
+        }
+        if (typeof coins === 'number' && Number.isFinite(coins)) {
+          patch.coins = Math.max(0, Math.min(99999, Math.floor(coins)));
+        }
+        if (Array.isArray(inventory) && inventory.every((i) => typeof i === 'string')) {
+          patch.inventory = (inventory as string[]).slice(0, 50);
+        }
+        if (
+          pos !== null &&
+          typeof pos === 'object' &&
+          typeof (pos as { x?: unknown }).x === 'number' &&
+          typeof (pos as { y?: unknown }).y === 'number'
+        ) {
+          const px = (pos as { x: number; y: number }).x;
+          const py = (pos as { x: number; y: number }).y;
+          if (Number.isFinite(px) && Number.isFinite(py)) {
+            patch.pos = { x: Math.max(0, Math.min(100, px)), y: Math.max(0, Math.min(100, py)) };
+            patch.lastMoveAt = Date.now();
+          }
         }
         if (Object.keys(patch).length === 0) return;
         const store = useGameStore.getState();
@@ -904,6 +962,8 @@ export function useRealtime(roomId: string) {
               score: me.score,
               progress: me.progress ?? 0,
               rank: me.rank ?? null,
+              coins: me.coins ?? 150,
+              inventory: me.inventory ?? [],
             },
           });
         }
@@ -944,21 +1004,73 @@ export function useRealtime(roomId: string) {
     });
   }, []);
 
-  const broadcastChat = useCallback((text: string) => {
+  /**
+   * Kirim chat — publik bila toUserId kosong, pribadi (whisper) bila diisi.
+   * Pesan pribadi ikut tersiar via event yang sama tapi hanya dirender
+   * untuk pengirim & penerima (lihat GameChat).
+   */
+  const broadcastChat = useCallback((text: string, toUserId?: string | null) => {
     const currentUid = userIdRef.current || getOrCreateUserId();
     const currentName = usernameRef.current ?? '';
+    const cleanText = text.trim().slice(0, 500);
+    if (!cleanText) return;
+    const targetId = typeof toUserId === 'string' && toUserId ? toUserId.slice(0, 64) : null;
+    const targetName = targetId
+      ? (useGameStore.getState().room?.players[targetId]?.username ?? '').slice(0, 20)
+      : null;
     const msg: ChatMessage = {
       id: Math.random().toString(36).substring(2, 9),
       userId: currentUid,
       username: currentName,
-      text,
+      text: cleanText,
       timestamp: Date.now(),
+      toUserId: targetId,
+      toUsername: targetName,
+      isPrivate: Boolean(targetId),
     };
     useGameStore.getState().addMessage(msg);
     channelRef.current?.send({
       type: 'broadcast',
       event: 'chat_message',
       payload: msg,
+    });
+  }, []);
+
+  /** Gerakan avatar bebas di arena/map (0..100). Throttle di pemanggil (~80ms). */
+  const broadcastPos = useCallback((x: number, y: number) => {
+    const currentUid = userIdRef.current || getOrCreateUserId();
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const cx = Math.max(0, Math.min(100, x));
+    const cy = Math.max(0, Math.min(100, y));
+    useGameStore.getState().updatePlayer(currentUid, {
+      pos: { x: cx, y: cy },
+      lastMoveAt: Date.now(),
+    });
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'pos_update',
+      payload: { userId: currentUid, x: cx, y: cy },
+    });
+  }, []);
+
+  /** Sinkronkan koin + inventory sendiri ke semua pemain. */
+  const broadcastWallet = useCallback(() => {
+    const currentUid = userIdRef.current || getOrCreateUserId();
+    const me = useGameStore.getState().room?.players[currentUid];
+    if (!me) return;
+    const payload = {
+      userId: currentUid,
+      startedAt: useGameStore.getState().room?.startedAt,
+      coins: me.coins ?? 150,
+      inventory: me.inventory ?? [],
+      score: me.score,
+      progress: me.progress ?? 0,
+    };
+    channelRef.current?.send({ type: 'broadcast', event: 'player_stats', payload });
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'wallet_update',
+      payload: { userId: currentUid, coins: payload.coins, inventory: payload.inventory },
     });
   }, []);
 
@@ -1149,7 +1261,7 @@ export function useRealtime(roomId: string) {
   );
 
   const broadcastPlayerStats = useCallback(
-    (stats: { score?: number; progress?: number; rank?: number | null; finishedAt?: number }) => {
+    (stats: { score?: number; progress?: number; rank?: number | null; finishedAt?: number; coins?: number; inventory?: string[]; pos?: { x: number; y: number } }) => {
       const currentUid = userIdRef.current || getOrCreateUserId();
       channelRef.current?.send({
         type: 'broadcast',
@@ -1168,6 +1280,8 @@ export function useRealtime(roomId: string) {
     broadcastMove,
     broadcastNote,
     broadcastCursor,
+    broadcastPos,
+    broadcastWallet,
     lockCell,
     locks,
     broadcastChat,
