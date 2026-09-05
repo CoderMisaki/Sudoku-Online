@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Map as MapIcon, Package, ListChecks, BookOpen, Heart, Settings, Wrench,
-  Home as HomeIcon, Users, MessageCircle, X, Send, Coins, Clock, Sun, CloudRain, CloudSnow,
+  Home as HomeIcon, Users, MessageCircle, X, Coins, Clock, Sun, CloudRain, CloudSnow,
   CloudFog, Wind, Flame, CloudLightning, Zap,
 } from 'lucide-react';
 import { useHarvestStore } from './store';
@@ -11,6 +11,10 @@ import { UIApi, getQuickSlots } from './api';
 import { audio } from './audio';
 import { makeItemIcon } from './sprites';
 import type { MenuId } from './types';
+import type { DeviceClass } from './orientation';
+import { inputManager } from './input';
+import { Joystick } from './Joystick';
+import { ChatPanel } from './Chat';
 
 function fmtTime(min: number) {
   const h = Math.floor(min / 60) % 24;
@@ -28,7 +32,7 @@ const WEATHER_ICON: Record<string, { icon: React.ReactNode; label: string }> = {
   heatwave: { icon: <Flame className="w-3.5 h-3.5 text-orange-400" />, label: 'Panas' },
 };
 
-export function HudLayer({ api }: { api: UIApi }) {
+export function HudLayer({ api, device }: { api: UIApi; device: DeviceClass }) {
   const me = useHarvestStore((s) => s.me);
   const defs = useHarvestStore((s) => s.defs);
   const meta = useHarvestStore((s) => s.worldMeta);
@@ -42,6 +46,13 @@ export function HudLayer({ api }: { api: UIApi }) {
   const chatOpen = useHarvestStore((s) => s.chatOpen);
   const setChatOpen = useHarvestStore((s) => s.setChatOpen);
   const festivalBanner = useHarvestStore((s) => s.festivalBanner);
+  const conversations = useHarvestStore((s) => s.conversations);
+  const unread = useMemo(() => Object.values(conversations).reduce((n, c) => n + c.unread, 0), [conversations]);
+
+  // Touch controls only exist on touch hardware; sizes scale with device class.
+  const isTouch = device === 'mobile' || device === 'tablet';
+  const btn = device === 'tablet' ? 54 : 46;
+  const action = device === 'tablet' ? 96 : 76;
 
   const weather = WEATHER_ICON[meta.weather] || WEATHER_ICON.sunny;
   const slots = useMemo(() => getQuickSlots(me, defs), [me, defs]);
@@ -51,7 +62,15 @@ export function HudLayer({ api }: { api: UIApi }) {
   return (
     <div className="absolute inset-0 pointer-events-none z-20 font-sans">
       {/* top bar */}
-      <div className="absolute top-0 left-0 right-0 p-2 sm:p-3 flex items-start justify-between gap-2">
+      <div
+        className="absolute top-0 left-0 right-0 flex items-start justify-between gap-2"
+        style={{
+          padding: '8px',
+          paddingTop: 'calc(env(safe-area-inset-top) + 8px)',
+          paddingLeft: 'calc(env(safe-area-inset-left) + 8px)',
+          paddingRight: 'calc(env(safe-area-inset-right) + 8px)',
+        }}
+      >
         <div className="flex flex-col gap-1.5 min-w-0">
           <div className="pointer-events-auto flex items-center gap-1.5 bg-[#0d1826]/85 backdrop-blur rounded-2xl px-3 py-1.5 border border-white/10 shadow-lg">
             <Clock className="w-3.5 h-3.5 text-emerald-300" />
@@ -73,10 +92,16 @@ export function HudLayer({ api }: { api: UIApi }) {
 
         {/* right controls row */}
         <div className="pointer-events-auto flex flex-col items-end gap-1.5">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap justify-end max-w-[62vw]">
             <span className="text-[10px] text-white/70 bg-[#0d1826]/70 rounded-full px-2 py-1 border border-white/10 hidden sm:inline-flex items-center gap-1">
               <Users className="w-3 h-3 text-emerald-300" /> {Object.keys(playersShort).length} pemain
             </span>
+            <HudButton title="Pemain & Pesan" active={menu === 'players'} onClick={() => { audio.play('click'); setMenu(menu === 'players' ? null : 'players'); }}>
+              <span className="relative flex items-center justify-center">
+                <Users className="w-4 h-4" />
+                {unread > 0 && <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[8px] font-bold rounded-full min-w-3.5 h-3.5 px-0.5 flex items-center justify-center">{unread}</span>}
+              </span>
+            </HudButton>
             <HudButton title="Minimap" active={menu === 'map'} onClick={() => { audio.play('click'); setMenu(menu === 'map' ? null : 'map'); }}><MapIcon className="w-4 h-4" /></HudButton>
             <HudButton title="Inventory" active={menu === 'inventory'} onClick={() => { audio.play('click'); setMenu(menu === 'inventory' ? null : 'inventory'); }}><Package className="w-4 h-4" /></HudButton>
             <HudButton title="Quests" onClick={() => { audio.play('click'); setMenu(menu === 'quests' ? null : 'quests'); }}><ListChecks className="w-4 h-4" /></HudButton>
@@ -120,7 +145,10 @@ export function HudLayer({ api }: { api: UIApi }) {
       )}
 
       {/* bottom quickbar */}
-      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 pointer-events-auto">
+      <div
+        className="absolute left-1/2 -translate-x-1/2 pointer-events-auto max-w-[92vw] overflow-x-auto"
+        style={{ bottom: 'calc(env(safe-area-inset-bottom) + 8px)' }}
+      >
         <div className="flex items-end gap-1.5 bg-[#0d1826]/85 backdrop-blur rounded-2xl p-1.5 border border-white/10 shadow-xl">
           {slots.map((itemId, i) => {
             const def = itemId ? defs?.items?.[itemId] : null;
@@ -153,45 +181,63 @@ export function HudLayer({ api }: { api: UIApi }) {
         </div>
       </div>
 
-      {/* touch controls */}
-      <div className="absolute bottom-3 left-3 pointer-events-auto">
-        <Joystick api={api} />
-      </div>
-      <div className="absolute bottom-3 right-3 flex items-end gap-2 pointer-events-auto">
-        <button
-          onClick={() => { audio.play('click'); setChatOpen(!chatOpen); }}
-          className="w-11 h-11 rounded-2xl bg-[#0d1826]/85 border border-white/15 text-white/80 flex items-center justify-center cursor-pointer active:scale-95 transition-transform"
-          title="Chat"
-        >
-          <MessageCircle className="w-5 h-5" />
-        </button>
-        <button
-          onClick={() => { api.emote('cheer'); audio.play('emote'); }}
-          className="w-11 h-11 rounded-2xl bg-[#0d1826]/85 border border-white/15 text-white/80 flex items-center justify-center cursor-pointer active:scale-95 transition-transform"
-          title="Emote"
-        >
-          <span className="text-lg">🎉</span>
-        </button>
-        <SprintButton api={api} />
-        <div className="flex flex-col items-center gap-1.5">
-          <button
-            onClick={() => { audio.play('open'); setMenu('map'); }}
-            className="w-11 h-11 rounded-2xl bg-[#0d1826]/85 border border-white/15 text-white/80 flex items-center justify-center cursor-pointer active:scale-95 transition-transform"
-            title="Map"
+      {/* ── Touch controls: only on touch devices. Desktop uses the keyboard. ── */}
+      {isTouch && (
+        <>
+          <div
+            className="absolute pointer-events-auto"
+            style={{ left: 'calc(env(safe-area-inset-left) + 14px)', bottom: 'calc(env(safe-area-inset-bottom) + 14px)' }}
           >
-            <MapIcon className="w-5 h-5" />
-          </button>
-          <button
-            onClick={() => { api.interact(); }}
-            className="w-20 h-20 rounded-full bg-gradient-to-b from-emerald-400 to-emerald-600 border-4 border-emerald-200/40 shadow-[0_4px_16px_rgba(16,185,129,0.45)] flex flex-col items-center justify-center cursor-pointer active:scale-95 transition-transform"
-            title={interaction.label || 'Interact'}
+            <Joystick device={device} />
+          </div>
+
+          <div
+            className="absolute pointer-events-auto flex items-end gap-2"
+            style={{ right: 'calc(env(safe-area-inset-right) + 14px)', bottom: 'calc(env(safe-area-inset-bottom) + 14px)' }}
           >
-            <span className="text-[9px] font-black text-emerald-950 uppercase tracking-wide leading-tight text-center px-1">
-              {mine ? (interaction.kind === 'exit' ? 'KELUAR' : 'TAMBANG') : (interaction.label || 'Aksi')}
-            </span>
-          </button>
+            <div className="flex flex-col gap-2">
+              <TouchButton size={btn} label="Chat" onClick={() => { audio.play('click'); setChatOpen(!chatOpen); }}>
+                <MessageCircle style={{ width: btn * 0.42, height: btn * 0.42 }} />
+              </TouchButton>
+              <TouchButton size={btn} label="Inventory" onClick={() => { audio.play('open'); setMenu(menu === 'inventory' ? null : 'inventory'); }}>
+                <Package style={{ width: btn * 0.42, height: btn * 0.42 }} />
+              </TouchButton>
+            </div>
+            <div className="flex flex-col gap-2">
+              <TouchButton size={btn} label="Emote" onClick={() => { api.emote('cheer'); audio.play('emote'); }}>
+                <span style={{ fontSize: btn * 0.42 }}>🎉</span>
+              </TouchButton>
+              <TouchButton size={btn} label="Map" onClick={() => { audio.play('open'); setMenu(menu === 'map' ? null : 'map'); }}>
+                <MapIcon style={{ width: btn * 0.42, height: btn * 0.42 }} />
+              </TouchButton>
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <SprintButton size={btn} />
+              <button
+                onPointerDown={(e) => { e.preventDefault(); api.interact(); }}
+                aria-label={interaction.label || 'Aksi'}
+                className="rounded-full bg-gradient-to-b from-emerald-400 to-emerald-600 border-4 border-emerald-200/40 shadow-[0_4px_16px_rgba(16,185,129,0.45)] flex items-center justify-center cursor-pointer active:scale-95 transition-transform touch-none"
+                style={{ width: action, height: action }}
+              >
+                <span className="text-[9px] font-black text-emerald-950 uppercase tracking-wide leading-tight text-center px-1">
+                  {mine ? (interaction.kind === 'exit' ? 'KELUAR' : 'TAMBANG') : (interaction.label || 'Aksi')}
+                </span>
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Desktop keyboard hint */}
+      {!isTouch && (
+        <div
+          className="absolute pointer-events-none text-[10px] text-white/40 bg-[#0d1826]/60 rounded-xl px-2.5 py-1.5 border border-white/8 leading-relaxed"
+          style={{ left: 'calc(env(safe-area-inset-left) + 12px)', bottom: 'calc(env(safe-area-inset-bottom) + 12px)' }}
+        >
+          <b className="text-white/65">WASD</b> / <b className="text-white/65">↑←↓→</b> gerak · <b className="text-white/65">Shift</b> lari · <b className="text-white/65">E</b> aksi<br />
+          <b className="text-white/65">I</b> inventory · <b className="text-white/65">M</b> peta · <b className="text-white/65">Enter</b> chat
         </div>
-      </div>
+      )}
 
       {/* fishing UI */}
       <FishingUI api={api} />
@@ -200,7 +246,7 @@ export function HudLayer({ api }: { api: UIApi }) {
       <DialogBox api={api} />
 
       {/* chat */}
-      <ChatPanel api={api} />
+      <ChatPanel api={api} device={device} />
 
       {/* mine info */}
       {mine && (
@@ -212,21 +258,40 @@ export function HudLayer({ api }: { api: UIApi }) {
   );
 }
 
-function SprintButton({ api }: { api: UIApi }) {
-  const [on, setOn] = useState(false);
+/** Sprint toggle. Reflects and drives the shared InputManager, never the engine directly. */
+function SprintButton({ size }: { size: number }) {
+  const [on, setOn] = useState(() => inputManager.getTouchSprint());
   return (
     <button
       onClick={() => {
         const v = !on;
         setOn(v);
         audio.play('click');
-        api.getEngine()?.setSprintTouch(v);
+        inputManager.setTouchSprint(v);
       }}
-      className={`w-11 h-11 rounded-2xl border flex flex-col items-center justify-center cursor-pointer active:scale-95 transition-all ${on ? 'bg-emerald-400/30 border-emerald-300/60 text-emerald-200' : 'bg-[#0d1826]/85 border-white/15 text-white/70'}`}
-      title="Sprint (Shift di PC)"
+      aria-pressed={on}
+      aria-label="Sprint"
+      className={`rounded-2xl border flex flex-col items-center justify-center cursor-pointer active:scale-95 transition-all touch-none ${
+        on ? 'bg-emerald-400/30 border-emerald-300/60 text-emerald-200' : 'bg-[#0d1826]/85 border-white/15 text-white/70'
+      }`}
+      style={{ width: size, height: size }}
     >
       <span className="text-[9px] font-black">RUN</span>
-      <span className="text-[7px] opacity-70">lari</span>
+    </button>
+  );
+}
+
+/** Generic touch HUD button with a comfortable tap target. */
+function TouchButton({ size, label, onClick, children }: { size: number; label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="rounded-2xl bg-[#0d1826]/85 border border-white/15 text-white/80 flex items-center justify-center cursor-pointer active:scale-95 transition-transform touch-none"
+      style={{ width: size, height: size }}
+    >
+      {children}
     </button>
   );
 }
@@ -272,67 +337,6 @@ function HudButton({ children, title, onClick, active }: { children: React.React
     >
       {children}
     </button>
-  );
-}
-
-// ── Joystick ──
-function Joystick({ api }: { api: UIApi }) {
-  const [, setVec] = useState<[number, number]>([0, 0]);
-  const [active, setActive] = useState(false);
-  const baseRef = useRef<HTMLDivElement>(null);
-  const knobRef = useRef<HTMLDivElement>(null);
-  const pidRef = useRef<number | null>(null);
-
-  const handle = (e: React.PointerEvent, up = false) => {
-    e.preventDefault();
-    const base = baseRef.current;
-    if (!base) return;
-    const rect = base.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    const dx = up ? 0 : (e.clientX - cx) / (rect.width / 2.4);
-    const dy = up ? 0 : (e.clientY - cy) / (rect.height / 2.4);
-    const len = Math.hypot(dx, dy);
-    const cl = len > 1 ? 1 : len;
-    const nx = len > 0 ? dx / len * cl : 0;
-    const ny = len > 0 ? dy / len * cl : 0;
-    setVec([nx, ny]);
-    if (knobRef.current) knobRef.current.style.transform = `translate(${nx * rect.width * 0.28}px, ${ny * rect.height * 0.28}px)`;
-    // screen y → world z (up = -z)
-    api.move(nx, -ny);
-  };
-  const down = (e: React.PointerEvent) => {
-    e.preventDefault();
-    setActive(true);
-    pidRef.current = e.pointerId;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    handle(e);
-  };
-  const up = (e: React.PointerEvent) => {
-    e.preventDefault();
-    setActive(false);
-    pidRef.current = null;
-    handle(e, true);
-  };
-  const cancel = () => {
-    setActive(false);
-    pidRef.current = null;
-    api.move(0, 0);
-    if (knobRef.current) knobRef.current.style.transform = 'translate(0,0)';
-  };
-  return (
-    <div
-      ref={baseRef}
-      onPointerDown={down}
-      onPointerMove={(e) => { if (pidRef.current === e.pointerId) handle(e); }}
-      onPointerUp={up}
-      onPointerCancel={cancel}
-      className={`w-28 h-28 sm:w-32 sm:h-32 rounded-full border-2 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing transition-colors ${
-        active ? 'bg-emerald-400/20 border-emerald-300/60' : 'bg-[#0d1826]/70 border-white/20'
-      }`}
-    >
-      <div ref={knobRef} className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-b from-emerald-300 to-emerald-500 shadow-lg border-2 border-white/40" />
-    </div>
   );
 }
 
@@ -434,64 +438,6 @@ function DialogBox({ api }: { api: UIApi }) {
             })}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-// ── Chat ──
-function ChatPanel({ api }: { api: UIApi }) {
-  const chatOpen = useHarvestStore((s) => s.chatOpen);
-  const setChatOpen = useHarvestStore((s) => s.setChatOpen);
-  const chat = useHarvestStore((s) => s.chat);
-  const pushChat = useHarvestStore((s) => s.pushChat);
-  const me = useHarvestStore((s) => s.me);
-  const [text, setText] = useState('');
-  const listRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [chat.length, chatOpen]);
-  const send = () => {
-    const t = text.trim().slice(0, 200);
-    if (!t) return;
-    api.sendChat(t);
-    pushChat({ id: Date.now(), playerId: me?.id || '', name: me?.username || 'Kamu', text: t, ts: Date.now() });
-    setText('');
-  };
-  if (!chatOpen) {
-    if (chat.length === 0) return null;
-    return (
-      <button onClick={() => { audio.play('open'); setChatOpen(true); }} className="pointer-events-auto absolute bottom-24 left-3 bg-[#0d1826]/80 border border-white/10 rounded-2xl px-3 py-1.5 text-[10px] text-white/70 backdrop-blur cursor-pointer hover:bg-[#0d1826]/95 max-w-[220px] truncate">
-        💬 {chat[chat.length - 1].name}: {chat[chat.length - 1].text}
-      </button>
-    );
-  }
-  return (
-    <div className="pointer-events-auto absolute bottom-24 left-3 w-[min(80vw,380px)] h-64 rounded-2xl bg-[#101a2e]/95 backdrop-blur border border-white/15 shadow-2xl flex flex-col overflow-hidden">
-      <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between">
-        <span className="text-xs font-bold text-white">Chat Dunia</span>
-        <button onClick={() => { audio.play('close'); setChatOpen(false); }} className="text-white/50 hover:text-white cursor-pointer"><X className="w-3.5 h-3.5" /></button>
-      </div>
-      <div ref={listRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-1.5">
-        {chat.length === 0 && <p className="text-[11px] text-white/40 italic">Belum ada pesan. Sapa dunia! 🌾</p>}
-        {chat.map((m) => (
-          <div key={m.id} className="text-[11px] leading-snug">
-            <span className="font-bold text-emerald-300">{m.name}: </span>
-            <span className="text-white/85 break-words">{m.text}</span>
-          </div>
-        ))}
-      </div>
-      <div className="p-2 border-t border-white/10 flex gap-1.5">
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value.slice(0, 200))}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } }}
-          placeholder="Tulis pesan..."
-          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white placeholder:text-white/30 focus:outline-none focus:border-emerald-300/40"
-        />
-        <button onClick={send} className="w-9 h-8 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-emerald-950 flex items-center justify-center cursor-pointer transition-colors">
-          <Send className="w-3.5 h-3.5" />
-        </button>
       </div>
     </div>
   );

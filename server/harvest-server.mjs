@@ -308,6 +308,15 @@ const SEASON_WEATHER = {
   winter: [['sunny', 30], ['snow', 45], ['storm', 10], ['fog', 15]],
 };
 
+// Movement speed budget (tiles/sec) — must match the client engine constants.
+const SERVER_WALK_SPEED = 4.4;
+const SERVER_SPRINT_SPEED = 7.2;
+
+// Chat limits
+const CHAT_MAX_LEN = 200;
+const CHAT_BURST = 5;            // messages that may be sent back-to-back
+const CHAT_REFILL_PER_SEC = 1.5; // sustained rate
+
 const WORLD_W = 224;
 const WORLD_H = 224;
 const TILE = { grass: 0, path: 1, soil: 2, water: 3, sand: 4, rock: 5, forest: 6, flower: 7, mountain: 8, plaza: 9 };
@@ -757,7 +766,7 @@ export class HarvestServer {
     for (const [code, w] of this.worlds) {
       const file = this.saveFile(code);
       try {
-        const out = JSON.stringify({ savedAt: nowMs(), world: this.serializeWorldForDisk(w), players: w._players || {} });
+        const out = JSON.stringify({ savedAt: nowMs(), world: this.serializeWorldForDisk(w), players: serializePlayers(w._players || {}) });
         fs.writeFileSync(file + '.tmp', out);
         fs.renameSync(file + '.tmp', file);
       } catch (err) {
@@ -843,10 +852,32 @@ export class HarvestServer {
       peer.close(1008);
       return;
     }
+    // Evict any stale socket for the same identity. Without this, a reconnect
+    // (tab refresh, network blip) leaves a ghost player in the room and the
+    // snapshot would list the same id twice.
+    for (const [oldPeer, oldClient] of [...this.clients]) {
+      if (oldClient.roomCode === roomCode && oldClient.player.id === userId && oldPeer !== peer) {
+        this.clients.delete(oldPeer);
+        this.connections.delete(oldPeer);
+        try { oldPeer.close(1000); } catch { /* already gone */ }
+      }
+    }
+
     if (player) {
-      // resume
+      // Resume the persisted player — inventory, gold and progress are untouched.
       player.lastSeen = nowMs();
-      peer.send({ t: 'hello_ack', player: this.playerPublicSafe(player, true), needsCreation: false });
+      player._ackSeq = 0;
+      player._lastMoveAt = nowMs();
+      peer.send({ t: 'hello_ack', player: this.playerPublicSafe(player, true), needsCreation: !player.char });
+      const client = { roomCode, player, peer };
+      this.clients.set(peer, client);
+      if (player.char) {
+        // Resuming players must receive the world immediately, otherwise the
+        // client sits on the loading screen forever waiting for a snapshot.
+        this.sendSnapshot(peer, client, w, true);
+        this.broadcast(roomCode, { t: 'event', e: { type: 'join', playerId: player.id, name: player.username } }, player.id);
+      }
+      return;
     } else {
       player = makePlayer(userId, username);
       players[userId] = player;
@@ -902,20 +933,66 @@ export class HarvestServer {
     return { x: 70, y: 150 };
   }
 
+  /**
+   * Authoritative movement. The client predicts locally and tags every batch with
+   * a monotonically increasing sequence number; we clamp the requested delta to
+   * what is physically reachable since the last accepted move (speed validation /
+   * anti-teleport) and echo back the accepted seq so the client can reconcile.
+   */
   onMove(client, msg) {
     const { player } = client;
-    const w = this.getWorld(client.roomCode);
     if (!player.char) return;
     const x = Number(msg.x), y = Number(msg.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-    const maxStep = (msg.sprint ? 0.85 : 0.5);
-    const dx = clamp(x - player.x, -maxStep, maxStep);
-    const dy = clamp(y - player.y, -maxStep, maxStep);
-    player.x = clamp(player.x + dx, 1, WORLD_W - 2);
-    player.y = clamp(player.y + dy, 1, WORLD_H - 2);
-    player.dir = Math.round(Number(msg.dir) || 0) % 4;
+
+    const now = nowMs();
+    const last = player._lastMoveAt || now;
+    // Elapsed wall time since the previous accepted move, capped so a stalled
+    // client cannot bank up a huge allowance and then teleport across the map.
+    const elapsed = clamp((now - last) / 1000, 0, 0.5);
+    player._lastMoveAt = now;
+
+    const maxSpeed = (msg.sprint ? SERVER_SPRINT_SPEED : SERVER_WALK_SPEED) * 1.35; // 35% network jitter headroom
+    const budget = Math.max(0.35, maxSpeed * elapsed);
+
+    let dx = x - player.x;
+    let dy = y - player.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > budget) {
+      // Reject the excess but keep the direction — the client will be corrected.
+      const k = budget / dist;
+      dx *= k; dy *= k;
+      player._moveViolations = (player._moveViolations || 0) + 1;
+    } else if (player._moveViolations > 0) {
+      player._moveViolations -= 1;
+    }
+
+    const nx = clamp(player.x + dx, 1, WORLD_W - 2);
+    const ny = clamp(player.y + dy, 1, WORLD_H - 2);
+    // Terrain validation: never let a player end up inside water/rock/mountain.
+    if (this.isWalkable(client.roomCode, nx, ny)) {
+      player.x = nx; player.y = ny;
+    } else if (this.isWalkable(client.roomCode, nx, player.y)) {
+      player.x = nx;
+    } else if (this.isWalkable(client.roomCode, player.x, ny)) {
+      player.y = ny;
+    }
+
+    player.dir = Math.abs(Math.round(Number(msg.dir) || 0)) % 4;
     player.anim = typeof msg.anim === 'string' ? msg.anim.slice(0, 12) : 'idle';
     player.sprint = Boolean(msg.sprint);
+
+    const seq = Number(msg.seq);
+    if (Number.isFinite(seq) && seq > (player._ackSeq || 0)) player._ackSeq = seq;
+    player._moveDirty = true;
+  }
+
+  isWalkable(roomCode, x, y) {
+    const w = this.getWorld(roomCode);
+    const tx = Math.floor(x), ty = Math.floor(y);
+    if (tx < 0 || ty < 0 || tx >= WORLD_W || ty >= WORLD_H) return false;
+    const t = w.tiles.grid[ty * WORLD_W + tx];
+    return t !== TILE.water && t !== TILE.rock && t !== TILE.mountain;
   }
 
   // ── action router ──
@@ -967,6 +1044,7 @@ export class HarvestServer {
         case 'buy_seed': this.actBuy(w, player, { item: msg.item, qty: msg.qty || 1 }); break;
         case 'fert': this.actFertilize(w, player, msg); break;
         case 'festival_collect': this.actFestivalCollect(w, player, msg); break;
+        case 'drop': this.actDrop(w, player, msg); break;
         default: break;
       }
     } catch (err) {
@@ -1667,36 +1745,117 @@ export class HarvestServer {
     let price = item.value * 0.6 * (1 - supply * 0.004);
     return Math.max(1, Math.round(price));
   }
+  /**
+   * Idempotency guard for gold-moving actions. The client attaches a unique
+   * actionId; replays (double click, retry after reconnect) are answered with the
+   * cached result instead of executing twice.
+   */
+  claimAction(p, actionId) {
+    if (!actionId) return { fresh: true, replay: null };
+    if (!p._actionLog) p._actionLog = new Map();
+    if (p._actionLog.has(actionId)) return { fresh: false, replay: p._actionLog.get(actionId) };
+    p._actionLog.set(actionId, { pending: true });
+    // Bound the log so it cannot grow without limit.
+    if (p._actionLog.size > 200) {
+      const oldest = p._actionLog.keys().next().value;
+      p._actionLog.delete(oldest);
+    }
+    return { fresh: true, replay: null };
+  }
+  finishAction(p, actionId, result) {
+    if (actionId && p._actionLog) p._actionLog.set(actionId, result);
+  }
+
   actBuy(w, p, msg) {
+    const actionId = typeof msg.actionId === 'string' ? msg.actionId.slice(0, 64) : '';
+    const claim = this.claimAction(p, actionId);
+    if (!claim.fresh) {
+      // Duplicate request — re-send the original outcome, change nothing.
+      this.sendTo(p.id, w, { t: 'event', e: { type: 'gold', gold: p.gold } });
+      this.sendTo(p.id, w, { t: 'event', e: { type: 'inv', inv: p.inv } });
+      return;
+    }
+
     const itemId = String(msg.item || '');
     const qty = clamp(parseInt(msg.qty) || 1, 1, 99);
     const item = ITEMS[itemId];
-    if (!item || item.cat === 'tool') return;
-    if (item.cat === 'meal' || item.cat === 'furniture') return; // only via specific
-    const price = this.priceOf(w, itemId) * qty;
-    if (p.gold < price) { this.notify(w, p, 'Gold tidak cukup!', 'warn'); return; }
-    const space = this.freeSpace(p);
-    if (space < qty) { this.notify(w, p, 'Inventory penuh!', 'warn'); return; }
+    const fail = (reason) => {
+      this.finishAction(p, actionId, { ok: false, reason });
+      this.notify(w, p, reason, 'warn');
+    };
+
+    if (!item || item.cat === 'tool') return this.finishAction(p, actionId, { ok: false });
+    if (item.cat === 'meal' || item.cat === 'furniture') return this.finishAction(p, actionId, { ok: false });
+
+    // Price is ALWAYS computed server-side; msg.price (if any) is ignored.
+    const unit = this.priceOf(w, itemId);
+    const price = unit * qty;
+    if (!Number.isFinite(price) || price < 0) return this.finishAction(p, actionId, { ok: false });
+    if (p.gold < price) return fail('Tidak cukup uang.');
+    if (this.freeSpace(p) < qty) return fail('Inventory penuh!');
+
+    // Atomic: deduct, then add. If the add somehow falls short, refund exactly.
     p.gold -= price;
-    this.addItem(w, p, itemId, qty);
-    w.economy.bought[itemId] = (w.economy.bought[itemId] || 0) + qty;
-    w.economy.priceBoost[itemId] = Math.min(1.5, (w.economy.priceBoost[itemId] || 0) + qty * 0.01);
+    const added = this.addItem(w, p, itemId, qty);
+    if (added < qty) {
+      p.gold += unit * (qty - added);
+      if (added === 0) {
+        this.sendTo(p.id, w, { t: 'event', e: { type: 'gold', gold: p.gold } });
+        return fail('Inventory penuh!');
+      }
+    }
+    if (p.gold < 0) p.gold = 0; // defensive: gold can never go negative
+
+    w.economy.bought[itemId] = (w.economy.bought[itemId] || 0) + added;
+    w.economy.priceBoost[itemId] = Math.min(1.5, (w.economy.priceBoost[itemId] || 0) + added * 0.01);
+    this.finishAction(p, actionId, { ok: true, item: itemId, qty: added, gold: p.gold });
     this.sendTo(p.id, w, { t: 'event', e: { type: 'gold', gold: p.gold } });
-    this.sendTo(p.id, w, { t: 'event', e: { type: 'shop_sold', item: itemId, qty, price } });
+    this.sendTo(p.id, w, { t: 'event', e: { type: 'shop_sold', item: itemId, qty: added, price: unit * added } });
   }
+
   actSell(w, p, msg) {
+    const actionId = typeof msg.actionId === 'string' ? msg.actionId.slice(0, 64) : '';
+    const claim = this.claimAction(p, actionId);
+    if (!claim.fresh) {
+      this.sendTo(p.id, w, { t: 'event', e: { type: 'gold', gold: p.gold } });
+      this.sendTo(p.id, w, { t: 'event', e: { type: 'inv', inv: p.inv } });
+      return;
+    }
+
     const itemId = String(msg.item || '');
     const qty = clamp(parseInt(msg.qty) || 1, 1, 99);
     const item = ITEMS[itemId];
-    if (!item || item.cat === 'tool') return;
-    if (item.cat === 'furniture') return;
-    if (!this.removeItem(w, p, itemId, qty)) { this.notify(w, p, 'Item tidak ada.', 'warn'); return; }
-    const price = this.sellPriceOf(w, itemId) * qty;
-    p.gold += price;
+    if (!item || item.cat === 'tool' || item.cat === 'furniture') return this.finishAction(p, actionId, { ok: false });
+
+    // Ownership check happens inside removeItem — atomically, before gold moves.
+    if (!this.removeItem(w, p, itemId, qty)) {
+      this.finishAction(p, actionId, { ok: false });
+      this.notify(w, p, 'Item tidak ada.', 'warn');
+      return;
+    }
+    const unit = this.sellPriceOf(w, itemId);
+    p.gold += unit * qty;
     w.economy.sold[itemId] = (w.economy.sold[itemId] || 0) + qty;
+    this.finishAction(p, actionId, { ok: true, item: itemId, qty, gold: p.gold });
     this.sendTo(p.id, w, { t: 'event', e: { type: 'gold', gold: p.gold } });
-    this.sendTo(p.id, w, { t: 'event', e: { type: 'shop_sold', item: itemId, qty, price: -price } });
+    this.sendTo(p.id, w, { t: 'event', e: { type: 'shop_sold', item: itemId, qty, price: -(unit * qty) } });
   }
+  /** Discard items. Tools are protected so a player cannot brick their save. */
+  actDrop(w, p, msg) {
+    const actionId = typeof msg.actionId === 'string' ? msg.actionId.slice(0, 64) : '';
+    const claim = this.claimAction(p, actionId);
+    if (!claim.fresh) { this.sendTo(p.id, w, { t: 'event', e: { type: 'inv', inv: p.inv } }); return; }
+    const itemId = String(msg.item || '');
+    const item = ITEMS[itemId];
+    if (!item || item.cat === 'tool') { this.finishAction(p, actionId, { ok: false }); return; }
+    const have = this.countItem(p, itemId);
+    const qty = clamp(parseInt(msg.qty) || 1, 1, Math.max(1, have));
+    if (have < qty) { this.finishAction(p, actionId, { ok: false }); return; }
+    this.removeItem(w, p, itemId, qty);
+    this.finishAction(p, actionId, { ok: true, item: itemId, qty });
+    this.notify(w, p, `${item.name} x${qty} dibuang.`, 'info');
+  }
+
   freeSpace(p) {
     let space = 0;
     for (const i of p.inv) space += 99 - i.qty;
@@ -1986,15 +2145,98 @@ export class HarvestServer {
   }
 
   // ── chat/emote ──
-  onChat(client, msg) {
-    const text = safeName(msg.text, 200);
-    if (!text) return;
+  /**
+   * Strip control characters and collapse whitespace. We never trust client text,
+   * and we never echo raw markup back to other clients.
+   */
+  sanitizeChat(raw) {
+    if (typeof raw !== 'string') return '';
+    return raw
+      .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')   // control chars
+      .replace(/[<>]/g, '')                              // no markup injection
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, CHAT_MAX_LEN);
+  }
+
+  /**
+   * Token-bucket anti-spam. Returns false when the player must slow down.
+   * Identity comes from the authenticated session (client.player), never the
+   * client payload.
+   */
+  chatAllowed(player) {
     const now = nowMs();
-    client.player._lastChat = client.player._lastChat || 0;
-    if (now - client.player._lastChat < 350) return;
-    client.player._lastChat = now;
+    if (!player._chatBucket) player._chatBucket = { tokens: CHAT_BURST, at: now };
+    const b = player._chatBucket;
+    b.tokens = Math.min(CHAT_BURST, b.tokens + ((now - b.at) / 1000) * CHAT_REFILL_PER_SEC);
+    b.at = now;
+    if (b.tokens < 1) return false;
+    b.tokens -= 1;
+    return true;
+  }
+
+  onChat(client, msg) {
+    const player = client.player;
+    if (!player.char) return;
+    const text = this.sanitizeChat(msg.text);
+    if (!text) return;
+    if (!this.chatAllowed(player)) {
+      client.peer.send({ t: 'event', e: { type: 'chat_error', msg: 'Terlalu cepat mengirim pesan. Tunggu sebentar.' } });
+      return;
+    }
+
+    const now = nowMs();
+    const targetId = typeof msg.to === 'string' ? msg.to.slice(0, 64) : '';
+    const channel = msg.channel === 'private' || targetId ? 'private' : 'public';
+
+    if (channel === 'private') {
+      // ── PRIVATE: delivered only to sender + target sockets. Never broadcast. ──
+      if (!targetId || targetId === player.id) {
+        client.peer.send({ t: 'event', e: { type: 'chat_error', msg: 'Target pesan tidak valid.' } });
+        return;
+      }
+      const targets = [];
+      for (const c of this.clients.values()) {
+        if (c.roomCode === client.roomCode && c.player.id === targetId) targets.push(c);
+      }
+      const known = this.playersOf(this.getWorld(client.roomCode))[targetId];
+      if (!known) {
+        client.peer.send({ t: 'event', e: { type: 'chat_error', msg: 'Pemain tidak ditemukan di world ini.' } });
+        return;
+      }
+      const line = {
+        type: 'chat',
+        id: `${now}-${player.id}-${player._chatSeq = (player._chatSeq || 0) + 1}`,
+        channel: 'private',
+        playerId: player.id,
+        targetPlayerId: targetId,
+        name: player.username,
+        targetName: known.username,
+        text,
+        ts: now,
+      };
+      // Echo to sender (their own transcript) …
+      client.peer.send({ t: 'event', e: line });
+      // … and to every socket owned by the target, if any are online.
+      for (const c of targets) c.peer.send({ t: 'event', e: line });
+      if (targets.length === 0) {
+        client.peer.send({ t: 'event', e: { type: 'chat_error', msg: `${known.username} sedang offline — pesan tidak terkirim.` } });
+      }
+      return;
+    }
+
+    // ── PUBLIC: everyone in the room. ──
     this.broadcast(client.roomCode, {
-      t: 'event', e: { type: 'chat', playerId: client.player.id, name: client.player.username, text, ts: now },
+      t: 'event',
+      e: {
+        type: 'chat',
+        id: `${now}-${player.id}-${player._chatSeq = (player._chatSeq || 0) + 1}`,
+        channel: 'public',
+        playerId: player.id,
+        name: player.username,
+        text,
+        ts: now,
+      },
     });
   }
   onEmote(client, msg) {
@@ -2024,23 +2266,32 @@ export class HarvestServer {
     for (const w of this.worlds.values()) {
       this.worldTick(w);
     }
-    // send player snapshots once per tick (10Hz)
+    // send player snapshots once per tick (10Hz); each client also gets the
+    // sequence number of the last input we accepted from it, for reconciliation.
     const snapshot = this.buildSnapshots();
     for (const c of this.clients.values()) {
       const data = snapshot.get(c.roomCode);
-      if (data) c.peer.send(data);
+      if (!data) continue;
+      c.peer.send({ ...data, ack: c.player._ackSeq || 0, mx: +c.player.x.toFixed(2), my: +c.player.y.toFixed(2) });
     }
     void t0;
   }
+  /**
+   * High-frequency snapshot: positions/anim only. Inventory, gold, crops, quests
+   * and the rest are low-frequency and travel as targeted events instead, so we
+   * never broadcast the full world state per tick.
+   */
   buildSnapshots() {
     const map = new Map();
     for (const w of this.worlds.values()) {
       const others = [];
+      const names = [];
       for (const c of this.clients.values()) {
         if (c.roomCode !== w.roomCode) continue;
         const p = c.player;
         if (!p.char) continue;
         others.push([p.id, +p.x.toFixed(2), +p.y.toFixed(2), p.dir, p.anim, p.sprint ? 1 : 0, c.peer.alive ? 1 : 0]);
+        names.push([p.id, p.username]);
       }
       const npcs = [];
       for (const n of NPCS) {
@@ -2050,7 +2301,8 @@ export class HarvestServer {
       map.set(w.roomCode, {
         t: 'snap',
         time: Math.floor(w.time), day: w.day, season: w.season, weather: w.weather,
-        players: others, npcs,
+        players: others, npcs, names,
+        st: nowMs(),
       });
     }
     return map;
@@ -2294,6 +2546,24 @@ export class HarvestServer {
   sendWelcome(client, w) {
     this.sendSnapshot(client.peer, client, w);
   }
+}
+
+/**
+ * Persist only durable player state. Transient runtime fields (prefixed with `_`
+ * — rate-limit buckets, ack sequences, the idempotency Map) must never hit disk:
+ * a Map JSON-serializes to `{}` and would silently corrupt the save.
+ */
+function serializePlayers(players) {
+  const out = {};
+  for (const [id, p] of Object.entries(players)) {
+    const clean = {};
+    for (const [k, v] of Object.entries(p)) {
+      if (k.startsWith('_')) continue;
+      clean[k] = v;
+    }
+    out[id] = clean;
+  }
+  return out;
 }
 
 function mmap() { return Object.create(null); }

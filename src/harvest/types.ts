@@ -214,6 +214,15 @@ export interface SnapMsg {
   weather: string;
   players: [string, number, number, number, string, number, number][];
   npcs: [string, number, number, string, string][];
+  /** id → display name, so the map/chat can label remote players. */
+  names?: [string, string][];
+  /** server timestamp (ms) */
+  st?: number;
+  /** last input sequence the server accepted from THIS client */
+  ack?: number;
+  /** authoritative position of THIS client */
+  mx?: number;
+  my?: number;
 }
 
 export interface EventMsg {
@@ -234,9 +243,9 @@ export type ServerMsg = SnapshotMsg | SnapMsg | EventMsg | HelloAck | ErrMsg | {
 export type ClientMsg =
   | { t: 'hello'; room: string; userId: string; username: string }
   | { t: 'create'; char: CharDef; farmName: string }
-  | { t: 'move'; x: number; y: number; dir: number; anim: string; sprint: boolean }
-  | { t: 'action'; a: string; [k: string]: unknown }
-  | { t: 'chat'; text: string }
+  | { t: 'move'; x: number; y: number; dir: number; anim: string; sprint: boolean; seq: number }
+  | { t: 'action'; a: string; actionId?: string; [k: string]: unknown }
+  | { t: 'chat'; text: string; channel?: ChatChannel; to?: string }
   | { t: 'emote'; emote: string }
   | { t: 'ping'; ts: number }
   | { t: 'req_state' };
@@ -251,7 +260,29 @@ export interface InteractionHint {
 
 export interface UiToast { id: number; kind: 'info' | 'success' | 'warn' | 'quest' | 'heart' | 'fish' | 'craft' | 'festival' | 'world' | 'animal' | 'sleep'; msg: string; }
 
-export interface ChatLine { id: number; playerId: string; name: string; text: string; ts: number; }
+export type ChatChannel = 'public' | 'private';
+
+export interface ChatLine {
+  id: string;
+  channel: ChatChannel;
+  playerId: string;
+  name: string;
+  text: string;
+  ts: number;
+  /** private only */
+  targetPlayerId?: string;
+  targetName?: string;
+  /** local echo not yet confirmed by the server */
+  pending?: boolean;
+}
+
+/** A private conversation with one other player. */
+export interface Conversation {
+  peerId: string;
+  peerName: string;
+  unread: number;
+  lastTs: number;
+}
 
 export interface DialogueState {
   npcId: string;
@@ -263,7 +294,7 @@ export interface DialogueState {
 }
 
 export type MenuId =
-  | 'inventory' | 'map' | 'quests' | 'journal' | 'relationships' | 'skills'
+  | 'inventory' | 'map' | 'players' | 'quests' | 'journal' | 'relationships' | 'skills'
   | 'crafting' | 'cooking' | 'settings' | 'house' | 'shop' | 'rancher' | 'upgrade'
   | 'community' | 'museum' | 'festival' | 'mine' | 'help' | null;
 

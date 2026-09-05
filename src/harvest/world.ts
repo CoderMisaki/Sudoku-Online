@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { TILE, InteractionHint, Defs, WorldState, PlayerState } from './types';
 import { buildCharacter, buildAnimal, CharRig, AnimalRig } from './charModel';
 import { buildGroundTexture } from './sprites';
+import { inputManager } from './input';
 
 const WORLD_Y = 0;
 
@@ -10,7 +11,7 @@ export interface EngineOpts {
   userId: string;
   quality: 'high' | 'low';
   onAction(a: string, payload: Record<string, unknown>): void;
-  onMove(x: number, y: number, dir: number, anim: string, sprint: boolean): void;
+  onMove(x: number, y: number, dir: number, anim: string, sprint: boolean, seq: number): void;
   onHint(h: InteractionHint): void;
   onSfx(name: string): void;
   onZoneChange(zone: string): void;
@@ -26,8 +27,34 @@ interface CropSprite {
 
 interface TreeSprite { group: THREE.Group; canopy: THREE.Mesh; left: number; }
 
+/** One received position sample for a remote player. */
+interface RemoteSample { t: number; x: number; z: number; dir: number; }
+
+interface RemotePlayer {
+  rig: CharRig;
+  target: THREE.Vector3;
+  anim: string;
+  sprint: boolean;
+  visible: boolean;
+  /** Ring of recent samples, oldest first, used for interpolation. */
+  buffer: RemoteSample[];
+  dir: number;
+  lastSeen: number;
+}
+
 const WALK_SPEED = 4.4;
 const SPRINT_SPEED = 7.2;
+
+/** Recursively free GPU resources for a subtree — prevents WebGL memory leaks. */
+export function disposeObject(root: THREE.Object3D) {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (mesh.geometry) mesh.geometry.dispose();
+    const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
+    if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+    else if (mat) mat.dispose();
+  });
+}
 
 function hashColor(seedStr: string): number {
   let h = 2166136261;
@@ -69,10 +96,16 @@ export class WorldEngine {
   private myDir = 2; // 0 up,1 right,2 down,3 left
   private myAnim = 'idle';
   private mySprint = false;
-  private remote = new Map<string, { rig: CharRig; target: THREE.Vector3; anim: string; sprint: boolean; visible: boolean }>();
+  private remote = new Map<string, RemotePlayer>();
+  /** Render remote players this far behind server time so we always interpolate
+   *  between two known samples instead of extrapolating. */
+  private readonly INTERP_DELAY_MS = 120;
   private npcRigs = new Map<string, { rig: CharRig; target: THREE.Vector3; anim: string }>();
   private animalRigs = new Map<string, AnimalRig>();
   private entityRoot = new THREE.Group();
+
+  /** Scratch vectors reused across frames (zero per-frame allocations). */
+  private _tmpVec = new THREE.Vector3();
 
   // camera
   private camTarget = new THREE.Vector3();
@@ -90,10 +123,14 @@ export class WorldEngine {
   private snowOn = false;
   private flashT = 0;
 
-  // input
-  private keys = new Set<string>();
-  private moveVec = new THREE.Vector2(0, 0);
+  // input — read from the shared InputManager frame (no React state per frame)
   private panActive = false;
+  /** Client-side prediction bookkeeping. */
+  private inputSeq = 0;
+  private pendingInputs: { seq: number; dx: number; dz: number }[] = [];
+  private lastServerSeq = 0;
+  /** Paused while portrait / tab hidden: we skip render+sim but keep the socket. */
+  private paused = false;
 
   // state
   private defs: Defs | null = null;
@@ -102,6 +139,7 @@ export class WorldEngine {
   private hintCurrent: InteractionHint = { kind: null, label: '', x: 0, y: 0 };
   private lastSentMove = 0;
   private lastSentPos = { x: -999, y: -999 };
+  private lastSentAnim = '';
   private selectedItem: string | null = null;
   private inMine = false;
   private mine: { S: number; grid: number[]; ores: Record<string, string>; depth: number } | null = null;
@@ -153,8 +191,6 @@ export class WorldEngine {
     this.initRain();
     this.initSnow();
 
-    window.addEventListener('keydown', this.onKeyDown);
-    window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('resize', this.onResize);
     this.renderer.domElement.addEventListener('wheel', this.onWheel, { passive: false });
     this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown);
@@ -169,15 +205,23 @@ export class WorldEngine {
   dispose() {
     this.disposed = true;
     cancelAnimationFrame(this.rafId);
-    window.removeEventListener('keydown', this.onKeyDown);
-    window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('resize', this.onResize);
     this.renderer.domElement.removeEventListener('wheel', this.onWheel);
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove);
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerEnd);
     this.renderer.domElement.removeEventListener('pointercancel', this.onPointerEnd);
+    for (const r of this.remote.values()) { this.entityRoot.remove(r.rig.group); disposeObject(r.rig.group); }
+    this.remote.clear();
+    for (const r of this.npcRigs.values()) { this.entityRoot.remove(r.rig.group); disposeObject(r.rig.group); }
+    this.npcRigs.clear();
+    for (const r of this.animalRigs.values()) { this.entityRoot.remove(r.group); disposeObject(r.group); }
+    this.animalRigs.clear();
+    if (this.myRig) { this.entityRoot.remove(this.myRig.group); disposeObject(this.myRig.group); this.myRig = null; }
+    disposeObject(this.scene);
+    this.waterTex?.dispose();
     this.renderer.dispose();
+    this.renderer.forceContextLoss();
     if (this.renderer.domElement.parentElement === this.container) {
       this.container.removeChild(this.renderer.domElement);
     }
@@ -521,12 +565,23 @@ export class WorldEngine {
         const rig = buildCharacter(p.char, { name: p.username, nameColor: '#a9c8ff' });
         rig.group.position.set(p.x + 0.5, 0, p.y + 0.5);
         this.entityRoot.add(rig.group);
-        this.remote.set(p.id, { rig, target: new THREE.Vector3(p.x + 0.5, 0, p.y + 0.5), anim: p.anim || 'idle', sprint: !!p.sprint, visible: true });
+        const now = performance.now();
+        this.remote.set(p.id, {
+          rig,
+          target: new THREE.Vector3(p.x + 0.5, 0, p.y + 0.5),
+          anim: p.anim || 'idle',
+          sprint: !!p.sprint,
+          visible: true,
+          buffer: [{ t: now, x: p.x + 0.5, z: p.y + 0.5, dir: p.dir || 2 }],
+          dir: p.dir || 2,
+          lastSeen: now,
+        });
       }
     }
     for (const [id, r] of this.remote) {
       if (!seen.has(id)) {
         this.entityRoot.remove(r.rig.group);
+        disposeObject(r.rig.group);
         this.remote.delete(id);
       }
     }
@@ -534,22 +589,44 @@ export class WorldEngine {
     this.syncPlayerAnimals(players);
   }
   syncSnapshotPositions(list: [string, number, number, number, string, number, number][]) {
+    const now = performance.now();
     for (const [id, x, y, dir, anim, sprint] of list) {
       if (id === this.opts.userId) continue;
       const r = this.remote.get(String(id));
       if (!r) continue;
-      r.target.set(x + 0.5, 0, y + 0.5);
+      const wx = x + 0.5, wz = y + 0.5;
+      r.target.set(wx, 0, wz);
       r.anim = anim;
       r.sprint = sprint === 1;
-      r.rig.group.rotation.y = this.dirToRotation(dir);
+      r.dir = dir;
+      r.lastSeen = now;
+      const last = r.buffer[r.buffer.length - 1];
+      // Ignore duplicate samples so the interpolator does not stall.
+      if (!last || last.x !== wx || last.z !== wz || last.dir !== dir) {
+        r.buffer.push({ t: now, x: wx, z: wz, dir });
+      } else {
+        last.t = now;
+      }
+      // Keep ~1s of history; bounded so the buffer can never leak.
+      while (r.buffer.length > 20) r.buffer.shift();
     }
   }
-  getRemotePositions(): { id: string; x: number; y: number }[] {
-    const out: { id: string; x: number; y: number }[] = [];
+  /**
+   * Live, interpolated world positions of remote players — the same coordinates
+   * the 3D scene renders, so the map can never desync from the world.
+   * Returns fractional tiles for smooth marker motion.
+   */
+  getRemotePositions(): { id: string; x: number; y: number; dir: number }[] {
+    const out: { id: string; x: number; y: number; dir: number }[] = [];
     for (const [id, r] of this.remote) {
-      out.push({ id, x: Math.round(r.target.x - 0.5), y: Math.round(r.target.z - 0.5) });
+      const p = r.rig.group.position;
+      out.push({ id, x: p.x - 0.5, y: p.z - 0.5, dir: r.dir });
     }
     return out;
+  }
+  /** Fractional own position (map marker uses this for smooth movement). */
+  getMyPosition(): { x: number; y: number; dir: number } {
+    return { x: this.myPos.x - 0.5, y: this.myPos.z - 0.5, dir: this.myDir };
   }
   syncNpcPositions(list: [string, number, number, string, string][]) {
     for (const [id, x, y, anim] of list) {
@@ -582,7 +659,7 @@ export class WorldEngine {
         }
         const ox = owner.x + Math.cos(i * 2.4) * 1.6;
         const oz = owner.z + Math.sin(i * 2.4) * 1.6;
-        r.group.position.lerp(new THREE.Vector3(ox, 0, oz), 0.3);
+        r.group.position.lerp(this._tmpVec.set(ox, 0, oz), 0.3);
         r.setAnim(an.hunger > 80 ? 'eat' : an.type === 'chicken' ? 'walk' : 'idle', performance.now() / 1000);
       });
     }
@@ -772,34 +849,33 @@ export class WorldEngine {
   }
 
   // ── input ──
-  private onKeyDown = (ev: KeyboardEvent) => {
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(ev.key)) ev.preventDefault();
-    this.keys.add(ev.key.toLowerCase());
-  };
-  private onKeyUp = (ev: KeyboardEvent) => {
-    this.keys.delete(ev.key.toLowerCase());
-  };
+  /** Legacy entry point kept for compatibility: feeds the shared InputManager. */
   setMoveVector(x: number, y: number) {
-    this.moveVec.set(x, y);
+    inputManager.setJoystick(x, y);
   }
+  /** Pause simulation + rendering without tearing anything down (portrait / hidden tab). */
+  setPaused(v: boolean) {
+    if (this.paused === v) return;
+    this.paused = v;
+    if (!v) {
+      // Drop the delta accumulated while paused so we do not teleport on resume.
+      this.clock.getDelta();
+    }
+  }
+  isPaused() { return this.paused; }
   /** Screen-space input (ix right, iy up) → world x/z vector for the 45° camera. */
+  private _worldVec = new THREE.Vector2(0, 0);
   private screenToWorld(ix: number, iy: number): THREE.Vector2 {
-    return new THREE.Vector2((ix - iy) * 0.7071, (-ix - iy) * 0.7071);
+    return this._worldVec.set((ix - iy) * 0.7071, (-ix - iy) * 0.7071);
   }
-  private keyboardVec(): THREE.Vector2 {
-    const v = new THREE.Vector2(0, 0);
-    if (this.keys.has('w') || this.keys.has('arrowup')) v.y += 1;
-    if (this.keys.has('s') || this.keys.has('arrowdown')) v.y -= 1;
-    if (this.keys.has('a') || this.keys.has('arrowleft')) v.x -= 1;
-    if (this.keys.has('d') || this.keys.has('arrowright')) v.x += 1;
-    if (v.lengthSq() > 1) v.normalize();
-    return v;
+  /** Scratch vector — reused every frame to avoid per-frame allocations. */
+  private _inputVec = new THREE.Vector2(0, 0);
+  private inputVec(): THREE.Vector2 {
+    const f = inputManager.frame;
+    return this._inputVec.set(f.x, f.y);
   }
-  private sprintTouch = false;
-  setSprintTouch(v: boolean) { this.sprintTouch = v; }
-  isSprinting(): boolean {
-    return this.keys.has('shift') || this.keys.has('shiftleft') || this.sprintTouch;
-  }
+  setSprintTouch(v: boolean) { inputManager.setTouchSprint(v); }
+  isSprinting(): boolean { return inputManager.frame.sprint; }
 
   // ── interactions ──
   private computeHint() {
@@ -948,6 +1024,11 @@ export class WorldEngine {
   private loop = () => {
     if (this.disposed) return;
     this.rafId = requestAnimationFrame(this.loop);
+    if (this.paused) {
+      // Keep the clock from accumulating a huge delta while paused.
+      this.clock.getDelta();
+      return;
+    }
     const dt = Math.min(this.clock.getDelta(), 0.05);
     const t = this.clock.elapsedTime;
 
@@ -981,21 +1062,30 @@ export class WorldEngine {
 
   private updateMovement(dt: number, t: number) {
     if (!this.myRig) { this.updateCamera(dt); return; }
-    const kv = this.keyboardVec();
-    const raw = this.moveVec.lengthSq() > 0.01 ? this.moveVec : kv;
+    const frame = inputManager.frame;
+    const raw = this.inputVec();
+    const magnitude = Math.min(1, frame.magnitude || raw.length());
     const v = this.screenToWorld(raw.x, raw.y);
     const sprinting = this.isSprinting();
     const inMine = this.inMine && this.mine;
-    const speed = (sprinting ? SPRINT_SPEED : WALK_SPEED) * (inMine ? 0.8 : 1);
-    if (v.lengthSq() > 0.01) {
-      const dir = v.clone().normalize();
-      const nx = this.myPos.x + dir.x * speed * dt;
-      const nz = this.myPos.z + dir.y * speed * dt;
-      this.tryMoveTo(nx, nz);
-      // dir from velocity (0 up,1 right,2 down,3 left)
+    // Analog magnitude scales speed so a half-tilted stick walks slowly.
+    const baseSpeed = (sprinting ? SPRINT_SPEED : WALK_SPEED) * (inMine ? 0.8 : 1);
+    const speed = baseSpeed * (magnitude > 0 ? Math.max(0.35, magnitude) : 0);
+    if (v.lengthSq() > 0.0001 && speed > 0) {
+      const dir = v.normalize();
+      const dx = dir.x * speed * dt;
+      const dz = dir.y * speed * dt;
+      const beforeX = this.myPos.x, beforeZ = this.myPos.z;
+      // Local prediction: apply immediately, remember it for reconciliation.
+      this.tryMoveTo(beforeX + dx, beforeZ + dz);
+      if (!this.inMine) {
+        this.inputSeq += 1;
+        this.pendingInputs.push({ seq: this.inputSeq, dx: this.myPos.x - beforeX, dz: this.myPos.z - beforeZ });
+        if (this.pendingInputs.length > 180) this.pendingInputs.shift();
+      }
       if (Math.abs(dir.x) > Math.abs(dir.y)) this.myDir = dir.x > 0 ? 1 : 3;
       else this.myDir = dir.y > 0 ? 2 : 0;
-      this.myAnim = sprinting ? 'run' : 'walk';
+      this.myAnim = sprinting && magnitude > 0.75 ? 'run' : 'walk';
     } else {
       this.myAnim = 'idle';
     }
@@ -1007,19 +1097,50 @@ export class WorldEngine {
       this.myRig.group.rotation.y = this.dirToRotation(this.myDir);
       this.myRig.setAnim(this.myAnim, t, sprinting);
     }
-    // throttle network move (20 Hz)
+    // Throttled network send (20 Hz) — inputs only, never React state.
+    // Sub-tile precision keeps remote interpolation smooth; the server still
+    // validates every step, so this stays authoritative.
     const now = performance.now();
-    const tx = Math.round(this.myPos.x * 10) / 10;
-    const tz = Math.round(this.myPos.z * 10) / 10;
-    if (now - this.lastSentMove > 50 && (Math.abs(tx - this.lastSentPos.x) > 0.01 || Math.abs(tz - this.lastSentPos.y) > 0.01)) {
+    const tx = Math.round((this.myPos.x - 0.5) * 100) / 100;
+    const tz = Math.round((this.myPos.z - 0.5) * 100) / 100;
+    const moved = Math.abs(tx - this.lastSentPos.x) > 0.005 || Math.abs(tz - this.lastSentPos.y) > 0.005;
+    const idleFlush = this.myAnim === 'idle' && (this.lastSentAnim !== 'idle');
+    if (now - this.lastSentMove > 50 && (moved || idleFlush)) {
       this.lastSentMove = now;
       this.lastSentPos = { x: tx, y: tz };
-      const mx = Math.round(this.myPos.x - 0.5);
-      const my = Math.round(this.myPos.z - 0.5);
-      this.opts.onMove(mx, my, this.myDir, this.myAnim, sprinting);
+      this.lastSentAnim = this.myAnim;
+      this.opts.onMove(tx, tz, this.myDir, this.myAnim, sprinting, this.inputSeq);
       if (this.myAnim !== 'idle' && (now % 260) < 60) this.opts.onSfx('step');
     }
   }
+
+  /**
+   * Server reconciliation. The server sends back the authoritative position plus
+   * the last input sequence it processed. We drop acknowledged predictions and,
+   * if the server disagrees beyond a tolerance, we snap/ease toward truth.
+   */
+  reconcile(x: number, y: number, ackSeq: number) {
+    if (this.inMine) return;
+    if (ackSeq > 0) {
+      this.lastServerSeq = ackSeq;
+      this.pendingInputs = this.pendingInputs.filter((p) => p.seq > ackSeq);
+    }
+    // Re-apply the unacknowledged inputs on top of the authoritative position.
+    let px = x + 0.5;
+    let pz = y + 0.5;
+    for (const p of this.pendingInputs) { px += p.dx; pz += p.dz; }
+    const err = Math.hypot(px - this.myPos.x, pz - this.myPos.z);
+    if (err > 6) {
+      // Way off (teleport / respawn / rejected movement) → hard snap.
+      this.myPos.set(px, WORLD_Y, pz);
+      this.pendingInputs.length = 0;
+    } else if (err > 0.08) {
+      // Small drift → ease so the correction is invisible.
+      this.myPos.x += (px - this.myPos.x) * 0.18;
+      this.myPos.z += (pz - this.myPos.z) * 0.18;
+    }
+  }
+  getLastServerSeq() { return this.lastServerSeq; }
 
   private walkable(x: number, y: number): boolean {
     if (this.inMine && this.mine) {
@@ -1045,13 +1166,14 @@ export class WorldEngine {
     }
   }
 
+  private _camDesired = new THREE.Vector3();
   private updateCamera(dt: number) {
     const inMine = this.inMine && this.mine;
     const target = inMine
-      ? new THREE.Vector3(this.mineOffset.x + this.myPos.x, 0, this.mineOffset.z + this.myPos.z)
-      : new THREE.Vector3(this.myPos.x, 0, this.myPos.z);
+      ? this._tmpVec.set(this.mineOffset.x + this.myPos.x, 0, this.mineOffset.z + this.myPos.z)
+      : this._tmpVec.set(this.myPos.x, 0, this.myPos.z);
     this.camTarget.lerp(target, Math.min(1, dt * 6));
-    const desired = new THREE.Vector3(this.camTarget.x + 16, 30, this.camTarget.z + 16);
+    const desired = this._camDesired.set(this.camTarget.x + 16, 30, this.camTarget.z + 16);
     const cur = this.camera.position;
     cur.lerp(desired, Math.min(1, dt * 5));
     this.camZoom += (this.camZoomTarget - this.camZoom) * Math.min(1, dt * 4);
@@ -1073,8 +1195,43 @@ export class WorldEngine {
   }
 
   private updateRemote(dt: number, t: number) {
+    // Entity interpolation: render at (now - INTERP_DELAY) between the two
+    // surrounding samples. Falls back to bounded extrapolation when a packet is
+    // late, which prevents both stutter and rubber-band teleporting.
+    const renderTime = performance.now() - this.INTERP_DELAY_MS;
     for (const r of this.remote.values()) {
-      r.rig.group.position.lerp(r.target, Math.min(1, dt * 12));
+      const buf = r.buffer;
+      if (buf.length === 0) {
+        r.rig.group.position.lerp(r.target, Math.min(1, dt * 12));
+      } else if (buf.length === 1 || renderTime <= buf[0].t) {
+        const s0 = buf[0];
+        r.rig.group.position.lerp(this._tmpVec.set(s0.x, 0, s0.z), Math.min(1, dt * 12));
+      } else {
+        let i = buf.length - 1;
+        while (i > 0 && buf[i].t > renderTime) i--;
+        const a = buf[i];
+        const b = buf[i + 1];
+        if (b) {
+          const span = b.t - a.t;
+          const alpha = span > 0 ? Math.min(1, Math.max(0, (renderTime - a.t) / span)) : 1;
+          r.rig.group.position.set(a.x + (b.x - a.x) * alpha, 0, a.z + (b.z - a.z) * alpha);
+        } else {
+          // No newer sample: extrapolate at most 250ms along the last velocity.
+          const prev = buf[buf.length - 2] || a;
+          const span = a.t - prev.t;
+          const ahead = Math.min(250, renderTime - a.t);
+          if (span > 0 && ahead > 0) {
+            const vx = (a.x - prev.x) / span;
+            const vz = (a.z - prev.z) / span;
+            r.rig.group.position.lerp(this._tmpVec.set(a.x + vx * ahead, 0, a.z + vz * ahead), Math.min(1, dt * 10));
+          } else {
+            r.rig.group.position.lerp(this._tmpVec.set(a.x, 0, a.z), Math.min(1, dt * 12));
+          }
+        }
+        // Drop samples we have already passed, keeping one behind renderTime.
+        while (buf.length > 2 && buf[1].t < renderTime) buf.shift();
+      }
+      r.rig.group.rotation.y = this.dirToRotation(r.dir);
       r.rig.setAnim(r.anim, t, r.sprint);
     }
     // animals follow owner positions (approx): keep them tied to owners

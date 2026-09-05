@@ -1,13 +1,16 @@
 // Shared UI-facing API types (avoids circular imports between orchestrator & UI).
 import type { WorldEngine } from './world';
-import type { PlayerState, Defs } from './types';
+import type { PlayerState, Defs, ChatChannel } from './types';
 
 export interface UIApi {
   action(a: string, payload?: Record<string, unknown>): void;
+  /** Gold/inventory-moving action carrying a client-generated idempotency key. */
+  transact(a: string, payload?: Record<string, unknown>): void;
   interact(): void;
   move(vx: number, vy: number): void;
   select(itemId: string | null): void;
-  sendChat(text: string): void;
+  /** Public chat, or a private message when `to` is a player id. */
+  sendChat(text: string, channel?: ChatChannel, to?: string): void;
   emote(id: string): void;
   leave(): void;
   getEngine(): WorldEngine | null;
