@@ -120,38 +120,52 @@ export default function Home() {
   };
 
   const handleOpenCreateModal = () => {
-    // Empty name is allowed ("") — no fabricated placeholder identity
     setError('');
     setIsJoinModalOpen(false);
     setIsCreateModalOpen(true);
   };
 
   const handleOpenJoinModal = () => {
-    // Empty name is allowed ("") — no fabricated placeholder identity
     setError('');
     setJoinCode('');
     setIsCreateModalOpen(false);
     setIsJoinModalOpen(true);
   };
 
+  const handleModeChange = (newMode: GameMode) => {
+    setMode(newMode);
+    if (newMode === 'tic_tac_toe') {
+      if (difficulty !== '3x3' && difficulty !== '8x8') {
+        setDifficulty('3x3');
+      }
+      setMaxPlayers(2);
+    } else {
+      if (difficulty === '3x3' || difficulty === '8x8') {
+        setDifficulty('medium');
+      }
+      setMaxPlayers(4);
+    }
+  };
+
   const doCreateRoom = () => {
-    // actual room creation after Admin verification passed
     handleSaveUsername(username);
     clearRoomStateBeforeNavigate();
     const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+    const finalDiff = mode === 'tic_tac_toe' && difficulty !== '3x3' && difficulty !== '8x8' ? '3x3' : difficulty;
+    const finalMaxPlayers = mode === 'tic_tac_toe' ? 2 : maxPlayers;
+
     sessionStorage.setItem(`sudoku_host_room_${roomId}`, '1');
     sessionStorage.setItem(`sudoku_room_config_${roomId}`, JSON.stringify({
       isHost: true,
-      difficulty,
+      difficulty: finalDiff,
       mode,
-      maxPlayers
+      maxPlayers: finalMaxPlayers
     }));
     router.push(`/room/${roomId}`);
   };
 
   const handleCreateRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    // Admin gate: require password verification before creating room
     if (username.trim().toUpperCase() === 'ADMIN' && !isAdminVerified) {
       setAdminPendingAction('create');
       setAdminPassword('');
@@ -216,10 +230,7 @@ export default function Home() {
 
   const handleJoinRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    // Empty name is allowed ("") — no fake fallback name
-
     const cleanCode = joinCode.trim().toUpperCase();
-    // Validasi panjang dan karakter harus 5 digit alfanumerik
     if (cleanCode.length !== 5 || !/^[A-Z0-9]{5}$/.test(cleanCode)) {
       setError('Code not valid');
       return;
@@ -233,7 +244,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col flex-1 items-center justify-center bg-background text-foreground p-6 relative">
-      {/* Top-right: settings + error logs (Admin) di sebelah photo profile — semua dari localStorage */}
+      {/* Top-right: settings + error logs (Admin) */}
       <div className="absolute top-4 right-4 sm:top-6 sm:right-6 z-20 flex items-center gap-1.5 sm:gap-2">
         {isAdminUser && isAdminVerified && <ErrorLogPanel isAdmin={true} />}
         <ProfileWidget />
@@ -245,7 +256,7 @@ export default function Home() {
         <div className="space-y-3">
           <h1 className="text-4xl font-bold tracking-tight">Sudoku Together</h1>
           <p className="text-secondary text-sm">
-            Mainkan Sudoku & Ular Tangga secara multiplayer real-time bersama teman-temanmu.
+            Mainkan Sudoku, Ular Tangga, &amp; Tic Tac Toe secara multiplayer real-time bersama teman-temanmu.
           </p>
         </div>
 
@@ -262,7 +273,6 @@ export default function Home() {
             onChange={(e) => {
               const upper = e.target.value.toUpperCase();
               setUsername(upper);
-              // Simpan langsung supaya refresh tidak balik ke nama lama (bug TES1)
               try {
                 localStorage.setItem('sudoku_username', upper);
                 const uid = getOrCreateUserId();
@@ -307,11 +317,20 @@ export default function Home() {
               onChange={(e) => setDifficulty(e.target.value as Difficulty)}
               className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground cursor-pointer"
             >
-              <option value="easy">Easy (Mudah)</option>
-              <option value="medium">Medium (Sedang)</option>
-              <option value="hard">Hard (Sulit)</option>
-              <option value="expert">Expert (Pakar)</option>
-              <option value="evil">Evil (Ekstrem)</option>
+              {mode === 'tic_tac_toe' ? (
+                <>
+                  <option value="3x3">3x3 (Klasik - 3 Segaris)</option>
+                  <option value="8x8">8x8 (Lanjutan - 5 Segaris)</option>
+                </>
+              ) : (
+                <>
+                  <option value="easy">Easy (Mudah)</option>
+                  <option value="medium">Medium (Sedang)</option>
+                  <option value="hard">Hard (Sulit)</option>
+                  <option value="expert">Expert (Pakar)</option>
+                  <option value="evil">Evil (Ekstrem)</option>
+                </>
+              )}
             </select>
           </div>
 
@@ -319,7 +338,7 @@ export default function Home() {
             <label className="text-sm font-medium block mb-1.5">Mode Permainan</label>
             <select
               value={mode}
-              onChange={(e) => setMode(e.target.value as GameMode)}
+              onChange={(e) => handleModeChange(e.target.value as GameMode)}
               className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground cursor-pointer"
             >
               <option value="collaborative">Collaborative (Kerjasama)</option>
@@ -327,7 +346,8 @@ export default function Home() {
               <option value="classic">Classic (Klasik)</option>
               <option value="race">Race (Balapan Skor)</option>
               <option value="zen">Zen (Santai)</option>
-              <option value="snakes_and_ladders">Snakes & Ladders (Ular Tangga)</option>
+              <option value="snakes_and_ladders">Snakes &amp; Ladders (Ular Tangga)</option>
+              <option value="tic_tac_toe">Tic Tac Toe</option>
             </select>
           </div>
 
@@ -336,14 +356,28 @@ export default function Home() {
             <select
               value={maxPlayers}
               onChange={(e) => setMaxPlayers(Number(e.target.value))}
-              className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground cursor-pointer"
+              disabled={mode === 'tic_tac_toe'}
+              className={`w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground cursor-pointer ${
+                mode === 'tic_tac_toe' ? 'opacity-80 bg-secondary/10' : ''
+              }`}
             >
-              <option value={2}>2 Pemain</option>
-              <option value={3}>3 Pemain</option>
-              <option value={4}>4 Pemain</option>
-              <option value={6}>6 Pemain</option>
-              <option value={8}>8 Pemain</option>
+              {mode === 'tic_tac_toe' ? (
+                <option value={2}>2 Pemain (Maksimal)</option>
+              ) : (
+                <>
+                  <option value={2}>2 Pemain</option>
+                  <option value={3}>3 Pemain</option>
+                  <option value={4}>4 Pemain</option>
+                  <option value={6}>6 Pemain</option>
+                  <option value={8}>8 Pemain</option>
+                </>
+              )}
             </select>
+            {mode === 'tic_tac_toe' && (
+              <p className="text-[11px] text-secondary mt-1">
+                * Tic Tac Toe otomatis bermain lawan Bot jika sendirian di room.
+              </p>
+            )}
           </div>
 
           <div className="pt-4">

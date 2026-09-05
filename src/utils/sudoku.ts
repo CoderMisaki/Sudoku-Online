@@ -4,8 +4,9 @@ import { Difficulty, Grid } from '../types/game';
 // sudoku-gen difficulties: 'easy', 'medium', 'hard', 'expert'
 // we map 'evil' to 'expert' as it's the highest sudoku-gen supports natively
 const mapDifficulty = (diff: Difficulty): 'easy' | 'medium' | 'hard' | 'expert' => {
-  if (diff === 'evil') return 'expert';
-  return diff;
+  if (diff === 'evil' || diff === '3x3' || diff === '8x8') return 'expert';
+  if (diff === 'easy' || diff === 'medium' || diff === 'hard' || diff === 'expert') return diff;
+  return 'medium';
 };
 
 export const generatePuzzle = (difficulty: Difficulty) => {
