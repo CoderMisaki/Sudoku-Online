@@ -4,7 +4,7 @@ import { Grid, RoomState, Player, ChatMessage, SnakesState, TicTacToeState, Arro
 import { checkConflicts } from '../utils/sudoku';
 import { generateInitialSnakesState, areSnakesLayoutsEqual } from '../utils/snakesAndLaddersData';
 import { createInitialTicTacToeState } from '../utils/ticTacToe';
-import { createArrowRound, buildArrowSeed } from '../utils/arrowPuzzle';
+import { createArrowRound, buildArrowSeed, isValidArrowPuzzleState } from '../utils/arrowPuzzle';
 
 // Debug logging off by default. Enable with: localStorage.setItem('sudoku_debug_snakes', '1')
 const isSnakesDebugEnabled = (): boolean => {
@@ -562,6 +562,8 @@ export const useGameStore = create<GameStore>()(
         return { arrowPuzzleState: merged };
       }),
       replaceAllArrowPuzzleState: (incoming) => set((state) => {
+        // Tolak snapshot format lama (maze START/GOAL) dari client/persist lama.
+        if (!isValidArrowPuzzleState(incoming)) return state;
         const current = state.arrowPuzzleState;
         // Tolak snapshot basi dari papan yang SAMA; papan baru selalu diterima.
         if (
@@ -695,6 +697,14 @@ export const useGameStore = create<GameStore>()(
     }),
     {
       name: "sudoku-game-storage",
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<GameStore>;
+        // Papan Arrow format lama (START/GOAL) tidak kompatibel -> buang.
+        if (p.arrowPuzzleState && !isValidArrowPuzzleState(p.arrowPuzzleState)) {
+          p.arrowPuzzleState = undefined;
+        }
+        return { ...current, ...p };
+      },
       partialize: (state) => ({
         room: state.room,
         grid: state.grid,

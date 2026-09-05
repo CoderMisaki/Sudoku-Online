@@ -1,26 +1,31 @@
 import {
   ArrowCoord,
   ArrowDirection,
+  ArrowObject,
   ArrowPuzzleState,
   ArrowPuzzleVariant,
   Difficulty,
 } from '../types/game';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ATURAN MAIN — ARROW PUZZLE MASTER
+// ATURAN MAIN — ARROW PUZZLE MASTER (ARROW REMOVAL PUZZLE)
 // ─────────────────────────────────────────────────────────────────────────────
-// Setiap kotak berisi satu panah (↑ → ↓ ←) atau berupa tembok.
-// Panah pada sebuah kotak menunjuk ke kotak "induk"-nya, jadi sebuah langkah
-// dari kotak A ke kotak tetangga B hanya SAH kalau panah B menunjuk balik ke A.
-// Pemain berangkat dari START dan harus mencapai GOAL. Karena panah dibentuk
-// dari sebuah spanning tree, hanya ada SATU jalur sah START -> GOAL: sisanya
-// adalah cabang buntu yang mengecoh.
+// Papan berisi kumpulan ARROW: jalur tebal berbentuk garis / siku / U / zig-zag
+// yang ujungnya memiliki kepala panah. Pemain mengetuk sebuah arrow:
+//   • Bila seluruh lintasan di depan arrow (sampai tepi papan) bebas dari arrow
+//     lain, arrow meluncur mengikuti arah panahnya, keluar papan, lalu DIHAPUS.
+//   • Bila ada arrow lain yang menghalangi lintasannya, arrow TIDAK bergerak
+//     (blocked) dan pemain terkena penalti.
+// Tujuan: keluarkan SEMUA arrow. Urutan bebas selama tidak terhalang.
 //
-// PENILAIAN (berlaku di mode Classic maupun Competition):
-//   • Tap benar  : +10 poin
-//   • Tap salah  : -5, lalu -10, -20, -40, ... (kelipatan 2x selama salah
-//                  beruntun, dibatasi -80 per tap)
-//   • Tap benar menghapus hitungan salah beruntun kembali ke 0.
+// Arrow bergerak sebagai satu benda kaku: setiap sel yang ditempatinya bergeser
+// bersama ke arah keluar. Karena itu "lintasan" (sweep) = gabungan semua sel di
+// depan setiap sel tubuh arrow hingga tepi papan.
+//
+// PENILAIAN (Classic maupun Competition):
+//   • Arrow keluar   : +10 poin
+//   • Tap terhalang  : -5, lalu -10, -20, -40, ... (kelipatan 2x saat beruntun,
+//                      dibatasi -80 per tap). Tap sukses mereset hitungan.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Indeks arah: 0 = Atas, 1 = Kanan, 2 = Bawah, 3 = Kiri. */
@@ -45,8 +50,21 @@ export const ARROW_FINISH_BONUS_DEFAULT = 10;
 export const ARROW_TEAM_BONUS = 50;
 
 export interface ArrowDifficultyConfig {
+  /** Ukuran papan (sel per sisi). */
   size: number;
-  wallRatio: number;
+  /** Jumlah arrow yang ditargetkan. */
+  arrowCount: number;
+  /** Panjang jalur arrow (jumlah sel) minimum & maksimum. */
+  minLength: number;
+  maxLength: number;
+  /** Peluang jalur berbelok di tiap langkah pembentukan (0..1). */
+  turnChance: number;
+  /** Peluang arrow baru sengaja ditaruh di lintasan arrow lain (menciptakan blocking). */
+  blockBias: number;
+  /** Rasio maksimum arrow yang langsung bebas di awal (0..1). */
+  maxFreeRatio: number;
+  /** Minimal jumlah arrow yang terhalang di awal. */
+  minBlocked: number;
   label: string;
   description: string;
 }
@@ -54,11 +72,31 @@ export interface ArrowDifficultyConfig {
 export type ArrowDifficulty = 'easy' | 'medium' | 'hard' | 'expert' | 'evil';
 
 export const ARROW_DIFFICULTY: Record<ArrowDifficulty, ArrowDifficultyConfig> = {
-  easy: { size: 5, wallRatio: 0.06, label: 'Easy', description: 'Papan 5×5, jalur pendek & lega' },
-  medium: { size: 6, wallRatio: 0.12, label: 'Medium', description: 'Papan 6×6, mulai banyak cabang' },
-  hard: { size: 7, wallRatio: 0.16, label: 'Hard', description: 'Papan 7×7, cabang buntu menumpuk' },
-  expert: { size: 8, wallRatio: 0.2, label: 'Expert', description: 'Papan 8×8, jalur panjang berkelok' },
-  evil: { size: 9, wallRatio: 0.24, label: 'Evil', description: 'Papan 9×9, labirin panah paling kejam' },
+  easy: {
+    size: 6, arrowCount: 5, minLength: 2, maxLength: 4, turnChance: 0.35, blockBias: 0.55,
+    maxFreeRatio: 0.7, minBlocked: 1,
+    label: 'Easy', description: 'Sedikit arrow, jalur pendek, blocking sederhana',
+  },
+  medium: {
+    size: 7, arrowCount: 8, minLength: 2, maxLength: 5, turnChance: 0.4, blockBias: 0.65,
+    maxFreeRatio: 0.55, minBlocked: 3,
+    label: 'Medium', description: 'Lebih banyak arrow, dependency mulai bercabang',
+  },
+  hard: {
+    size: 8, arrowCount: 11, minLength: 3, maxLength: 6, turnChance: 0.45, blockBias: 0.75,
+    maxFreeRatio: 0.45, minBlocked: 5,
+    label: 'Hard', description: 'Papan padat, rantai dependency bercabang',
+  },
+  expert: {
+    size: 9, arrowCount: 14, minLength: 3, maxLength: 7, turnChance: 0.5, blockBias: 0.8,
+    maxFreeRatio: 0.4, minBlocked: 7,
+    label: 'Expert', description: 'Banyak arrow panjang, blocking kompleks',
+  },
+  evil: {
+    size: 10, arrowCount: 18, minLength: 3, maxLength: 8, turnChance: 0.5, blockBias: 0.85,
+    maxFreeRatio: 0.35, minBlocked: 10,
+    label: 'Evil', description: 'Papan sangat padat, dependency panjang — tetap 100% solvable',
+  },
 };
 
 const ARROW_DIFFICULTY_KEYS: readonly ArrowDifficulty[] = ['easy', 'medium', 'hard', 'expert', 'evil'];
@@ -112,234 +150,291 @@ export function buildArrowSeed(roomId: string, difficulty: Difficulty | undefine
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GENERATOR PUZZLE
+// GEOMETRI & COLLISION ENGINE
 // ─────────────────────────────────────────────────────────────────────────────
 
-const coordKey = (row: number, col: number) => `${row}:${col}`;
+export const coordKey = (row: number, col: number) => `${row}:${col}`;
 
-function buildAttempt(
-  size: number,
-  wallRatio: number,
-  rand: () => number
-): { arrows: (ArrowDirection | null)[][]; start: ArrowCoord; goal: ArrowCoord; path: ArrowCoord[] } | null {
-  const idx = (r: number, c: number) => r * size + c;
+export const inBounds = (size: number, row: number, col: number) =>
+  row >= 0 && row < size && col >= 0 && col < size;
 
-  // 1) Tebar tembok acak. START (0,0) tidak pernah jadi tembok.
-  const blocked: boolean[] = Array(size * size).fill(false);
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      if (r === 0 && c === 0) continue;
-      if (rand() < wallRatio) blocked[idx(r, c)] = true;
+/** Sel kepala panah (elemen terakhir dari `cells`). */
+export function getArrowHead(arrow: ArrowObject): ArrowCoord {
+  return arrow.cells[arrow.cells.length - 1];
+}
+
+/**
+ * Lintasan (sweep) arrow: semua sel di depan SETIAP sel tubuh arrow hingga tepi
+ * papan, tidak termasuk sel arrow itu sendiri. Arrow bergerak sebagai benda kaku,
+ * jadi seluruh area ini harus kosong supaya arrow bisa keluar.
+ */
+export function getArrowSweep(arrow: ArrowObject, size: number): ArrowCoord[] {
+  const own = new Set(arrow.cells.map((c) => coordKey(c.row, c.col)));
+  const seen = new Set<string>();
+  const out: ArrowCoord[] = [];
+  const { dr, dc } = ARROW_DIRS[arrow.direction];
+  for (const cell of arrow.cells) {
+    let r = cell.row + dr;
+    let c = cell.col + dc;
+    while (inBounds(size, r, c)) {
+      const key = coordKey(r, c);
+      if (!own.has(key) && !seen.has(key)) {
+        seen.add(key);
+        out.push({ row: r, col: c });
+      }
+      r += dr;
+      c += dc;
     }
   }
+  return out;
+}
 
-  // 2) Spanning tree di atas sel terbuka memakai randomized DFS.
-  const parent: (number | null)[] = Array(size * size).fill(null);
-  const inTree: boolean[] = Array(size * size).fill(false);
-  const stack: number[] = [idx(0, 0)];
-  inTree[idx(0, 0)] = true;
+/**
+ * Jarak (dalam sel) yang harus ditempuh arrow sampai SELURUH tubuhnya berada di
+ * luar papan. Dipakai renderer untuk animasi keluar.
+ */
+export function getArrowExitDistance(arrow: ArrowObject, size: number): number {
+  const { dr, dc } = ARROW_DIRS[arrow.direction];
+  let max = 0;
+  for (const cell of arrow.cells) {
+    let steps = 0;
+    let r = cell.row;
+    let c = cell.col;
+    while (inBounds(size, r, c)) {
+      r += dr;
+      c += dc;
+      steps++;
+    }
+    if (steps > max) max = steps;
+  }
+  return max;
+}
 
-  while (stack.length > 0) {
-    const cur = stack[stack.length - 1];
-    const curR = Math.floor(cur / size);
-    const curC = cur % size;
+/** Validasi geometri satu arrow: sel berurutan (tetangga 4-arah), tak tumpang-tindih, dalam papan. */
+export function isValidArrowGeometry(arrow: ArrowObject, size: number): boolean {
+  if (!arrow.cells || arrow.cells.length === 0) return false;
+  const seen = new Set<string>();
+  for (let i = 0; i < arrow.cells.length; i++) {
+    const c = arrow.cells[i];
+    if (!inBounds(size, c.row, c.col)) return false;
+    const key = coordKey(c.row, c.col);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    if (i > 0) {
+      const p = arrow.cells[i - 1];
+      if (Math.abs(p.row - c.row) + Math.abs(p.col - c.col) !== 1) return false;
+    }
+  }
+  // Sel tepat di belakang kepala harus segaris dengan arah keluar supaya kepala
+  // panah "keluar" dari batang, bukan menyamping.
+  if (arrow.cells.length >= 2) {
+    const head = getArrowHead(arrow);
+    const prev = arrow.cells[arrow.cells.length - 2];
+    const { dr, dc } = ARROW_DIRS[arrow.direction];
+    if (prev.row + dr !== head.row || prev.col + dc !== head.col) return false;
+  }
+  return true;
+}
 
-    const candidates: number[] = [];
-    for (let d = 0; d < 4; d++) {
-      const nr = curR + ARROW_DIRS[d].dr;
-      const nc = curC + ARROW_DIRS[d].dc;
-      if (nr < 0 || nr >= size || nc < 0 || nc >= size) continue;
-      const nIdx = idx(nr, nc);
-      if (blocked[nIdx] || inTree[nIdx]) continue;
-      candidates.push(nIdx);
+/** Peta sel -> id arrow untuk sekumpulan arrow aktif. */
+export function buildOccupancy(arrows: ArrowObject[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const a of arrows) for (const c of a.cells) map.set(coordKey(c.row, c.col), a.id);
+  return map;
+}
+
+/** Id arrow-arrow lain (aktif) yang berada di lintasan `arrow`. */
+export function findBlockers(arrow: ArrowObject, activeArrows: ArrowObject[], size: number): string[] {
+  const occupancy = buildOccupancy(activeArrows.filter((a) => a.id !== arrow.id));
+  const blockers = new Set<string>();
+  for (const cell of getArrowSweep(arrow, size)) {
+    const id = occupancy.get(coordKey(cell.row, cell.col));
+    if (id) blockers.add(id);
+  }
+  return Array.from(blockers);
+}
+
+export function isArrowFree(arrow: ArrowObject, activeArrows: ArrowObject[], size: number): boolean {
+  return findBlockers(arrow, activeArrows, size).length === 0;
+}
+
+/**
+ * Solver: berulang kali keluarkan arrow yang bebas. Karena menghapus arrow tidak
+ * pernah MENGHALANGI arrow lain (monoton), urutan greedy apa pun tuntas jika
+ * puzzle memang solvable. Mengembalikan urutan solusi, atau null bila deadlock.
+ */
+export function solveArrowPuzzle(arrows: ArrowObject[], size: number): string[] | null {
+  let active = [...arrows];
+  const order: string[] = [];
+  while (active.length > 0) {
+    const free = active.find((a) => isArrowFree(a, active, size));
+    if (!free) return null;
+    order.push(free.id);
+    active = active.filter((a) => a.id !== free.id);
+  }
+  return order;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GENERATOR PUZZLE — konstruksi terbalik yang menjamin solvable
+// ─────────────────────────────────────────────────────────────────────────────
+// Arrow ditaruh satu per satu. Syarat penempatan: arrow baru tidak menimpa arrow
+// lama DAN lintasannya bebas dari semua arrow lama. Dengan begitu arrow yang
+// dipasang paling akhir pasti bisa keluar duluan, lalu yang sebelumnya, dst.
+// Supaya puzzle menantang, kepala/tubuh arrow baru sengaja dibias agar berada
+// di lintasan arrow lama (menciptakan blocking + rantai dependency).
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface BuildResult {
+  arrows: ArrowObject[];
+  solutionOrder: string[];
+  initiallyFree: number;
+}
+
+function pickWeighted<T>(items: T[], rand: () => number): T {
+  return items[Math.floor(rand() * items.length)];
+}
+
+/**
+ * Bentuk jalur dari kepala ke belakang: segmen pertama segaris dengan arah
+ * keluar, lalu random-walk dengan belokan 90° (tanpa balik arah / tabrak diri).
+ */
+function growArrowBody(
+  head: ArrowCoord,
+  direction: ArrowDirection,
+  length: number,
+  size: number,
+  free: (r: number, c: number) => boolean,
+  turnChance: number,
+  rand: () => number
+): ArrowCoord[] | null {
+  const cells: ArrowCoord[] = [head];
+  const used = new Set<string>([coordKey(head.row, head.col)]);
+  // Bergerak "mundur" dari kepala: arah pertama = lawan arah keluar.
+  let walkDir: ArrowDirection = OPPOSITE_DIR[direction];
+  let straightRun = 0;
+
+  while (cells.length < length) {
+    const cur = cells[cells.length - 1];
+    const options: ArrowDirection[] = [];
+    const perpendicular: ArrowDirection[] = walkDir === 0 || walkDir === 2 ? [1, 3] : [0, 2];
+
+    // Segmen tepat di belakang kepala wajib lurus minimal 1 sel.
+    const mayTurn = cells.length >= 2 && (rand() < turnChance || straightRun >= 3);
+    const ordered: ArrowDirection[] = mayTurn
+      ? [...(rand() < 0.5 ? perpendicular : [...perpendicular].reverse()), walkDir]
+      : [walkDir, ...(rand() < 0.5 ? perpendicular : [...perpendicular].reverse())];
+
+    for (const d of ordered) {
+      const nr = cur.row + ARROW_DIRS[d].dr;
+      const nc = cur.col + ARROW_DIRS[d].dc;
+      if (!inBounds(size, nr, nc)) continue;
+      if (used.has(coordKey(nr, nc))) continue;
+      if (!free(nr, nc)) continue;
+      options.push(d);
+    }
+    if (options.length === 0) break;
+
+    const chosen = options[0];
+    straightRun = chosen === walkDir ? straightRun + 1 : 0;
+    walkDir = chosen;
+    const nr = cur.row + ARROW_DIRS[chosen].dr;
+    const nc = cur.col + ARROW_DIRS[chosen].dc;
+    cells.push({ row: nr, col: nc });
+    used.add(coordKey(nr, nc));
+  }
+
+  if (cells.length < 2) return null;
+  // Simpan urutan ekor -> kepala.
+  return cells.reverse();
+}
+
+function buildAttempt(cfg: ArrowDifficultyConfig, rand: () => number): BuildResult | null {
+  const { size } = cfg;
+  const placed: ArrowObject[] = [];
+  const occupied = new Set<string>();
+  const free = (r: number, c: number) => !occupied.has(coordKey(r, c));
+
+  let failures = 0;
+  const maxFailures = 900;
+
+  while (placed.length < cfg.arrowCount && failures < maxFailures) {
+    // Kumpulkan sel-sel lintasan arrow lama (kandidat untuk menghalangi mereka).
+    const sweepCells: ArrowCoord[] = [];
+    if (placed.length > 0 && rand() < cfg.blockBias) {
+      for (const a of placed) {
+        for (const c of getArrowSweep(a, size)) if (free(c.row, c.col)) sweepCells.push(c);
+      }
     }
 
-    if (candidates.length === 0) {
-      stack.pop();
+    let anchor: ArrowCoord;
+    if (sweepCells.length > 0) {
+      anchor = pickWeighted(sweepCells, rand);
+    } else {
+      anchor = { row: Math.floor(rand() * size), col: Math.floor(rand() * size) };
+      if (!free(anchor.row, anchor.col)) {
+        failures++;
+        continue;
+      }
+    }
+
+    const direction = Math.floor(rand() * 4) as ArrowDirection;
+    const targetLen = cfg.minLength + Math.floor(rand() * (cfg.maxLength - cfg.minLength + 1));
+    const body = growArrowBody(anchor, direction, targetLen, size, free, cfg.turnChance, rand);
+    if (!body || body.length < Math.min(cfg.minLength, 2)) {
+      failures++;
       continue;
     }
 
-    const pick = candidates[Math.floor(rand() * candidates.length)];
-    inTree[pick] = true;
-    parent[pick] = cur;
-    stack.push(pick);
-  }
-
-  // 3) GOAL = sel terjauh dari START di dalam tree (jalur sepanjang mungkin).
-  const startIdx = idx(0, 0);
-  const depth: number[] = Array(size * size).fill(-1);
-  depth[startIdx] = 0;
-  const queue: number[] = [startIdx];
-  let goalIdx = startIdx;
-
-  for (let head = 0; head < queue.length; head++) {
-    const cur = queue[head];
-    const curR = Math.floor(cur / size);
-    const curC = cur % size;
-    if (depth[cur] > depth[goalIdx]) goalIdx = cur;
-
-    for (let d = 0; d < 4; d++) {
-      const nr = curR + ARROW_DIRS[d].dr;
-      const nc = curC + ARROW_DIRS[d].dc;
-      if (nr < 0 || nr >= size || nc < 0 || nc >= size) continue;
-      const nIdx = idx(nr, nc);
-      if (parent[nIdx] !== cur || depth[nIdx] !== -1) continue;
-      depth[nIdx] = depth[cur] + 1;
-      queue.push(nIdx);
+    const candidate: ArrowObject = { id: `a${placed.length + 1}`, cells: body, direction };
+    if (!isValidArrowGeometry(candidate, size)) {
+      failures++;
+      continue;
     }
-  }
 
-  if (goalIdx === startIdx) return null; // puzzle degenerate
-
-  // 4) Telusuri jalur unik START -> GOAL lewat pointer parent.
-  const pathIdx: number[] = [];
-  for (let cur = goalIdx; cur !== null && cur !== startIdx; cur = parent[cur] as number) {
-    pathIdx.push(cur);
-  }
-  pathIdx.push(startIdx);
-  pathIdx.reverse();
-
-  // 5) Panah tiap sel tree = arah dari sel itu menuju induknya.
-  //    Konsekuensinya langkah sah hanyalah "induk -> anak", jadi jalur ke GOAL tunggal.
-  const arrows: (ArrowDirection | null)[][] = Array.from({ length: size }, () =>
-    Array<ArrowDirection | null>(size).fill(null)
-  );
-
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      const cellIdx = idx(r, c);
-      if (!inTree[cellIdx]) continue; // tetap tembok
-      const p = parent[cellIdx];
-      if (p === null) {
-        // START: panah hiasan (tidak pernah dipakai karena START tidak pernah "dimasuki").
-        arrows[r][c] = Math.floor(rand() * 4) as ArrowDirection;
-        continue;
-      }
-      const pr = Math.floor(p / size);
-      const pc = p % size;
-      const dir = ARROW_DIRS.findIndex((d) => r + d.dr === pr && c + d.dc === pc);
-      arrows[r][c] = (dir === -1 ? 0 : dir) as ArrowDirection;
+    // Syarat kunci: lintasan arrow baru harus bebas dari SEMUA arrow lama.
+    if (!isArrowFree(candidate, [...placed, candidate], size)) {
+      failures++;
+      continue;
     }
+
+    placed.push(candidate);
+    for (const c of body) occupied.add(coordKey(c.row, c.col));
   }
 
-  const path: ArrowCoord[] = pathIdx.map((i) => ({ row: Math.floor(i / size), col: i % size }));
-  return {
-    arrows,
-    start: { row: 0, col: 0 },
-    goal: { row: Math.floor(goalIdx / size), col: goalIdx % size },
-    path,
-  };
+  if (placed.length < Math.max(3, Math.floor(cfg.arrowCount * 0.75))) return null;
+
+  const solutionOrder = solveArrowPuzzle(placed, size);
+  if (!solutionOrder) return null; // secara teori mustahil, tetap dijaga
+
+  const initiallyFree = placed.filter((a) => isArrowFree(a, placed, size)).length;
+  return { arrows: placed, solutionOrder, initiallyFree };
 }
 
-/**
- * Hitung jumlah jalur sah START -> GOAL (dipakai untuk memastikan puzzle
- * benar-benar punya satu jawaban). Berhenti begitu menemukan lebih dari `limit`.
- */
-export function countArrowPaths(
-  arrows: (ArrowDirection | null)[][],
-  start: ArrowCoord,
-  goal: ArrowCoord,
-  limit = 2
-): number {
-  const size = arrows.length;
-  const visited = new Set<string>();
-  let count = 0;
-
-  const walk = (pos: ArrowCoord): void => {
-    if (count >= limit) return;
-    if (pos.row === goal.row && pos.col === goal.col) {
-      count++;
-      return;
-    }
-    for (let d = 0; d < 4; d++) {
-      const nr = pos.row + ARROW_DIRS[d].dr;
-      const nc = pos.col + ARROW_DIRS[d].dc;
-      if (nr < 0 || nr >= size || nc < 0 || nc >= size) continue;
-      const key = coordKey(nr, nc);
-      if (visited.has(key)) continue;
-      const arrow = arrows[nr][nc];
-      if (arrow === null) continue;
-      // Panah di kotak tujuan harus menunjuk balik ke kotak asal.
-      if (nr + ARROW_DIRS[arrow].dr !== pos.row || nc + ARROW_DIRS[arrow].dc !== pos.col) continue;
-      visited.add(key);
-      walk({ row: nr, col: nc });
-      visited.delete(key);
-      if (count >= limit) return;
-    }
-  };
-
-  visited.add(coordKey(start.row, start.col));
-  walk(start);
-  return count;
+/** Hasil generator termasuk solution order internal (JANGAN dibroadcast ke pemain). */
+export interface GeneratedArrowPuzzle {
+  state: ArrowPuzzleState;
+  /** Urutan penyelesaian valid — hanya untuk verifikasi engine/test. */
+  solutionOrder: string[];
 }
 
-/**
- * Buat puzzle Arrow Puzzle Master.
- * `seed` yang sama + difficulty yang sama = puzzle identik (deterministik).
- */
-export function generateArrowPuzzle(
-  difficulty: Difficulty | undefined,
+function emptyState(
+  boardId: string,
+  seed: string,
+  size: number,
+  arrows: ArrowObject[],
   variant: ArrowPuzzleVariant,
-  seed: string
+  difficulty: ArrowDifficulty
 ): ArrowPuzzleState {
-  const cfg = getArrowConfig(difficulty);
-  const difficultyKey = normalizeArrowDifficulty(difficulty);
-
-  // Jalur terlalu pendek = puzzle hambar. Kalau tembok kebetulan memutus papan,
-  // percobaan berikutnya otomatis mengurangi rasio tembok sampai papan cukup lega.
-  const minPathLength = Math.max(4, Math.ceil(cfg.size * 1.2));
-
-  for (let attempt = 0; attempt < 16; attempt++) {
-    const wallScale = attempt < 6 ? 1 : attempt < 11 ? 0.55 : 0.2;
-    const rand = mulberry32(hashSeedString(`${seed}#${attempt}`));
-    const built = buildAttempt(cfg.size, cfg.wallRatio * wallScale, rand);
-    if (!built) continue;
-    if (built.path.length < minPathLength) continue;
-
-    // Jaminan desain: hanya satu jalur. Verifikasi tetap dijalankan sebagai pengaman.
-    if (countArrowPaths(built.arrows, built.start, built.goal, 2) !== 1) continue;
-
-    return {
-      boardId: `ap-${hashSeedString(seed).toString(36)}-${attempt}`,
-      seed,
-      size: cfg.size,
-      arrows: built.arrows,
-      start: built.start,
-      goal: built.goal,
-      solutionPath: built.path,
-      variant,
-      difficulty: difficultyKey,
-      currentPath: [],
-      playerPaths: {},
-      wrongStreak: {},
-      winnerId: null,
-      winners: [],
-      completed: false,
-      revision: 1,
-      lastMove: null,
-    };
-  }
-
-  // Fallback ekstrem (praktis tidak pernah terjadi): koridor lurus yang pasti unik.
-  const size = cfg.size;
-  const arrows: (ArrowDirection | null)[][] = Array.from({ length: size }, () =>
-    Array<ArrowDirection | null>(size).fill(null)
-  );
-  for (let c = 0; c < size; c++) arrows[0][c] = 3; // semua menunjuk ke kiri (ke arah induk)
-  const solutionPath: ArrowCoord[] = Array.from({ length: size }, (_, c) => ({ row: 0, col: c }));
-
   return {
-    boardId: `ap-fallback-${hashSeedString(seed).toString(36)}`,
+    boardId,
     seed,
     size,
     arrows,
-    start: { row: 0, col: 0 },
-    goal: { row: 0, col: size - 1 },
-    solutionPath,
     variant,
-    difficulty: difficultyKey,
-    currentPath: [],
-    playerPaths: {},
+    difficulty,
+    removedArrowIds: [],
+    playerRemoved: {},
     wrongStreak: {},
     winnerId: null,
     winners: [],
@@ -349,42 +444,145 @@ export function generateArrowPuzzle(
   };
 }
 
+/**
+ * Buat puzzle Arrow Removal.
+ * `seed` yang sama + difficulty yang sama = puzzle identik (deterministik).
+ */
+export function generateArrowPuzzleDetailed(
+  difficulty: Difficulty | undefined,
+  variant: ArrowPuzzleVariant,
+  seed: string
+): GeneratedArrowPuzzle {
+  const cfg = getArrowConfig(difficulty);
+  const difficultyKey = normalizeArrowDifficulty(difficulty);
+
+  let best: BuildResult | null = null;
+  let bestScore = -Infinity;
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const rand = mulberry32(hashSeedString(`${seed}#${attempt}`));
+    const built = buildAttempt(cfg, rand);
+    if (!built) continue;
+
+    const blocked = built.arrows.length - built.initiallyFree;
+    const freeRatio = built.initiallyFree / built.arrows.length;
+    const meetsCount = built.arrows.length >= cfg.arrowCount;
+    const meetsBlocked = blocked >= Math.min(cfg.minBlocked, built.arrows.length - 1);
+    const meetsFree = built.initiallyFree >= 1 && freeRatio <= cfg.maxFreeRatio;
+
+    if (meetsCount && meetsBlocked && meetsFree) {
+      return {
+        state: emptyState(
+          `ap-${hashSeedString(seed).toString(36)}-${attempt}`,
+          seed,
+          cfg.size,
+          built.arrows,
+          variant,
+          difficultyKey
+        ),
+        solutionOrder: built.solutionOrder,
+      };
+    }
+
+    // Simpan kandidat terbaik sebagai cadangan (tetap solvable).
+    const score = built.arrows.length * 2 + blocked - (built.initiallyFree === 0 ? 100 : 0);
+    if (score > bestScore) {
+      bestScore = score;
+      best = built;
+    }
+  }
+
+  if (best && best.initiallyFree > 0) {
+    return {
+      state: emptyState(
+        `ap-${hashSeedString(seed).toString(36)}-best`,
+        seed,
+        cfg.size,
+        best.arrows,
+        variant,
+        difficultyKey
+      ),
+      solutionOrder: best.solutionOrder,
+    };
+  }
+
+  // Fallback ekstrem (praktis tidak pernah terjadi): tiga arrow dengan rantai jelas.
+  const size = cfg.size;
+  const fallback: ArrowObject[] = [
+    { id: 'a1', cells: [{ row: 1, col: 0 }, { row: 1, col: 1 }], direction: 1 },
+    { id: 'a2', cells: [{ row: 3, col: 3 }, { row: 2, col: 3 }], direction: 0 },
+    { id: 'a3', cells: [{ row: 0, col: 4 }, { row: 0, col: 5 }], direction: 1 },
+  ];
+  return {
+    state: emptyState(`ap-fallback-${hashSeedString(seed).toString(36)}`, seed, size, fallback, variant, difficultyKey),
+    solutionOrder: solveArrowPuzzle(fallback, size) ?? [],
+  };
+}
+
+export function generateArrowPuzzle(
+  difficulty: Difficulty | undefined,
+  variant: ArrowPuzzleVariant,
+  seed: string
+): ArrowPuzzleState {
+  return generateArrowPuzzleDetailed(difficulty, variant, seed).state;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PEMBACAAN STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function getPlayerArrowPath(state: ArrowPuzzleState, userId: string): ArrowCoord[] {
-  if (state.variant === 'classic') return state.currentPath;
-  return state.playerPaths[userId] || [];
+/** Id arrow yang sudah keluar untuk pemain ini (Classic: papan bersama). */
+export function getRemovedArrowIds(state: ArrowPuzzleState, userId: string): string[] {
+  if (state.variant === 'classic') return state.removedArrowIds ?? [];
+  return state.playerRemoved?.[userId] ?? [];
 }
 
-/** Kotak tempat pemain berdiri sekarang (START bila belum melangkah). */
-export function getArrowCurrentCell(state: ArrowPuzzleState, userId: string): ArrowCoord {
-  const path = getPlayerArrowPath(state, userId);
-  return path.length > 0 ? path[path.length - 1] : state.start;
+/** Arrow yang masih ada di papan pemain ini. */
+export function getActiveArrows(state: ArrowPuzzleState, userId: string): ArrowObject[] {
+  const removed = new Set(getRemovedArrowIds(state, userId));
+  return state.arrows.filter((a) => !removed.has(a.id));
 }
 
-export function getExpectedNextCell(state: ArrowPuzzleState, userId: string): ArrowCoord | null {
-  const path = getPlayerArrowPath(state, userId);
-  return state.solutionPath[path.length + 1] ?? null;
+export function getArrowById(state: ArrowPuzzleState, arrowId: string): ArrowObject | undefined {
+  return state.arrows.find((a) => a.id === arrowId);
+}
+
+/** Id arrow-arrow aktif yang menghalangi `arrowId` di papan pemain ini. */
+export function getArrowBlockers(state: ArrowPuzzleState, userId: string, arrowId: string): string[] {
+  const arrow = getArrowById(state, arrowId);
+  if (!arrow) return [];
+  return findBlockers(arrow, getActiveArrows(state, userId), state.size);
+}
+
+export function isArrowMovable(state: ArrowPuzzleState, userId: string, arrowId: string): boolean {
+  const removed = getRemovedArrowIds(state, userId);
+  if (removed.includes(arrowId)) return false;
+  if (!getArrowById(state, arrowId)) return false;
+  return getArrowBlockers(state, userId, arrowId).length === 0;
+}
+
+/** Semua arrow yang saat ini bisa dikeluarkan pemain. */
+export function getMovableArrowIds(state: ArrowPuzzleState, userId: string): string[] {
+  const active = getActiveArrows(state, userId);
+  return active.filter((a) => isArrowFree(a, active, state.size)).map((a) => a.id);
 }
 
 export function isArrowPuzzleFinished(state: ArrowPuzzleState, userId: string): boolean {
-  return getPlayerArrowPath(state, userId).length >= state.solutionPath.length - 1;
+  return getActiveArrows(state, userId).length === 0;
 }
 
 export function getArrowProgress(state: ArrowPuzzleState, userId: string): number {
-  const total = Math.max(1, state.solutionPath.length - 1);
-  const done = getPlayerArrowPath(state, userId).length;
+  const total = Math.max(1, state.arrows.length);
+  const done = getRemovedArrowIds(state, userId).length;
   return Math.max(0, Math.min(100, Math.round((done / total) * 100)));
 }
 
 export function getArrowWrongStreak(state: ArrowPuzzleState, userId: string): number {
-  return state.wrongStreak[userId] ?? 0;
+  return state.wrongStreak?.[userId] ?? 0;
 }
 
 /**
- * Penalti untuk tap salah ke-N secara beruntun: 5, 10, 20, 40, 80 (maks).
+ * Penalti untuk tap terhalang ke-N secara beruntun: 5, 10, 20, 40, 80 (maks).
  * `wrongNumber` = 1 untuk kesalahan pertama, 2 untuk kesalahan kedua, dst.
  */
 export function getArrowWrongPenalty(wrongNumber: number): number {
@@ -398,52 +596,25 @@ export function getArrowNextPenalty(state: ArrowPuzzleState, userId: string): nu
   return getArrowWrongPenalty(getArrowWrongStreak(state, userId) + 1);
 }
 
-/** Apakah langkah A -> B sah menurut aturan panah? */
-export function isLegalArrowStep(state: ArrowPuzzleState, from: ArrowCoord, to: ArrowCoord): boolean {
-  const dr = to.row - from.row;
-  const dc = to.col - from.col;
-  if (Math.abs(dr) + Math.abs(dc) !== 1) return false;
-
-  const arrow = state.arrows[to.row]?.[to.col];
-  if (arrow === null || arrow === undefined) return false;
-
-  return to.row + ARROW_DIRS[arrow].dr === from.row && to.col + ARROW_DIRS[arrow].dc === from.col;
-}
-
 export interface ArrowTapEvaluation {
   correct: boolean;
   reason: string;
-  expected: ArrowCoord | null;
+  blockers: string[];
 }
 
-export function evaluateArrowTap(
-  state: ArrowPuzzleState,
-  userId: string,
-  cell: ArrowCoord
-): ArrowTapEvaluation {
-  const expected = getExpectedNextCell(state, userId);
-  if (expected && expected.row === cell.row && expected.col === cell.col) {
-    return { correct: true, reason: 'Jalur benar!', expected };
+export function evaluateArrowTap(state: ArrowPuzzleState, userId: string, arrowId: string): ArrowTapEvaluation {
+  const arrow = getArrowById(state, arrowId);
+  if (!arrow) return { correct: false, reason: 'Arrow tidak dikenal', blockers: [] };
+  if (getRemovedArrowIds(state, userId).includes(arrowId)) {
+    return { correct: false, reason: 'Arrow itu sudah keluar', blockers: [] };
   }
-
-  const from = getArrowCurrentCell(state, userId);
-  const path = getPlayerArrowPath(state, userId);
-  const arrow = state.arrows[cell.row]?.[cell.col];
-
-  let reason = 'Bukan jalur yang benar';
-  if (arrow === null || arrow === undefined) {
-    reason = 'Itu tembok, tidak bisa dilewati';
-  } else if (Math.abs(cell.row - from.row) + Math.abs(cell.col - from.col) !== 1) {
-    reason = 'Hanya bisa melangkah ke kotak yang menempel';
-  } else if (path.some((p) => p.row === cell.row && p.col === cell.col)) {
-    reason = 'Kotak itu sudah kamu lewati';
-  } else if (!isLegalArrowStep(state, from, cell)) {
-    reason = 'Panah kotak itu tidak menunjuk ke arahmu';
-  } else {
-    reason = 'Cabang buntu! Jalur ini tidak menuju GOAL';
-  }
-
-  return { correct: false, reason, expected };
+  const blockers = getArrowBlockers(state, userId, arrowId);
+  if (blockers.length === 0) return { correct: true, reason: 'Arrow meluncur keluar!', blockers };
+  return {
+    correct: false,
+    reason: blockers.length === 1 ? 'Terhalang arrow lain' : `Terhalang ${blockers.length} arrow lain`,
+    blockers,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -455,82 +626,92 @@ export interface ArrowMoveResult {
   /** Perubahan poin untuk `userId` (sudah termasuk bonus finis / bonus tim). */
   scoreDelta: number;
   correct: boolean;
-  /** Poin yang berkurang khusus karena tap salah (0 bila benar). */
+  /** Poin yang berkurang khusus karena tap terhalang (0 bila sukses). */
   penalty: number;
-  /** Pemain ini baru saja mencapai GOAL. */
+  /** Pemain ini baru saja mengeluarkan arrow terakhirnya. */
   justFinished: boolean;
   /** Puzzle Classic baru saja tuntas dikerjakan bersama. */
   justCompleted: boolean;
   /** Peringkat finis di mode Competition (null bila belum finis / mode Classic). */
   rank: number | null;
   reason: string;
+  blockers: string[];
+}
+
+export interface ApplyArrowMoveOptions {
+  /** Tanpa poin & tanpa penalti (dipakai tombol Auto / All). */
+  silentScore?: boolean;
 }
 
 export function applyArrowMove(
   state: ArrowPuzzleState,
   userId: string,
-  cell: ArrowCoord,
-  username = ''
+  arrowId: string,
+  username = '',
+  options: ApplyArrowMoveOptions = {}
 ): ArrowMoveResult {
-  const evaluation = evaluateArrowTap(state, userId, cell);
-  const path = getPlayerArrowPath(state, userId);
-  const alreadyFinished = path.length >= state.solutionPath.length - 1;
+  const noop = (reason: string): ArrowMoveResult => ({
+    state,
+    scoreDelta: 0,
+    correct: false,
+    penalty: 0,
+    justFinished: false,
+    justCompleted: false,
+    rank: null,
+    reason,
+    blockers: [],
+  });
 
-  if (alreadyFinished) {
-    return {
-      state,
-      scoreDelta: 0,
-      correct: false,
-      penalty: 0,
-      justFinished: false,
-      justCompleted: false,
-      rank: null,
-      reason: 'Puzzle sudah selesai',
-    };
-  }
+  if (state.variant === 'classic' && state.completed) return noop('Puzzle sudah selesai');
+  if (isArrowPuzzleFinished(state, userId)) return noop('Puzzle sudah selesai');
 
+  const evaluation = evaluateArrowTap(state, userId, arrowId);
+  // Tap ke arrow yang sudah tidak ada (double tap / paket ganda) -> abaikan total.
+  if (!evaluation.correct && evaluation.blockers.length === 0) return noop(evaluation.reason);
+
+  const removedBefore = getRemovedArrowIds(state, userId);
   const wrongStreak = { ...state.wrongStreak };
   let scoreDelta = 0;
   let penalty = 0;
-  let nextPath = path;
+  let removedAfter = removedBefore;
   let justFinished = false;
   let justCompleted = false;
   let rank: number | null = null;
 
   if (evaluation.correct) {
-    nextPath = [...path, { row: cell.row, col: cell.col }];
+    removedAfter = [...removedBefore, arrowId];
     wrongStreak[userId] = 0;
-    scoreDelta += ARROW_CORRECT_POINTS;
-    justFinished = nextPath.length >= state.solutionPath.length - 1;
-  } else {
+    if (!options.silentScore) scoreDelta += ARROW_CORRECT_POINTS;
+    justFinished = removedAfter.length >= state.arrows.length;
+  } else if (!options.silentScore) {
     wrongStreak[userId] = (wrongStreak[userId] ?? 0) + 1;
     penalty = getArrowWrongPenalty(wrongStreak[userId]);
     scoreDelta -= penalty;
   }
 
+  const lastMove = {
+    arrowId,
+    userId,
+    username,
+    correct: evaluation.correct,
+    timestamp: Date.now(),
+  };
+
   if (state.variant === 'classic') {
     const completed = justFinished;
     if (completed) {
-      // Bonus tim: setiap pemain mendapat +50 saat puzzle tuntas bersama.
       scoreDelta += ARROW_TEAM_BONUS;
       justCompleted = true;
     }
     return {
       state: {
         ...state,
-        currentPath: nextPath,
+        removedArrowIds: removedAfter,
         wrongStreak,
         completed,
         winnerId: completed ? userId : state.winnerId,
         revision: (state.revision ?? 0) + 1,
-        lastMove: {
-          row: cell.row,
-          col: cell.col,
-          userId,
-          username,
-          correct: evaluation.correct,
-          timestamp: Date.now(),
-        },
+        lastMove,
       },
       scoreDelta,
       correct: evaluation.correct,
@@ -539,35 +720,28 @@ export function applyArrowMove(
       justCompleted,
       rank: null,
       reason: evaluation.reason,
+      blockers: evaluation.blockers,
     };
   }
 
-  // COMPETITION — jejak per pemain, tidak mempengaruhi pemain lain.
-  const winners = state.winners ?? [];
+  // COMPETITION — papan per pemain, tidak mempengaruhi pemain lain.
+  const winners = [...(state.winners ?? [])];
   if (justFinished && !winners.includes(userId)) {
     winners.push(userId);
     rank = winners.length;
-    const bonus =
-      rank <= ARROW_FINISH_BONUS.length ? ARROW_FINISH_BONUS[rank - 1] : ARROW_FINISH_BONUS_DEFAULT;
+    const bonus = rank <= ARROW_FINISH_BONUS.length ? ARROW_FINISH_BONUS[rank - 1] : ARROW_FINISH_BONUS_DEFAULT;
     scoreDelta += bonus;
   }
 
   return {
     state: {
       ...state,
-      playerPaths: { ...state.playerPaths, [userId]: nextPath },
+      playerRemoved: { ...state.playerRemoved, [userId]: removedAfter },
       wrongStreak,
       winners,
       winnerId: justFinished && !state.winnerId ? userId : state.winnerId,
       revision: (state.revision ?? 0) + 1,
-      lastMove: {
-        row: cell.row,
-        col: cell.col,
-        userId,
-        username,
-        correct: evaluation.correct,
-        timestamp: Date.now(),
-      },
+      lastMove,
     },
     scoreDelta,
     correct: evaluation.correct,
@@ -576,6 +750,7 @@ export function applyArrowMove(
     justCompleted: false,
     rank,
     reason: evaluation.reason,
+    blockers: evaluation.blockers,
   };
 }
 
@@ -591,4 +766,23 @@ export function createArrowRound(
     ...fresh,
     revision: Math.max(fresh.revision, previousRevision + 1),
   };
+}
+
+/** Apakah objek ini state Arrow Removal yang valid (menolak state format lama START/GOAL). */
+export function isValidArrowPuzzleState(value: unknown): value is ArrowPuzzleState {
+  if (!value || typeof value !== 'object') return false;
+  const s = value as Partial<ArrowPuzzleState>;
+  return (
+    typeof s.size === 'number' &&
+    Array.isArray(s.arrows) &&
+    s.arrows.every(
+      (a) =>
+        a &&
+        typeof a.id === 'string' &&
+        Array.isArray(a.cells) &&
+        typeof a.direction === 'number'
+    ) &&
+    Array.isArray(s.removedArrowIds) &&
+    typeof s.playerRemoved === 'object'
+  );
 }

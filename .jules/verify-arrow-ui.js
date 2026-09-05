@@ -1,9 +1,8 @@
 /**
- * Uji UI Arrow Puzzle Master: merender <ArrowPuzzleBoard /> yang SUNGGUHAN di
- * dalam jsdom, lalu menekan tombol-tombol kotaknya seperti pemain.
+ * Uji UI Arrow Puzzle Master (ARROW REMOVAL): merender <ArrowPuzzleBoard /> yang
+ * SUNGGUHAN di jsdom, lalu mengetuk arrow (pointer/touch/mouse) seperti pemain.
  *
  * Jalankan: npm run verify:arrow-ui
- * (mengompilasi komponen + dependensinya ke .tmp-arrow-build lebih dulu)
  */
 /* eslint-disable @typescript-eslint/no-require-imports */
 const path = require('node:path');
@@ -12,7 +11,6 @@ const assert = require('node:assert');
 
 const BUILD = path.join(__dirname, '..', '.tmp-arrow-build');
 
-// Komponen memakai alias "@/..." (dipetakan tsconfig Next). Arahkan ke hasil build.
 const origResolve = Module._resolveFilename;
 Module._resolveFilename = function resolve(request, ...rest) {
   if (typeof request === 'string' && request.startsWith('@/')) {
@@ -34,17 +32,34 @@ global.navigator = dom.window.navigator;
 global.localStorage = dom.window.localStorage;
 global.HTMLElement = dom.window.HTMLElement;
 global.HTMLButtonElement = dom.window.HTMLButtonElement;
+global.SVGElement = dom.window.SVGElement;
 global.Element = dom.window.Element;
 global.Node = dom.window.Node;
 global.Event = dom.window.Event;
 global.MouseEvent = dom.window.MouseEvent;
+global.KeyboardEvent = dom.window.KeyboardEvent;
 global.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
-global.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
+global.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 16);
 global.cancelAnimationFrame = (id) => clearTimeout(id);
 global.matchMedia =
   dom.window.matchMedia ||
   (() => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }));
 global.IS_REACT_ACT_ENVIRONMENT = true;
+// jsdom belum punya PointerEvent: pakai MouseEvent sebagai dasar (React membaca type saja).
+if (!dom.window.PointerEvent) {
+  dom.window.PointerEvent = class PointerEvent extends dom.window.MouseEvent {
+    constructor(type, init = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 1;
+      this.pointerType = init.pointerType ?? 'mouse';
+      this.isPrimary = init.isPrimary ?? true;
+    }
+  };
+}
+global.PointerEvent = dom.window.PointerEvent;
+// Viewport ponsel (portrait) untuk memastikan render tidak bergantung pada layar lebar.
+Object.defineProperty(dom.window, 'innerWidth', { value: 390, configurable: true });
+Object.defineProperty(dom.window, 'innerHeight', { value: 844, configurable: true });
 
 const React = require('react');
 const { createRoot } = require('react-dom/client');
@@ -61,8 +76,14 @@ const ok = (cond, label) => {
   assert.ok(cond, label);
   checks++;
 };
+const eq = (a, b, label) => {
+  assert.strictEqual(a, b, `${label} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
+  checks++;
+};
 
-function seedRoom(variant, difficulty) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function seedRoom(variant, difficulty, extra = {}) {
   const store = useGameStore.getState();
   const mode = variant === 'classic' ? 'arrow_classic' : 'arrow_competition';
   const startedAt = 1700000000000;
@@ -81,6 +102,7 @@ function seedRoom(variant, difficulty) {
     },
     createdAt: startedAt,
     startedAt,
+    ...extra,
   });
   store.replaceAllArrowPuzzleState(
     arrow.createArrowRound(difficulty, variant, arrow.buildArrowSeed('VERIFY', difficulty, startedAt), 0)
@@ -98,238 +120,236 @@ function mount(containerId, props) {
   act(() => {
     root.render(React.createElement(ArrowPuzzleBoard, props));
   });
-  return root;
+  return { root, container };
 }
 
-function gridButtons(containerId) {
-  const scope = containerId ? document.getElementById(containerId) : document;
-  assert.ok(scope, `container ${containerId} harus ada`);
-  const grid = Array.from(scope.querySelectorAll('div')).find((d) =>
-    (d.getAttribute('style') || '').includes('grid-template-columns')
-  );
-  assert.ok(grid, 'grid papan panah harus ada di DOM');
-  return Array.from(grid.children);
-}
+const arrowEls = (container, state) =>
+  Array.from(container.querySelectorAll(`[data-arrow-id]${state ? `[data-arrow-state="${state}"]` : ''}`));
+const arrowEl = (container, id, state = 'idle') =>
+  container.querySelector(`[data-arrow-id="${id}"][data-arrow-state="${state}"]`);
 
-const idx = (size, r, c) => r * size + c;
-
-async function click(buttons, size, r, c) {
-  const btn = buttons[idx(size, r, c)];
-  assert.ok(btn, `tombol (${r},${c}) harus ada`);
+async function tap(el, pointerType = 'mouse') {
+  assert.ok(el, 'elemen arrow harus ada');
   await act(async () => {
-    btn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new dom.window.PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType }));
   });
 }
 
 const myScore = () => useGameStore.getState().room.players[ME].score ?? 0;
 const myState = () => useGameStore.getState().arrowPuzzleState;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 1. MODE CLASSIC — papan terender, panah sesuai state, tap menilai skor
-// ─────────────────────────────────────────────────────────────────────────────
+async function waitExits(container, ms = 900) {
+  // Beri waktu animasi framer (dalam jsdom animasi berjalan via setTimeout/raf) menyelesaikan onComplete.
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    await act(async () => {
+      await sleep(40);
+    });
+    if (arrowEls(container, 'exiting').length === 0) break;
+  }
+}
+
 (async () => {
-  seedRoom('classic', 'easy');
-  const moves = [];
-  const stats = [];
-  const root = mount('root-classic', {
-    sendArrowMove: (row, col, basePathLength) => moves.push({ row, col, basePathLength }),
-    broadcastPlayerStats: (s) => stats.push(s),
-  });
+  // ───────────────────────────────────────────────────────────────────────────
+  // 1. CLASSIC — papan SVG terender, tap arrow bebas keluar, blocked ditolak
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    seedRoom('classic', 'easy');
+    const moves = [];
+    const stats = [];
+    const { root, container } = mount('root-classic', {
+      sendArrowMove: (arrowId, baseRevision) => moves.push({ arrowId, baseRevision }),
+      broadcastPlayerStats: (s) => stats.push(s),
+    });
 
-  const state = myState();
-  const size = state.size;
-  const buttons = gridButtons('root-classic');
-  ok(buttons.length === size * size, `papan easy merender ${size * size} kotak (dapat ${buttons.length})`);
-  ok(
-    document.body.textContent.includes('Arrow Classic (Ko-op Realtime)'),
-    'badge mode Arrow Classic tampil'
-  );
-  ok(document.body.textContent.includes('Skor kamu: 0'), 'skor awal 0 tampil');
+    const state = myState();
+    ok(container.querySelector('[data-testid="arrow-board"]'), 'papan arrow terender');
+    ok(container.querySelector('svg'), 'papan memakai SVG (bukan grid tombol)');
+    ok(!container.querySelector('svg.lucide-flag'), 'tidak ada ikon flag GOAL');
+    ok(!container.textContent.includes('GOAL') && !container.textContent.includes('START'), 'tidak ada teks START/GOAL');
+    ok(!container.textContent.includes('Langkah'), 'tidak ada progress langkah START→GOAL');
+    ok(container.textContent.includes('Puzzle') , 'header Arrow Puzzle');
+    ok(!container.textContent.includes('Sudoku'), 'tidak ada teks Sudoku di Arrow Mode');
 
-  // Panah yang digambar harus sama dengan isi state
-  let wallCount = 0;
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      const btn = buttons[idx(size, r, c)];
-      const dir = state.arrows[r][c];
-      const isGoal = state.goal.row === r && state.goal.col === c;
-      const isStart = state.start.row === r && state.start.col === c;
-      const arrowSvg = btn.querySelector('svg.lucide-arrow-up');
-      const flagSvg = btn.querySelector('svg.lucide-flag');
-
-      if (dir === null) {
-        wallCount++;
-        ok(!arrowSvg && !flagSvg, `(${r},${c}) tembok digambar tanpa panah`);
-      } else if (isGoal) {
-        ok(Boolean(flagSvg), `(${r},${c}) GOAL digambar dengan ikon bendera`);
-      } else {
-        const style = arrowSvg ? arrowSvg.getAttribute('style') || '' : '';
-        ok(style.includes(`rotate(${dir * 90}deg)`), `(${r},${c}) panah digambar rotate(${dir * 90}deg)`);
-        if (isStart) ok(btn.textContent.includes('S'), 'kotak START diberi label S');
-      }
+    const idle = arrowEls(container, 'idle');
+    eq(idle.length, state.arrows.length, 'semua arrow aktif terender sebagai elemen tap');
+    for (const a of state.arrows) {
+      const el = arrowEl(container, a.id);
+      ok(el, `arrow ${a.id} terender`);
+      ok(el.querySelector('polygon'), `arrow ${a.id} punya kepala panah`);
+      ok(el.querySelector('path[stroke="#1f2a48"]'), `arrow ${a.id} track dark navy`);
+      eq(el.getAttribute('role'), 'button', `arrow ${a.id} bisa ditap (role=button)`);
     }
-  }
-  ok(wallCount > 0, `papan easy punya tembok (${wallCount} kotak)`);
 
-  // Jalur solusi dari papan yang sama (pemain membaca panah, uji meniru itu)
-  const steps = state.solutionPath.slice(1);
-  const wrongCell = (() => {
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        if (state.arrows[r][c] === null) continue;
-        if (r === state.start.row && c === state.start.col) continue;
-        if (steps[0].row === r && steps[0].col === c) continue;
-        return { row: r, col: c };
-      }
+    const movable = arrow.getMovableArrowIds(state, ME);
+    const blockedId = state.arrows.map((a) => a.id).find((id) => !movable.includes(id));
+    ok(blockedId, 'ada arrow yang terhalang di awal');
+    ok(movable.length > 0, 'ada arrow yang bebas di awal');
+
+    // Tap arrow terhalang -> tidak keluar, penalti -5, tidak dikirim ke pemain lain
+    await tap(arrowEl(container, blockedId));
+    eq(myScore(), -5, 'blocked tap: skor -5');
+    eq(arrow.getRemovedArrowIds(myState(), ME).length, 0, 'blocked tap: arrow tidak dihapus');
+    ok(arrowEl(container, blockedId, 'idle'), 'blocked tap: arrow masih di papan');
+    eq(moves.length, 0, 'blocked tap: tidak dibroadcast');
+    ok(container.textContent.includes('Terhalang'), 'blocked tap: feedback teks kecil tampil');
+
+    // Tap arrow bebas -> masuk state exiting, skor +10, dibroadcast
+    const freeId = movable[0];
+    const rev = myState().revision;
+    await tap(arrowEl(container, freeId), 'touch');
+    eq(myScore(), 5, 'free tap (touch): skor -5 + 10 = 5');
+    ok(arrow.getRemovedArrowIds(myState(), ME).includes(freeId), 'free tap: arrow tercatat keluar');
+    eq(moves.length, 1, 'free tap: dikirim ke pemain lain');
+    eq(moves[0].arrowId, freeId, 'free tap: arrowId benar');
+    eq(moves[0].baseRevision, rev, 'free tap: baseRevision benar');
+    ok(arrowEl(container, freeId, 'exiting'), 'free tap: arrow beranimasi keluar (bukan langsung hilang)');
+    ok(!arrowEl(container, freeId, 'idle'), 'free tap: arrow tidak lagi bisa ditap');
+    ok(stats.length >= 2 && stats[stats.length - 1].score === 5, 'stats dibroadcast');
+
+    // Double tap saat animasi -> tidak ada efek
+    const scoreBefore = myScore();
+    const exitingEl = arrowEl(container, freeId, 'exiting');
+    await tap(exitingEl);
+    eq(myScore(), scoreBefore, 'double tap saat exiting: skor tidak berubah');
+    eq(moves.length, 1, 'double tap saat exiting: tidak ada broadcast ganda');
+    eq(arrow.getRemovedArrowIds(myState(), ME).filter((id) => id === freeId).length, 1, 'tidak ada double removal');
+
+    // Tunggu animasi: arrow benar-benar dihapus dari DOM
+    await waitExits(container, 1500);
+    ok(!container.querySelector(`[data-arrow-id="${freeId}"]`), 'setelah animasi: arrow dihapus dari papan');
+    eq(arrowEls(container, 'idle').length, state.arrows.length - 1, 'sisa arrow tetap di posisi');
+
+    // Realtime: pemain lain (HOST) mengeluarkan arrow -> client ini melihat animasinya
+    const s2 = myState();
+    const otherFree = arrow.getMovableArrowIds(s2, HOST)[0];
+    const r = arrow.applyArrowMove(s2, HOST, otherFree, 'HOST');
+    await act(async () => {
+      useGameStore.getState().replaceAllArrowPuzzleState(r.state);
+    });
+    ok(arrowEl(container, otherFree, 'exiting'), 'realtime classic: arrow milik pemain lain beranimasi keluar di client ini');
+    await waitExits(container, 1500);
+    ok(!container.querySelector(`[data-arrow-id="${otherFree}"]`), 'realtime classic: arrow lawan dihapus setelah animasi');
+    eq(myScore(), 5, 'realtime classic: skor saya tidak berubah karena langkah pemain lain');
+
+    // Selesaikan sisa dengan urutan solver -> overlay Puzzle Complete
+    let cur = myState();
+    let guard = 0;
+    while (!arrow.isArrowPuzzleFinished(cur, ME) && guard++ < 50) {
+      const next = arrow.getMovableArrowIds(cur, ME)[0];
+      await tap(arrowEl(container, next));
+      await waitExits(container, 1500);
+      cur = myState();
     }
-    throw new Error('tidak ada kotak salah untuk diuji');
-  })();
+    ok(arrow.isArrowPuzzleFinished(cur, ME), 'classic: semua arrow keluar');
+    ok(cur.completed, 'classic: completed=true');
+    eq(arrowEls(container).length, 0, 'classic: papan kosong dari arrow');
+    await act(async () => {
+      await sleep(250);
+    });
+    ok(container.textContent.includes('Puzzle Complete'), 'classic: overlay Puzzle Complete tampil');
+    ok(!container.textContent.includes('GOAL'), 'classic: tidak ada teks GOAL saat selesai');
+    const totalRemovedByMe = state.arrows.length - 1; // satu dikeluarkan HOST
+    eq(myScore(), -5 + totalRemovedByMe * 10 + arrow.ARROW_TEAM_BONUS, 'classic: skor akhir = penalti + 10/arrow + bonus tim');
 
-  // ── Tap benar pertama: +10
-  await click(buttons, size, steps[0].row, steps[0].col);
-  ok(myScore() === 10, `tap benar pertama +10 (skor ${myScore()})`);
-  ok(myState().currentPath.length === 1, 'jejak bersama bertambah 1');
-  ok(
-    moves.length === 1 &&
-      moves[0].row === steps[0].row &&
-      moves[0].col === steps[0].col &&
-      moves[0].basePathLength === 0,
-    'mode Classic meneruskan tap ke pemain lain (sendArrowMove)'
-  );
-  ok(stats.length === 1 && stats[0].score === 10, 'skor disiarkan lewat player_stats');
-  ok(document.body.textContent.includes('Skor kamu: 10'), 'skor 10 tampil di UI');
-  console.log('  ✓ Classic: papan terender, tap benar +10, tap disiarkan realtime');
-
-  // ── Tiga tap salah beruntun: -5, -10, -20
-  await click(buttons, size, wrongCell.row, wrongCell.col);
-  ok(myScore() === 5, `salah #1 -5 (skor ${myScore()})`);
-  await click(buttons, size, wrongCell.row, wrongCell.col);
-  ok(myScore() === -5, `salah #2 -10 (skor ${myScore()})`);
-  await click(buttons, size, wrongCell.row, wrongCell.col);
-  ok(myScore() === -25, `salah #3 -20 (skor ${myScore()})`);
-  ok(
-    document.body.textContent.includes('Salah beruntun ×3'),
-    'peringatan salah beruntun ×3 tampil'
-  );
-  ok(document.body.textContent.includes('berikutnya -40'), 'ancaman penalti berikutnya -40 tampil');
-  console.log('  ✓ Classic: salah beruntun -5 → -10 → -20, UI menampilkan ancaman -40');
-
-  // ── Tap benar berikutnya: +10 dan streak kembali nol
-  await click(buttons, size, steps[1].row, steps[1].col);
-  ok(myScore() === -15, `tap benar setelah salah +10 (skor ${myScore()})`);
-  ok(myState().wrongStreak[ME] === 0, 'salah beruntun direset setelah tap benar');
-
-  await click(buttons, size, wrongCell.row, wrongCell.col);
-  ok(myScore() === -20, `salah pertama setelah reset kembali -5 (skor ${myScore()})`);
-  console.log('  ✓ Classic: tap benar mereset penalti ke -5');
-
-  // ── Tuntaskan sisa jalur
-  for (let i = 2; i < steps.length; i++) {
-    await click(buttons, size, steps[i].row, steps[i].col);
+    act(() => root.unmount());
   }
-  const finalScore = -20 + (steps.length - 2) * 10 + arrow.ARROW_TEAM_BONUS;
-  ok(myScore() === finalScore, `skor akhir ${finalScore} (dapat ${myScore()})`);
-  ok(myState().completed === true, 'puzzle Classic ditandai selesai');
-  ok(myState().winnerId === ME, 'winnerId = pemain penentu langkah terakhir');
-  ok(
-    document.body.textContent.includes('Puzzle Dituntaskan Bersama!'),
-    'overlay selesai tampil'
-  );
-  const afterDone = myScore();
-  await click(buttons, size, state.goal.row, state.goal.col);
-  ok(myScore() === afterDone, 'tap setelah selesai tidak mengubah skor');
-  console.log(`  ✓ Classic: ${steps.length} langkah tuntas, skor akhir ${finalScore} (+${arrow.ARROW_TEAM_BONUS} bonus tim)`);
 
   // ───────────────────────────────────────────────────────────────────────────
-  // 2. MODE COMPETITION — papan sendiri, tanpa broadcast langkah, ada peringkat
+  // 2. COMPETITION — papan sendiri, tidak mengirim langkah, isolasi dari lawan
   // ───────────────────────────────────────────────────────────────────────────
-  act(() => root.unmount());
-  seedRoom('competition', 'evil');
-  const compMoves = [];
-  const compRoot = mount('root-competition', {
-    sendArrowMove: (row, col, basePathLength) => compMoves.push({ row, col, basePathLength }),
-    broadcastPlayerStats: () => {},
-  });
+  {
+    seedRoom('competition', 'medium');
+    const moves = [];
+    const { root, container } = mount('root-comp', {
+      sendArrowMove: (arrowId, baseRevision) => moves.push({ arrowId, baseRevision }),
+      broadcastPlayerStats: () => {},
+    });
+    const state = myState();
+    const movable = arrow.getMovableArrowIds(state, ME);
+    await tap(arrowEl(container, movable[0]));
+    eq(moves.length, 0, 'competition: tap TIDAK dibroadcast sebagai arrow_move');
+    eq(myScore(), 10, 'competition: +10');
+    eq(arrow.getRemovedArrowIds(myState(), HOST).length, 0, 'competition: papan lawan tidak terpengaruh');
+    eq(myState().removedArrowIds.length, 0, 'competition: removedArrowIds bersama kosong');
+    ok(arrowEl(container, movable[0], 'exiting'), 'competition: animasi keluar');
+    await waitExits(container, 1500);
 
-  const compState = myState();
-  ok(compState.size === arrow.ARROW_DIFFICULTY.evil.size, `papan evil berukuran ${compState.size}×${compState.size}`);
-  ok(gridButtons('root-competition').length === compState.size ** 2, 'papan evil merender semua kotak');
-  ok(
-    document.body.textContent.includes('Arrow Competition (Papan Sendiri)'),
-    'badge mode Arrow Competition tampil'
-  );
-  ok(document.body.textContent.includes('Papan Peringkat'), 'papan peringkat tampil');
+    // Simulasi lawan menyelesaikan papannya: papan saya tidak berubah
+    let s = myState();
+    const solved = arrow.solveArrowPuzzle(s.arrows, s.size);
+    for (const id of solved) s = arrow.applyArrowMove(s, HOST, id, 'HOST').state;
+    await act(async () => {
+      useGameStore.getState().replaceAllArrowPuzzleState(s);
+    });
+    eq(arrowEls(container, 'idle').length, state.arrows.length - 1, 'competition: langkah lawan tidak menghapus arrow di papan saya');
+    ok(!container.textContent.includes('Puzzle Complete'), 'competition: overlay tidak muncul karena lawan selesai');
 
-  const compSteps = compState.solutionPath.slice(1);
-  const compButtons = gridButtons('root-competition');
-  const firstWrong = (() => {
-    for (let r = 0; r < compState.size; r++) {
-      for (let c = 0; c < compState.size; c++) {
-        if (compState.arrows[r][c] === null) continue;
-        if (r === 0 && c === 0) continue;
-        if (compSteps[0].row === r && compSteps[0].col === c) continue;
-        return { row: r, col: c };
-      }
+    act(() => root.unmount());
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 3. AUTO / ALL — menyelesaikan puzzle otomatis satu per satu
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    seedRoom('competition', 'easy');
+    const { root, container } = mount('root-auto', { broadcastPlayerStats: () => {} });
+    const total = myState().arrows.length;
+    const autoBtn = container.querySelector('[data-testid="arrow-auto"]');
+    const allBtn = container.querySelector('[data-testid="arrow-all"]');
+    ok(autoBtn && allBtn, 'tombol Auto & All tersedia');
+
+    await act(async () => {
+      autoBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    eq(arrow.getRemovedArrowIds(myState(), ME).length, 1, 'Auto: mengeluarkan tepat satu arrow');
+    eq(myScore(), 0, 'Auto: tanpa poin');
+    eq(arrowEls(container, 'exiting').length, 1, 'Auto: satu arrow beranimasi');
+    ok(autoBtn.disabled && allBtn.disabled, 'Auto: tombol terkunci selama animasi');
+    await waitExits(container, 1500);
+    await act(async () => {
+      await sleep(550);
+    });
+    ok(!container.querySelector('[data-testid="arrow-all"]').disabled, 'Auto: tombol terbuka lagi setelah animasi');
+
+    await act(async () => {
+      container.querySelector('[data-testid="arrow-all"]').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    // All berjalan bertahap (satu per satu), bukan sekaligus
+    ok(arrow.getRemovedArrowIds(myState(), ME).length < total, 'All: tidak teleport semua arrow sekaligus');
+    const start = Date.now();
+    while (!arrow.isArrowPuzzleFinished(myState(), ME) && Date.now() - start < 8000) {
+      await act(async () => {
+        await sleep(60);
+      });
     }
-    throw new Error('tidak ada kotak salah');
-  })();
+    ok(arrow.isArrowPuzzleFinished(myState(), ME), 'All: puzzle selesai');
+    await waitExits(container, 2000);
+    await act(async () => {
+      await sleep(300);
+    });
+    eq(arrowEls(container).length, 0, 'All: semua arrow hilang dari papan');
+    ok(container.textContent.includes('Puzzle Complete'), 'All: overlay Puzzle Complete');
 
-  await click(compButtons, compState.size, firstWrong.row, firstWrong.col);
-  ok(myScore() === -5, `competition: salah pertama -5 (skor ${myScore()})`);
-  ok(compMoves.length === 0, 'competition TIDAK menyiarkan tap ke pemain lain (papan terisolasi)');
-
-  for (let i = 0; i < compSteps.length; i++) {
-    await click(compButtons, compState.size, compSteps[i].row, compSteps[i].col);
+    act(() => root.unmount());
   }
-  const compScore = -5 + compSteps.length * 10 + 100;
-  ok(myScore() === compScore, `competition: skor akhir ${compScore} (dapat ${myScore()})`);
-  ok(useGameStore.getState().room.players[ME].rank === 1, 'competition: finis pertama -> peringkat 1');
-  ok(arrow.isArrowPuzzleFinished(myState(), ME), 'competition: puzzle selesai');
-  ok(document.body.textContent.includes('Kamu Mencapai GOAL!'), 'overlay selesai competition tampil');
-  ok(document.body.textContent.includes('🥇'), 'medali juara 1 tampil di papan peringkat');
-  console.log(`  ✓ Competition: papan ${compState.size}×${compState.size} sendiri, salah -5, finis juara 1 dengan skor ${compScore}`);
-
-  act(() => compRoot.unmount());
 
   // ───────────────────────────────────────────────────────────────────────────
-  // 3. REGRESI: "Papan Baru" tidak boleh ditimpa ulang oleh effect inisialisasi
-  //    (dulu: setiap update room memicu effect dan mengembalikan papan seed)
+  // 4. State format lama (START/GOAL) ditolak store
   // ───────────────────────────────────────────────────────────────────────────
-  seedRoom('classic', 'medium');
-  const broadcasts = [];
-  const root3 = mount('host-classic-3', {
-    sendArrowMove: () => {},
-    broadcastPlayerStats: () => {},
-    broadcastArrowPuzzleState: (st) => broadcasts.push(st.boardId),
-  });
+  {
+    seedRoom('classic', 'easy');
+    const before = myState();
+    useGameStore.getState().replaceAllArrowPuzzleState({
+      boardId: 'legacy', seed: 'x', size: 5, arrows: [[0, 1], [null, 2]],
+      start: { row: 0, col: 0 }, goal: { row: 1, col: 1 }, solutionPath: [], revision: 999,
+    });
+    ok(myState() === before, 'store menolak snapshot maze lama');
+  }
 
-  const seededBoard = myState();
-  const seededSeed = seededBoard.seed;
-  const newBoardBtn = Array.from(document.querySelectorAll('#host-classic-3 button')).find((b) =>
-    b.textContent.includes('Papan Baru')
-  );
-  ok(Boolean(newBoardBtn), 'tombol Papan Baru tersedia untuk host');
-
-  await act(async () => {
-    newBoardBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
-  });
-
-  const manualBoard = myState();
-  ok(manualBoard.boardId !== seededBoard.boardId, 'Papan Baru menghasilkan boardId berbeda');
-  ok(manualBoard.seed !== seededSeed, 'Papan Baru memakai seed manual (bukan seed ronde)');
-  ok(broadcasts.length >= 1, 'host menyiarkan papan baru ke pemain lain');
-
-  // Main satu langkah -> updatePlayer membuat objek room baru -> effect init jalan lagi.
-  const step1 = manualBoard.solutionPath[1];
-  await click(gridButtons('host-classic-3'), manualBoard.size, step1.row, step1.col);
-  ok(myState().boardId === manualBoard.boardId, 'papan manual TIDAK ditimpa papan seed setelah ada update room');
-  ok(myState().currentPath.length === 1, 'langkah di papan manual tetap tersimpan');
-  console.log('  ✓ Regresi: Papan Baru bertahan setelah update room (tidak ditimpa seed)');
-
-  act(() => root3.unmount());
-
-  console.log(`\nSEMUA LOLOS — ${checks} assertions UI (komponen asli dirender di jsdom).`);
+  console.log(`\n✅ verify-arrow-ui: ${checks} pemeriksaan lulus`);
+  process.exit(0);
 })().catch((err) => {
-  console.error(err);
+  console.error('❌ verify-arrow-ui gagal:', err);
   process.exit(1);
 });

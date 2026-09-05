@@ -147,7 +147,7 @@ export interface TicTacToeState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Arrow Puzzle Master Types
+// Arrow Puzzle Master Types — ARROW REMOVAL PUZZLE
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -164,38 +164,47 @@ export interface ArrowCoord {
 /** Varian permainan di dalam Arrow Puzzle Master. */
 export type ArrowPuzzleVariant = 'classic' | 'competition';
 
+/**
+ * Satu objek arrow di papan: jalur (track) berbentuk garis/siku yang ujungnya
+ * memiliki kepala panah. Arrow bergerak sebagai satu benda kaku ke arah
+ * `direction` dan hanya boleh keluar bila seluruh lintasannya bebas.
+ */
+export interface ArrowObject {
+  id: string;
+  /** Sel-sel yang ditempati, berurutan dari EKOR ke KEPALA (kepala = elemen terakhir). */
+  cells: ArrowCoord[];
+  /** Arah keluar (arah yang ditunjuk kepala panah). */
+  direction: ArrowDirection;
+}
+
 export interface ArrowPuzzleState {
   /** Identitas papan — berbeda tiap puzzle baru supaya state lama tidak dianggap "lebih baru". */
   boardId: string;
   /** Kunci deterministik: seed yang sama menghasilkan puzzle yang sama (dipakai mode Competition). */
   seed: string;
+  /** Papan persegi `size` × `size` sel. */
   size: number;
-  /** Panah tiap sel. `null` = tembok / sel tertutup yang tidak bisa dimasuki. */
-  arrows: (ArrowDirection | null)[][];
-  start: ArrowCoord;
-  goal: ArrowCoord;
-  /** Satu-satunya jalur sah START -> GOAL (dipakai untuk menilai tap benar/salah). */
-  solutionPath: ArrowCoord[];
+  /** Semua arrow di puzzle (tidak berubah selama ronde; yang keluar dicatat di removed*). */
+  arrows: ArrowObject[];
   variant: ArrowPuzzleVariant;
   difficulty: Difficulty;
 
-  /** CLASSIC (ko-op): satu jejak bersama, semua pemain maju bareng secara realtime. */
-  currentPath: ArrowCoord[];
-  /** COMPETITION: jejak tiap pemain (papan terpisah, tidak saling bocor). */
-  playerPaths: Record<string, ArrowCoord[]>;
-  /** Jumlah tap salah beruntun per pemain -> penalti 5, 10, 20, 40, ... (kelipatan 2x). */
+  /** CLASSIC (ko-op): satu papan bersama — id arrow yang sudah keluar. */
+  removedArrowIds: string[];
+  /** COMPETITION: papan tiap pemain terpisah — id arrow yang sudah keluar per pemain. */
+  playerRemoved: Record<string, string[]>;
+  /** Jumlah tap terhalang beruntun per pemain -> penalti 5, 10, 20, 40, ... */
   wrongStreak: Record<string, number>;
-  /** Pemain yang menyelesaikan puzzle (Classic: penentu langkah terakhir). */
+  /** Pemain yang menuntaskan puzzle (Classic: pengetuk arrow terakhir). */
   winnerId: string | null;
   /** Urutan pemain yang finis (Competition: Juara 1, 2, 3, dst). */
   winners: string[];
-  /** Classic: puzzle sudah dituntaskan bersama. */
+  /** Classic: semua arrow sudah keluar. */
   completed: boolean;
 
   revision: number;
   lastMove?: {
-    row: number;
-    col: number;
+    arrowId: string;
     userId: string;
     username: string;
     correct: boolean;

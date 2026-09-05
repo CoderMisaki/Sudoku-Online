@@ -394,7 +394,7 @@ export default function Home() {
             )}
             {mode === 'arrow_competition' && (
               <p className="text-[11px] text-secondary mt-1">
-                * Arrow Competition: tiap pemain dapat papan sendiri, adu cepat menuju GOAL
+                * Arrow Competition: tiap pemain dapat papan sendiri, adu cepat mengeluarkan semua arrow
                 seperti Sudoku Competition.
               </p>
             )}

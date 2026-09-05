@@ -6,7 +6,7 @@ import { RealtimeChannel } from '@supabase/supabase-js';
 import { getOrCreateUserId } from '../utils/uuid';
 import { getStoredAvatar, isSafeDataUrl } from '../utils/avatar';
 import { areSnakesLayoutsEqual } from '../utils/snakesAndLaddersData';
-import { applyArrowMove, getArrowProgress, ARROW_TEAM_BONUS } from '../utils/arrowPuzzle';
+import { applyArrowMove, getArrowProgress, ARROW_TEAM_BONUS, isValidArrowPuzzleState } from '../utils/arrowPuzzle';
 import toast from 'react-hot-toast';
 
 const PLAYER_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
@@ -418,7 +418,7 @@ export function useRealtime(roomId: string) {
         if (payload.ticTacToeState) {
           store.replaceAllTicTacToeState(payload.ticTacToeState as TicTacToeState);
         }
-        if (payload.arrowPuzzleState) {
+        if (payload.arrowPuzzleState && isValidArrowPuzzleState(payload.arrowPuzzleState)) {
           store.replaceAllArrowPuzzleState(payload.arrowPuzzleState as ArrowPuzzleState);
           lastArrowStateAtRef.current = Date.now();
         }
@@ -502,7 +502,7 @@ export function useRealtime(roomId: string) {
           store.replaceAllSnakesState(payload.snakesState as SnakesState);
         } else if (payload.room?.mode === 'tic_tac_toe' && payload.ticTacToeState) {
           store.replaceAllTicTacToeState(payload.ticTacToeState as TicTacToeState);
-        } else if (payload.room?.mode === 'arrow_classic' && payload.arrowPuzzleState) {
+        } else if (payload.room?.mode === 'arrow_classic' && isValidArrowPuzzleState(payload.arrowPuzzleState)) {
           store.replaceAllArrowPuzzleState(payload.arrowPuzzleState as ArrowPuzzleState);
           lastArrowStateAtRef.current = Date.now();
         } else if (payload.room?.mode === 'arrow_competition') {
@@ -556,7 +556,7 @@ export function useRealtime(roomId: string) {
         }
       })
       .on('broadcast', { event: 'arrow_puzzle_state_update' }, ({ payload }) => {
-        if (!payload?.arrowPuzzleState) return;
+        if (!payload?.arrowPuzzleState || !isValidArrowPuzzleState(payload.arrowPuzzleState)) return;
         const incoming = payload.arrowPuzzleState as ArrowPuzzleState;
         const current = useGameStore.getState().arrowPuzzleState;
         if (incoming.boardId && current?.boardId && incoming.boardId !== current.boardId) {
@@ -574,19 +574,22 @@ export function useRealtime(roomId: string) {
         const actorId = typeof payload?.userId === 'string' ? payload.userId : '';
         if (!current || !actorId || actorId === userIdRef.current) return;
 
-        const row = Number(payload?.row);
-        const col = Number(payload?.col);
-        if (!Number.isInteger(row) || !Number.isInteger(col)) return;
-        if (row < 0 || row >= current.size || col < 0 || col >= current.size) return;
+        const arrowId = typeof payload?.arrowId === 'string' ? payload.arrowId : '';
+        if (!arrowId || !current.arrows.some((a) => a.id === arrowId)) {
+          // Arrow tidak dikenal -> papan lokal mungkin beda/basi, minta snapshot host.
+          requestState();
+          return;
+        }
 
-        // Jejak lokal tidak sinkron dengan pengirim -> minta snapshot host.
-        if (typeof payload?.basePathLength === 'number' && payload.basePathLength !== current.currentPath.length) {
+        // Revisi lokal tidak sinkron dengan pengirim -> minta snapshot host, tapi tetap
+        // terapkan langkahnya bila masih valid supaya animasi keluar terlihat realtime.
+        if (typeof payload?.baseRevision === 'number' && payload.baseRevision !== current.revision) {
           requestState();
         }
 
         const actorName = store.room?.players[actorId]?.username || 'Pemain';
         // Setiap client menilai langkah dari papan yang sama, jadi hasilnya identik.
-        const result = applyArrowMove(current, actorId, { row, col }, actorName);
+        const result = applyArrowMove(current, actorId, arrowId, actorName);
         if (result.state !== current) {
           store.replaceAllArrowPuzzleState(result.state);
           useGameStore.getState().updatePlayer(actorId, {
@@ -607,21 +610,15 @@ export function useRealtime(roomId: string) {
             event: 'player_stats',
             payload: { userId: me, score: myScore, progress: myProgress, rank: myPlayer?.rank ?? null },
           });
-          toast.success(`Puzzle tuntas bersama! Bonus tim +${ARROW_TEAM_BONUS}`, {
+          toast.success(`Puzzle Complete! Bonus tim +${ARROW_TEAM_BONUS}`, {
             duration: 2600,
             icon: '🤝',
           });
         }
 
         if (result.correct) {
-          toast.success(`${actorName}: Langkah benar (+10)`, {
-            duration: 1400,
-            position: 'top-center',
-            id: `arrow-${actorId}-${payload?.ts ?? Date.now()}`,
-          });
-        } else {
-          toast.error(`${actorName}: ${result.reason} (${-result.penalty})`, {
-            duration: 1600,
+          toast.success(`${actorName} mengeluarkan arrow (+10)`, {
+            duration: 1200,
             position: 'top-center',
             id: `arrow-${actorId}-${payload?.ts ?? Date.now()}`,
           });
@@ -1048,16 +1045,16 @@ export function useRealtime(roomId: string) {
   }, []);
 
   /**
-   * Kirim satu tap pemain Arrow (mode Classic). Penerima menilai sendiri dari
+   * Kirim satu tap arrow (mode Classic). Penerima menilai sendiri dari
    * papan bersama sehingga semua client sampai pada hasil yang sama.
    */
   const sendArrowMove = useCallback(
-    (row: number, col: number, basePathLength: number) => {
+    (arrowId: string, baseRevision: number) => {
       const currentUid = userIdRef.current || getOrCreateUserId();
       channelRef.current?.send({
         type: 'broadcast',
         event: 'arrow_move',
-        payload: { userId: currentUid, row, col, basePathLength, ts: Date.now() },
+        payload: { userId: currentUid, arrowId, baseRevision, ts: Date.now() },
       });
     },
     []
