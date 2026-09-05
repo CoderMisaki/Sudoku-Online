@@ -47,13 +47,14 @@ export function generateInitialSnakesState(
   difficulty: Difficulty = 'medium',
   activePlayerIds: string[] = []
 ): SnakesState {
-  const counts = {
+  const countsMap: Record<string, { ladders: number; snakes: number; mines: number; wormholes: number }> = {
     easy: { ladders: 6, snakes: 4, mines: 2, wormholes: 1 },
     medium: { ladders: 6, snakes: 6, mines: 3, wormholes: 2 },
     hard: { ladders: 5, snakes: 8, mines: 5, wormholes: 2 },
     expert: { ladders: 4, snakes: 10, mines: 6, wormholes: 3 },
     evil: { ladders: 3, snakes: 12, mines: 8, wormholes: 3 },
-  }[difficulty] || { ladders: 6, snakes: 6, mines: 3, wormholes: 2 };
+  };
+  const counts = countsMap[difficulty] || { ladders: 6, snakes: 6, mines: 3, wormholes: 2 };
 
   const ladders: LadderItem[] = [];
   const snakes: SnakeItem[] = [];
@@ -121,9 +122,6 @@ export function generateInitialSnakesState(
   });
 
   return {
-    // Unique per generated board: receivers can tell a NEW board apart from a
-    // stale snapshot of the board they already have (ordering within a board
-    // stays revision-based).
     boardId: generateUUID(),
     diceValue: null,
     playerPositions: initialPositions,
@@ -150,9 +148,8 @@ export function relocateTriggeredItem(
   const wormholes = [...(currentState.wormholes || [])];
   let mines = [...(currentState.mines || [])];
 
-  // Kumpulkan petak yang sudah terisi agar tidak tumpang tindih
   const getOccupiedTiles = (excludeType?: string, excludeId?: string | number) => {
-    const occupied = new Set<number>([1, 100]); // Petak start dan finish dilarang
+    const occupied = new Set<number>([1, 100]);
 
     snakes.forEach((s) => {
       if (excludeType !== 'snake' || s.id !== excludeId) {
@@ -193,7 +190,6 @@ export function relocateTriggeredItem(
     return candidates[Math.floor(Math.random() * candidates.length)];
   };
 
-  // 1. Hanya ular yang terinjak yang berpindah
   if (type === 'snake') {
     const idx = snakes.findIndex((s) => s.id === itemIdOrPos);
     if (idx !== -1) {
@@ -206,7 +202,6 @@ export function relocateTriggeredItem(
     }
   }
 
-  // 2. Hanya tangga yang dipanjat yang berpindah
   if (type === 'ladder') {
     const idx = ladders.findIndex((l) => l.id === itemIdOrPos);
     if (idx !== -1) {
@@ -219,7 +214,6 @@ export function relocateTriggeredItem(
     }
   }
 
-  // 3. Hanya wormhole (Blackhole / Whitehole) yang dimasuki yang berpindah
   if (type === 'wormhole') {
     const idx = wormholes.findIndex((w) => w.id === itemIdOrPos);
     if (idx !== -1) {
@@ -232,7 +226,6 @@ export function relocateTriggeredItem(
     }
   }
 
-  // 4. Hanya ranjau yang terinjak yang berpindah
   if (type === 'mine') {
     const occupied = getOccupiedTiles('mine', itemIdOrPos);
     const newMinePos = getRandomAvailableTile(5, 95, occupied);
@@ -247,7 +240,6 @@ export function areSnakesLayoutsEqual(a?: SnakesState | null, b?: SnakesState | 
   if (!a || !b) return a === b;
   if (a.boardId && b.boardId && a.boardId !== b.boardId) return false;
 
-  // Compare Ladders
   const aLadders = a.ladders || [];
   const bLadders = b.ladders || [];
   if (aLadders.length !== bLadders.length) return false;
@@ -255,7 +247,6 @@ export function areSnakesLayoutsEqual(a?: SnakesState | null, b?: SnakesState | 
     if (aLadders[i].start !== bLadders[i].start || aLadders[i].end !== bLadders[i].end) return false;
   }
 
-  // Compare Snakes
   const aSnakes = a.snakes || [];
   const bSnakes = b.snakes || [];
   if (aSnakes.length !== bSnakes.length) return false;
@@ -263,7 +254,6 @@ export function areSnakesLayoutsEqual(a?: SnakesState | null, b?: SnakesState | 
     if (aSnakes[i].head !== bSnakes[i].head || aSnakes[i].tail !== bSnakes[i].tail) return false;
   }
 
-  // Compare Mines
   const aMines = a.mines || [];
   const bMines = b.mines || [];
   if (aMines.length !== bMines.length) return false;
@@ -271,7 +261,6 @@ export function areSnakesLayoutsEqual(a?: SnakesState | null, b?: SnakesState | 
     if (aMines[i] !== bMines[i]) return false;
   }
 
-  // Compare Wormholes
   const aWormholes = a.wormholes || [];
   const bWormholes = b.wormholes || [];
   if (aWormholes.length !== bWormholes.length) return false;
@@ -281,4 +270,3 @@ export function areSnakesLayoutsEqual(a?: SnakesState | null, b?: SnakesState | 
 
   return true;
 }
-

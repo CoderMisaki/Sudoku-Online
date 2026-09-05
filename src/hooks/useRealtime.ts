@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
-import { ChatMessage, Grid, RoomState, SnakesState, Player } from '../types/game';
+import { ChatMessage, Grid, RoomState, SnakesState, TicTacToeState, Player } from '../types/game';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getOrCreateUserId } from '../utils/uuid';
 import { getStoredAvatar, isSafeDataUrl } from '../utils/avatar';
@@ -31,11 +31,13 @@ export function useRealtime(roomId: string) {
   const username = useGameStore((state) => state.username);
   const grid = useGameStore((state) => state.grid);
   const snakesState = useGameStore((state) => state.snakesState);
+  const ticTacToeState = useGameStore((state) => state.ticTacToeState);
 
   const userIdRef = useRef(userId);
   const usernameRef = useRef(username);
   const prevGridRef = useRef(grid);
   const prevSnakesStateRef = useRef(snakesState);
+  const prevTicTacToeStateRef = useRef(ticTacToeState);
 
   useEffect(() => {
     userIdRef.current = userId;
@@ -131,6 +133,7 @@ export function useRealtime(roomId: string) {
       grid: isCompetition ? null : store.grid,
       solutionToken: isCompetition ? null : store.solutionToken,
       snakesState: store.snakesState,
+      ticTacToeState: store.ticTacToeState,
       messages: store.messages,
       senderId,
     };
@@ -182,8 +185,9 @@ export function useRealtime(roomId: string) {
     ) {
       const isGridJustReady = Boolean(grid && !prevGridRef.current && store.solutionToken);
       const isSnakesJustReady = Boolean(snakesState && !prevSnakesStateRef.current);
+      const isTicTacToeJustReady = Boolean(ticTacToeState && !prevTicTacToeStateRef.current);
 
-      if (isGridJustReady || isSnakesJustReady) {
+      if (isGridJustReady || isSnakesJustReady || isTicTacToeJustReady) {
         addLog(`[Host Broadcast] Membagikan puzzle/state ke semua player.`);
 
         channelRef.current.send({
@@ -198,7 +202,8 @@ export function useRealtime(roomId: string) {
 
     prevGridRef.current = grid;
     prevSnakesStateRef.current = snakesState;
-  }, [grid, snakesState, addLog, buildSyncPayload]);
+    prevTicTacToeStateRef.current = ticTacToeState;
+  }, [grid, snakesState, ticTacToeState, addLog, buildSyncPayload]);
 
   const connectChannel = useCallback(() => {
     const currentUserId = userIdRef.current || (typeof window !== 'undefined' ? getOrCreateUserId() : '');
@@ -221,7 +226,13 @@ export function useRealtime(roomId: string) {
     if (offlineTimeoutRef.current) clearTimeout(offlineTimeoutRef.current);
     offlineTimeoutRef.current = setTimeout(() => {
       const currentState = useGameStore.getState();
-      const hasBoard = currentState.room?.mode === 'snakes_and_ladders' ? Boolean(currentState.snakesState) : Boolean(currentState.grid);
+      const hasBoard =
+        currentState.room?.mode === 'snakes_and_ladders'
+          ? Boolean(currentState.snakesState)
+          : currentState.room?.mode === 'tic_tac_toe'
+          ? Boolean(currentState.ticTacToeState)
+          : Boolean(currentState.grid);
+
       if (!hasBoard && typeof navigator !== 'undefined' && !navigator.onLine) {
         setIsTrulyOffline(true);
         setConnectionError('Room offline atau Host tidak aktif.');
@@ -391,6 +402,9 @@ export function useRealtime(roomId: string) {
           store.replaceAllSnakesState(payload.snakesState as SnakesState);
           lastSnakesStateAtRef.current = Date.now();
         }
+        if (payload.ticTacToeState) {
+          store.replaceAllTicTacToeState(payload.ticTacToeState as TicTacToeState);
+        }
         if (payload.messages && Array.isArray(payload.messages)) {
           // Dedupe by id — sync_state can arrive repeatedly (reconciliation,
           // reconnects) and must not duplicate chat history.
@@ -469,24 +483,20 @@ export function useRealtime(roomId: string) {
           // New game state is authoritative (host-generated, revision may reset to 1):
           // adopt wholesale so old higher revisions cannot reject it.
           store.replaceAllSnakesState(payload.snakesState as SnakesState);
+        } else if (payload.room?.mode === 'tic_tac_toe' && payload.ticTacToeState) {
+          store.replaceAllTicTacToeState(payload.ticTacToeState as TicTacToeState);
         } else if (payload.room?.mode === 'competition') {
           // Kosongkan grid lama agar memicu pengambilan puzzle baru.
-          // setGameData(null, null) memanggil checkConflicts(null) yang CRASH,
-          // sehingga dulu grid guest tidak pernah ter-reset (hanya host yang
-          // reset). Pakai clearGameData yang aman.
           store.clearGameData();
         } else if (payload.initialGrid && payload.solutionToken) {
           store.startNextGame(payload.initialGrid, payload.solutionToken);
         }
       })
       .on('broadcast', { event: 'snakes_dice_roll' }, ({ payload }) => {
-        // LEGACY compat event. The authoritative path is `snakes_state_update`
-        // (full state + revision). This handler must never overwrite newer
-        // authoritative state: only apply when idle and provably newer.
         const cur = useGameStore.getState().snakesState;
         if (!cur) return;
         if (typeof payload.revision === 'number' && payload.revision <= cur.revision) return;
-        if (cur.isAnimating) return; // never clobber an in-flight move
+        if (cur.isAnimating) return;
         useGameStore.getState().updateSnakesState({
           diceValue: payload.diceValue,
           playerPositions: {
@@ -511,10 +521,18 @@ export function useRealtime(roomId: string) {
           lastSnakesStateAtRef.current = Date.now();
         }
       })
+      .on('broadcast', { event: 'tic_tac_toe_state_update' }, ({ payload }) => {
+        if (payload.ticTacToeState) {
+          const incoming = payload.ticTacToeState as TicTacToeState;
+          const current = useGameStore.getState().ticTacToeState;
+          if (incoming.boardId && current?.boardId && incoming.boardId !== current.boardId) {
+            useGameStore.getState().replaceAllTicTacToeState(incoming);
+          } else {
+            useGameStore.getState().updateTicTacToeState(incoming);
+          }
+        }
+      })
       .on('broadcast', { event: 'player_stats' }, ({ payload }) => {
-        // Skor/progress otoritatif dari pemiliknya sendiri. Dipakai terutama di
-        // mode competition (papan terisolasi, jadi peer tidak bisa menghitung
-        // sendiri), tapi juga menjaga leaderboard mode lain tetap konsisten.
         const { userId: pid, score, progress, rank } = (payload ?? {}) as {
           userId?: string; score?: unknown; progress?: unknown; rank?: unknown;
         };
@@ -531,7 +549,6 @@ export function useRealtime(roomId: string) {
         useGameStore.getState().updatePlayer(pid, patch);
       })
       .on('broadcast', { event: 'player_profile_update' }, ({ payload }) => {
-        // { playerId, username?, avatar? } — username is mutable, playerId is identity.
         const { playerId, username, avatar } = (payload ?? {}) as {
           playerId?: string;
           username?: unknown;
@@ -550,14 +567,12 @@ export function useRealtime(roomId: string) {
           addLog(`[Profile] Rejected poisoned avatar from ${playerId}`);
         }
         if (Object.keys(patch).length === 0) return;
-        // Loop-safe: receivers only update the local store, never rebroadcast.
         useGameStore.getState().updatePlayer(playerId, patch);
         addLog(`[Profile] Update profil dari ${playerId}`);
       })
       .on('broadcast', { event: 'player_avatar_update' }, ({ payload }) => {
         const { playerId, avatar } = payload as { playerId: string; avatar: unknown };
         if (!playerId) return;
-        // Security: validate broadcast avatar (untrusted)
         let safe: string | null | undefined = undefined;
         if (avatar === null) safe = null;
         else if (typeof avatar === 'string' && isSafeDataUrl(avatar)) safe = avatar;
@@ -565,7 +580,6 @@ export function useRealtime(roomId: string) {
           addLog(`[Avatar] Rejected poisoned avatar from ${playerId}`);
           return;
         }
-        // Prevent loop: only update remote, local already has it
         useGameStore.getState().updatePlayer(playerId, { avatar: safe });
         addLog(`[Avatar] Update avatar dari ${playerId}`);
       })
@@ -597,6 +611,8 @@ export function useRealtime(roomId: string) {
           const hasBoard =
             store.room?.mode === 'snakes_and_ladders'
               ? Boolean(store.snakesState)
+              : store.room?.mode === 'tic_tac_toe'
+              ? Boolean(store.ticTacToeState)
               : Boolean(store.grid);
 
           const isHost = Boolean(store.room && store.room.hostId === currentUserId);
@@ -613,11 +629,6 @@ export function useRealtime(roomId: string) {
             });
           }
 
-          // ALWAYS reconcile on (re)connect — even if we already have a board.
-          // A persisted/local board can be stale (old game, higher revision) and
-          // would reject every host update forever; the host's full sync_state
-          // snapshot is adopted wholesale (replaceAll) so obstacle layout,
-          // positions and turn converge to the authoritative board.
           requestState();
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -634,9 +645,6 @@ export function useRealtime(roomId: string) {
     connectChannel();
 
     const handleSmartReconnect = (e?: Event) => {
-      // Rebuild channel memicu presence leave+join yang membuat status player
-      // sempat terlihat "Disconnect" di layar pemain lain, jadi focus/visibility
-      // di-skip kalau channel masih sehat. Event 'online' selalu rebuild.
       const isOnlineEvent = e?.type === 'online';
       if (!isOnlineEvent && statusRef.current === 'SUBSCRIBED' && navigator.onLine) return;
       if (document.visibilityState === 'visible' || navigator.onLine) {
@@ -655,6 +663,8 @@ export function useRealtime(roomId: string) {
       const hasBoard =
         store.room?.mode === 'snakes_and_ladders'
           ? Boolean(store.snakesState)
+          : store.room?.mode === 'tic_tac_toe'
+          ? Boolean(store.ticTacToeState)
           : Boolean(store.grid);
 
       if (!hasBoard && statusRef.current === 'SUBSCRIBED') {
@@ -722,8 +732,6 @@ export function useRealtime(roomId: string) {
       const token = store.solutionToken;
       if (!token) return;
 
-      // OPTIMISTIC RENDER: paint the digit immediately so typing feels instant.
-      // The server verdict arrives a moment later and reconciles the cell.
       store.setOptimisticMove(row, col, value);
 
       try {
@@ -738,7 +746,7 @@ export function useRealtime(roomId: string) {
         const latest = useGameStore.getState();
         latest.updateCellWithValidation(row, col, value, currentUid, isCorrect);
 
-        if (latest.room?.mode !== 'snakes_and_ladders') {
+        if (latest.room?.mode !== 'snakes_and_ladders' && latest.room?.mode !== 'tic_tac_toe') {
           triggerAnswerToast(currentUname, isCorrect);
         }
 
@@ -748,9 +756,6 @@ export function useRealtime(roomId: string) {
           payload: { row, col, value, userId: currentUid, isCorrect },
         });
 
-        // Selalu siarkan skor/progress milik sendiri supaya leaderboard hidup di
-        // semua mode — termasuk competition, di mana peer tidak boleh melihat
-        // papan kita tapi tetap harus melihat skornya.
         const me = useGameStore.getState().room?.players[currentUid];
         if (me) {
           channelRef.current?.send({
@@ -766,7 +771,6 @@ export function useRealtime(roomId: string) {
         }
       } catch (err) {
         console.error('Failed to verify move:', err);
-        // Roll the optimistic digit back so the board never lies.
         useGameStore.getState().updateCellWithValidation(row, col, null, currentUid, false);
         toast.error('Gagal memverifikasi jawaban. Coba lagi.');
       }
@@ -825,7 +829,8 @@ export function useRealtime(roomId: string) {
       initialGrid: Grid | null,
       solutionToken: string | null,
       updatedRoom?: RoomState,
-      snakesState?: SnakesState | null
+      snakesState?: SnakesState | null,
+      ticTacToeState?: TicTacToeState | null
     ) => {
       if (channelRef.current && statusRef.current === 'SUBSCRIBED') {
         channelRef.current.send({
@@ -836,6 +841,7 @@ export function useRealtime(roomId: string) {
             solutionToken,
             room: updatedRoom,
             snakesState,
+            ticTacToeState,
           },
         });
       }
@@ -846,7 +852,6 @@ export function useRealtime(roomId: string) {
   const broadcastLeaveRoom = useCallback(async () => {
     const currentUid = userIdRef.current || getOrCreateUserId();
     useGameStore.getState().updatePlayer(currentUid, { status: 'left' });
-    // Kirim broadcast tanpa await ack (fire-and-forget) untuk near-no-delay
     try {
       channelRef.current?.send({
         type: 'broadcast',
@@ -854,7 +859,6 @@ export function useRealtime(roomId: string) {
         payload: { userId: currentUid },
       });
     } catch {}
-    // Beri jeda singkat agar broadcast sempat terkirim sebelum untrack
     await new Promise((r) => setTimeout(r, 150));
     if (channelRef.current) {
       try {
@@ -879,7 +883,6 @@ export function useRealtime(roomId: string) {
         nextTurnUserId,
         hasWon,
         userId: currentUid,
-        // Include current revision so receivers can order this legacy event
         revision: useGameStore.getState().snakesState?.revision,
       },
     });
@@ -892,7 +895,6 @@ export function useRealtime(roomId: string) {
     } else {
       useGameStore.getState().updateSnakesState(newState);
     }
-    // Fire-and-forget: menunggu ack menambah ~1 RTT sebelum peer melihat langkah.
     channelRef.current?.send({
       type: 'broadcast',
       event: 'snakes_state_update',
@@ -900,12 +902,20 @@ export function useRealtime(roomId: string) {
     });
   }, []);
 
-  /**
-   * Unified profile update: playerId = stable identity, username/avatar = mutable.
-   * Updates local player, room presence (untrack+track), and broadcasts
-   * `player_profile_update` so every client patches the SAME playerId in place —
-   * no new player record, no userId change, no game/turn/position reset.
-   */
+  const broadcastTicTacToeState = useCallback((newState: TicTacToeState) => {
+    const current = useGameStore.getState().ticTacToeState;
+    if (newState.boardId && current?.boardId && newState.boardId !== current.boardId) {
+      useGameStore.getState().replaceAllTicTacToeState(newState);
+    } else {
+      useGameStore.getState().updateTicTacToeState(newState);
+    }
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'tic_tac_toe_state_update',
+      payload: { ticTacToeState: newState, sentAt: Date.now() },
+    });
+  }, []);
+
   const broadcastProfileUpdate = useCallback(
     (profile: { username?: string; avatar?: string | null }) => {
       const currentUid = userIdRef.current || getOrCreateUserId();
@@ -936,11 +946,8 @@ export function useRealtime(roomId: string) {
 
       if (Object.keys(patch).length === 0) return;
 
-      // Optimistic local update (same playerId — nothing else resets)
       useGameStore.getState().updatePlayer(currentUid, patch);
 
-      // Refresh own room presence so presence-based reconciliation agrees
-      // (and late joiners / reconnects see the latest identity).
       if (channelRef.current && statusRef.current === 'SUBSCRIBED') {
         const ch = channelRef.current;
         const nextUsername = patch.username !== undefined ? patch.username : (usernameRef.current ?? '');
@@ -956,7 +963,6 @@ export function useRealtime(roomId: string) {
         });
       }
 
-      // Broadcast to peers (loop-safe: receivers only patch their local store)
       channelRef.current?.send({
         type: 'broadcast',
         event: 'player_profile_update',
@@ -970,7 +976,6 @@ export function useRealtime(roomId: string) {
     [addLog]
   );
 
-  /** Siarkan skor/rank milik sendiri (dipakai Ular Tangga & Sudoku). */
   const broadcastPlayerStats = useCallback(
     (stats: { score?: number; progress?: number; rank?: number | null }) => {
       const currentUid = userIdRef.current || getOrCreateUserId();
@@ -998,6 +1003,7 @@ export function useRealtime(roomId: string) {
     broadcastLeaveRoom,
     broadcastSnakesDiceRoll,
     broadcastSnakesState,
+    broadcastTicTacToeState,
     broadcastAvatarUpdate,
     broadcastProfileUpdate,
     broadcastPlayerStats,

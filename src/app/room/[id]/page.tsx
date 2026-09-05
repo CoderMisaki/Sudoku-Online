@@ -1,6 +1,7 @@
 "use client";
 
 import { generateInitialSnakesState } from "../../../utils/snakesAndLaddersData";
+import { createInitialTicTacToeState } from "../../../utils/ticTacToe";
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
@@ -17,6 +18,7 @@ import { initErrorLogger } from '../../../utils/errorLogger';
 import { SudokuBoard } from '../../../components/game/SudokuBoard';
 import { SudokuBoard3D } from '../../../components/game/SudokuBoard3D';
 import { SnakesAndLaddersBoard } from '../../../components/game/SnakesAndLaddersBoard';
+import { TicTacToeBoard } from '../../../components/game/TicTacToeBoard';
 import {
   Copy,
   Users,
@@ -127,6 +129,7 @@ export default function RoomPage() {
     broadcastLeaveRoom,
     broadcastSnakesDiceRoll,
     broadcastSnakesState,
+    broadcastTicTacToeState,
     broadcastAvatarUpdate,
     broadcastProfileUpdate,
     broadcastPlayerStats,
@@ -139,11 +142,15 @@ export default function RoomPage() {
 
   const snakesWinners = useGameStore(state => state.snakesState?.winners);
   const snakesWinnerId = useGameStore(state => state.snakesState?.winnerId);
+  const ticTacToeWinner = useGameStore(state => state.ticTacToeState?.winner);
 
-  // Munculkan Next Game jika ada minimal 1 juara (Ular Tangga) atau puzzle selesai (Sudoku)
+  // Munculkan Next Game jika game selesai (Ular Tangga, Tic Tac Toe, atau Sudoku)
   const canTriggerNextGame = React.useMemo(() => {
     if (room?.mode === 'snakes_and_ladders') {
       return Boolean((snakesWinners && snakesWinners.length > 0) || snakesWinnerId);
+    }
+    if (room?.mode === 'tic_tac_toe') {
+      return Boolean(ticTacToeWinner);
     }
     if (!grid) return false;
     for (let r = 0; r < 9; r++) {
@@ -153,7 +160,7 @@ export default function RoomPage() {
       }
     }
     return true;
-  }, [grid, room?.mode, snakesWinners, snakesWinnerId]);
+  }, [grid, room?.mode, snakesWinners, snakesWinnerId, ticTacToeWinner]);
 
   const solutionToken = useGameStore(state => state.solutionToken);
 
@@ -193,11 +200,16 @@ export default function RoomPage() {
         });
     }
   }, [room?.mode, room?.difficulty, grid, solutionToken, loading, setGameData, roomId]);
+
   const handleOpenNextGameModal = () => {
     if (!room) return;
-    setNextDifficulty(room.difficulty || 'medium');
+    let initialDiff = room.difficulty || 'medium';
+    if (room.mode === 'tic_tac_toe') {
+      if (initialDiff !== '3x3' && initialDiff !== '8x8') initialDiff = '3x3';
+    }
+    setNextDifficulty(initialDiff);
     setNextMode(room.mode || 'collaborative');
-    setNextMaxPlayers(room.maxPlayers || 4);
+    setNextMaxPlayers(room.mode === 'tic_tac_toe' ? 2 : (room.maxPlayers || 4));
     setNextGameStep('confirm');
     setIsApplied(false);
     setIsNextGameModalOpen(true);
@@ -208,19 +220,18 @@ export default function RoomPage() {
     try {
       toast.loading('Mempersiapkan game baru...', { id: 'nextGame' });
 
-      // Reset timer startedAt dan progress setiap player
       const updatedRoom: RoomState = {
         ...room,
         difficulty: diff,
         mode: gameMode,
-        maxPlayers: maxP,
+        maxPlayers: gameMode === 'tic_tac_toe' ? 2 : maxP,
         startedAt: Date.now(),
         players: Object.fromEntries(
           Object.entries(room.players).map(([id, p]) => [
             id,
             {
               ...p,
-              score: p.score ?? 0, // Skor kemenangan tetap dipertahankan
+              score: p.score ?? 0,
               hints: 3,
               progress: 0,
               rank: undefined,
@@ -243,20 +254,29 @@ export default function RoomPage() {
         newSnakesState.winnerId = null;
         newSnakesState.frozenTurns = {};
         newSnakesState.currentTurnUserId = activeIds[0] || '';
-        // generateInitialSnakesState restarts at revision 1 — after a long match the
-        // room revision is far higher, so every client would reject it as stale.
-        // Always move FORWARD from the current authoritative revision.
         const baseRevision = useGameStore.getState().snakesState?.revision ?? 0;
         newSnakesState.revision = Math.max(newSnakesState.revision ?? 1, baseRevision + 1);
 
         useGameStore.getState().updateSnakesState(newSnakesState);
-
-        broadcastNextGame(null, null, updatedRoom, newSnakesState);
+        broadcastNextGame(null, null, updatedRoom, newSnakesState, null);
         toast.success('Game Ular Tangga baru dimulai!', { id: 'nextGame' });
       }
-      // MODE 2: SUDOKU COMPETITION
+      // MODE 2: TIC TAC TOE
+      else if (gameMode === 'tic_tac_toe') {
+        const activeList = Object.values(updatedRoom.players)
+          .filter((p: Player) => !p.isSpectator && p.status !== 'left');
+        const finalDiff = diff === '3x3' || diff === '8x8' ? diff : '3x3';
+        const newTicTacToeState = createInitialTicTacToeState(finalDiff, activeList, updatedRoom.hostId);
+        const baseRevision = useGameStore.getState().ticTacToeState?.revision ?? 0;
+        newTicTacToeState.revision = Math.max(newTicTacToeState.revision ?? 1, baseRevision + 1);
+
+        useGameStore.getState().updateTicTacToeState(newTicTacToeState);
+        broadcastNextGame(null, null, updatedRoom, null, newTicTacToeState);
+        toast.success('Game Tic Tac Toe baru dimulai!', { id: 'nextGame' });
+      }
+      // MODE 3: SUDOKU COMPETITION
       else if (gameMode === 'competition') {
-        broadcastNextGame(null, null, updatedRoom, null);
+        broadcastNextGame(null, null, updatedRoom, null, null);
         const res = await fetch('/api/game/create-room', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -270,7 +290,7 @@ export default function RoomPage() {
           toast.error('Gagal membuat game baru', { id: 'nextGame' });
         }
       }
-      // MODE 3: SUDOKU COLLABORATIVE / CLASSIC / RACE / ZEN
+      // MODE 4: SUDOKU COLLABORATIVE / CLASSIC / RACE / ZEN
       else {
         const res = await fetch('/api/game/create-room', {
           method: 'POST',
@@ -280,7 +300,7 @@ export default function RoomPage() {
         const data = await res.json();
         if (res.ok && data.initialGrid && data.solutionToken) {
           useGameStore.getState().startNextGame(data.initialGrid, data.solutionToken);
-          broadcastNextGame(data.initialGrid, data.solutionToken, updatedRoom, null);
+          broadcastNextGame(data.initialGrid, data.solutionToken, updatedRoom, null, null);
           toast.success('Game Sudoku baru dimulai!', { id: 'nextGame' });
         } else {
           toast.error('Gagal membuat game baru', { id: 'nextGame' });
@@ -367,7 +387,6 @@ export default function RoomPage() {
 
     const storedUserId = getOrCreateUserId();
     let storedUsername = typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') : null;
-    // Pastikan selalu kapital (fix bug TES1 / huruf kecil)
     if (storedUsername) {
       const upper = storedUsername.toUpperCase();
       if (upper !== storedUsername) {
@@ -376,7 +395,6 @@ export default function RoomPage() {
       }
     }
 
-    // Empty name ("") is valid — only redirect when the key was never set.
     if (!storedUserId || storedUsername === null) {
       router.push('/');
       return;
@@ -390,11 +408,6 @@ export default function RoomPage() {
     let maxPlayers = 4;
     let isHost = sessionStorage.getItem(`sudoku_host_room_${roomId}`) === '1';
 
-    // Persisted state is restored synchronously by zustand/persist on store
-    // creation, so a page REFRESH of an in-progress room already contains the
-    // same `room`/`grid`/`snakesState` we were playing. Detect that so we do
-    // NOT rebuild a brand-new room (which was the "refresh resets everything"
-    // bug): only the very first entry into a freshly-created room has null here.
     const storeNow = useGameStore.getState();
     const persistedRoom =
       storeNow.room && storeNow.room.id === roomId ? storeNow.room : null;
@@ -416,9 +429,6 @@ export default function RoomPage() {
       }
     }
 
-    // The persisted snapshot says we are the host of this exact room -> honor it
-    // (keeps us host even if the per-tab sessionStorage marker is gone, and
-    // preserves difficulty/mode/maxPlayers that the room was actually created with).
     if (isRoomHostPersisted) {
       isHost = true;
       difficulty = persistedRoom!.difficulty;
@@ -426,14 +436,13 @@ export default function RoomPage() {
       maxPlayers = persistedRoom!.maxPlayers || 4;
     }
 
-    // If we already hold a live board for this exact room (i.e. we reloaded an
-    // ongoing match), resume it as-is instead of generating a new game. Guests
-    // reconnect and re-converge via the host's realtime sync_state broadcast.
     const resumingGame =
       isHost &&
       Boolean(persistedRoom) &&
       (persistedRoom!.mode === 'snakes_and_ladders'
         ? Boolean(storeNow.snakesState)
+        : persistedRoom!.mode === 'tic_tac_toe'
+        ? Boolean(storeNow.ticTacToeState)
         : Boolean(storeNow.grid));
 
     if (resumingGame) {
@@ -470,6 +479,26 @@ export default function RoomPage() {
       if (mode === 'snakes_and_ladders') {
         const initialSnakes = generateInitialSnakesState(difficulty, [storedUserId]);
         useGameStore.getState().replaceAllSnakesState(initialSnakes);
+        setLoading(false);
+      } else if (mode === 'tic_tac_toe') {
+        const finalDiff = difficulty === '3x3' || difficulty === '8x8' ? difficulty : '3x3';
+        const initialTicTacToe = createInitialTicTacToeState(
+          finalDiff,
+          [
+            {
+              id: storedUserId,
+              username: storedUsername,
+              color: '#3b82f6',
+              isHost: true,
+              score: 0,
+              hints: 3,
+              status: 'online',
+              avatar: hostAvatar,
+            },
+          ],
+          storedUserId
+        );
+        useGameStore.getState().replaceAllTicTacToeState(initialTicTacToe);
         setLoading(false);
       } else {
         fetch('/api/game/create-room', {
@@ -656,7 +685,7 @@ export default function RoomPage() {
   }
 
   // Tampilan Menunggu Host dengan opsi sinkronisasi ulang
-  if (!grid && room?.mode !== 'snakes_and_ladders') {
+  if (!grid && room?.mode !== 'snakes_and_ladders' && room?.mode !== 'tic_tac_toe') {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-6 text-center space-y-4">
         <div className="space-y-2">
@@ -697,7 +726,9 @@ export default function RoomPage() {
       {/* Header */}
       <header className="border-b border-border bg-card px-3 sm:px-6 py-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 sm:gap-4">
-          <h1 className="text-base sm:text-xl font-bold truncate">Sudoku</h1>
+          <h1 className="text-base sm:text-xl font-bold truncate">
+            {room?.mode === 'tic_tac_toe' ? 'Tic Tac Toe' : room?.mode === 'snakes_and_ladders' ? 'Ular Tangga' : 'Sudoku'}
+          </h1>
           <div className="flex items-center gap-1.5 text-xs text-secondary bg-background px-2.5 py-1 rounded-full border border-border">
             <span className="hidden sm:inline">Code:</span>
             <span className="font-mono font-medium text-foreground tracking-wider">{roomId}</span>
@@ -709,7 +740,6 @@ export default function RoomPage() {
 
         <div className="flex items-center gap-1.5 sm:gap-2">
           {isAdminUser && isAdminVerified && <ErrorLogPanel isAdmin={true} />}
-          {/* Profile (avatar + nama) tetap terlihat selama game, realtime tanpa reset */}
           <ProfileWidget onAvatarUpdate={broadcastAvatarUpdate} onProfileUpdate={broadcastProfileUpdate} compact />
           <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(true)} className="p-1.5 h-8 w-8">
             <Settings className="w-4 h-4" />
@@ -761,7 +791,7 @@ export default function RoomPage() {
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Sidebar Left: Players & Chat */}
         <div className="space-y-4 flex flex-col h-full lg:col-span-2">
-          {/* Player Online — realtime, bisa invite */}
+          {/* Player Online */}
           <OnlinePlayersBox variant="room" roomId={roomId} />
 
           <Card className="flex-shrink-0 flex flex-col overflow-hidden min-h-[250px] lg:min-h-0 lg:flex-1">
@@ -810,7 +840,6 @@ export default function RoomPage() {
                       p.rank === 2 ? '🥈 2' :
                       p.rank === 3 ? '🥉 3' : ''
                     ) : room?.mode === 'competition' ? (
-                      // Competition cukup tampilkan persentase progress (3% … 100%)
                       `${p.progress ?? 0}%`
                     ) : (
                       p.score
@@ -890,47 +919,54 @@ export default function RoomPage() {
                   <div className="mt-2 text-sm text-green-500 font-medium">
                     {room?.mode === 'snakes_and_ladders' && (snakesWinners?.length ?? 0) > 0
                       ? `Juara 1 telah keluar! Menunggu host untuk Next Game...`
+                      : room?.mode === 'tic_tac_toe'
+                      ? `Ronde selesai! Menunggu host untuk Next Game...`
                       : `Game selesai! Menunggu host...`}
                   </div>
                 )}
-                <p className="text-secondary text-sm">Mode: {room?.mode || 'collaborative'}</p>
+                <p className="text-secondary text-sm">Mode: {room?.mode === 'tic_tac_toe' ? 'Tic Tac Toe' : (room?.mode || 'collaborative')}</p>
               </div>
 
-              {/* Toggle Switch 2D / 3D */}
-              <div className="flex items-center bg-card border border-border p-1 rounded-xl gap-1 shadow-sm">
-                <button
-                  onClick={() => setViewMode('2D')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    viewMode === '2D' || room?.mode === 'snakes_and_ladders'
-                      ? 'bg-foreground text-background shadow-xs'
-                      : 'text-secondary hover:text-foreground'
-                  }`}
-                >
-                  <GridIcon className="w-3.5 h-3.5" /> 2D
-                </button>
+              {/* Toggle Switch 2D / 3D (Hanya untuk Sudoku) */}
+              {room?.mode !== 'snakes_and_ladders' && room?.mode !== 'tic_tac_toe' && (
+                <div className="flex items-center bg-card border border-border p-1 rounded-xl gap-1 shadow-sm">
+                  <button
+                    onClick={() => setViewMode('2D')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      viewMode === '2D'
+                        ? 'bg-foreground text-background shadow-xs'
+                        : 'text-secondary hover:text-foreground'
+                    }`}
+                  >
+                    <GridIcon className="w-3.5 h-3.5" /> 2D
+                  </button>
 
-                <button
-                  onClick={() => {
-                    if (room?.mode !== 'snakes_and_ladders') {
-                      setViewMode('3D');
-                    }
-                  }}
-                  disabled={room?.mode === 'snakes_and_ladders'}
-                  title={room?.mode === 'snakes_and_ladders' ? 'Mode 3D Ular Tangga belum tersedia' : 'Mode 3D'}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                    viewMode === '3D' && room?.mode !== 'snakes_and_ladders'
-                      ? 'bg-foreground text-background shadow-xs'
-                      : 'text-secondary hover:text-foreground'
-                  } ${room?.mode === 'snakes_and_ladders' ? 'opacity-40 cursor-not-allowed' : ''}`}
-                >
-                  <Box className="w-3.5 h-3.5" /> 3D
-                </button>
-              </div>
+                  <button
+                    onClick={() => setViewMode('3D')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      viewMode === '3D'
+                        ? 'bg-foreground text-background shadow-xs'
+                        : 'text-secondary hover:text-foreground'
+                    }`}
+                  >
+                    <Box className="w-3.5 h-3.5" /> 3D
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Render Sesuai Mode Pilihan */}
             {room?.mode === 'snakes_and_ladders' ? (
-              <SnakesAndLaddersBoard broadcastSnakesState={broadcastSnakesState} broadcastSnakesDiceRoll={broadcastSnakesDiceRoll} broadcastPlayerStats={broadcastPlayerStats} />
+              <SnakesAndLaddersBoard
+                broadcastSnakesState={broadcastSnakesState}
+                broadcastSnakesDiceRoll={broadcastSnakesDiceRoll}
+                broadcastPlayerStats={broadcastPlayerStats}
+              />
+            ) : room?.mode === 'tic_tac_toe' ? (
+              <TicTacToeBoard
+                broadcastTicTacToeState={broadcastTicTacToeState}
+                broadcastPlayerStats={broadcastPlayerStats}
+              />
             ) : viewMode === '3D' ? (
               <SudokuBoard3D
                 broadcastMove={broadcastMove}
@@ -959,7 +995,7 @@ export default function RoomPage() {
             </div>
 
             {/* CONTROLS (Hanya Ditampilkan Pada Mode Sudoku) */}
-            {room?.mode !== 'snakes_and_ladders' && (
+            {room?.mode !== 'snakes_and_ladders' && room?.mode !== 'tic_tac_toe' && (
               <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" onClick={handleHint} disabled={(room?.mode !== 'zen' && hintsRemaining <= 0) || isSpectator}>
@@ -1078,11 +1114,20 @@ export default function RoomPage() {
                 }}
                 className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
               >
-                <option value="easy">Easy (Mudah)</option>
-                <option value="medium">Medium (Sedang)</option>
-                <option value="hard">Hard (Sulit)</option>
-                <option value="expert">Expert (Pakar)</option>
-                <option value="evil">Evil (Ekstrem)</option>
+                {nextMode === 'tic_tac_toe' ? (
+                  <>
+                    <option value="3x3">3x3 (Klasik - 3 Segaris)</option>
+                    <option value="8x8">8x8 (Lanjutan - 5 Segaris)</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="easy">Easy (Mudah)</option>
+                    <option value="medium">Medium (Sedang)</option>
+                    <option value="hard">Hard (Sulit)</option>
+                    <option value="expert">Expert (Pakar)</option>
+                    <option value="evil">Evil (Ekstrem)</option>
+                  </>
+                )}
               </select>
             </div>
 
@@ -1091,7 +1136,19 @@ export default function RoomPage() {
               <select
                 value={nextMode}
                 onChange={(e) => {
-                  setNextMode(e.target.value as GameMode);
+                  const nm = e.target.value as GameMode;
+                  setNextMode(nm);
+                  if (nm === 'tic_tac_toe') {
+                    if (nextDifficulty !== '3x3' && nextDifficulty !== '8x8') {
+                      setNextDifficulty('3x3');
+                    }
+                    setNextMaxPlayers(2);
+                  } else {
+                    if (nextDifficulty === '3x3' || nextDifficulty === '8x8') {
+                      setNextDifficulty('medium');
+                    }
+                    setNextMaxPlayers(4);
+                  }
                   setIsApplied(false);
                 }}
                 className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
@@ -1101,7 +1158,8 @@ export default function RoomPage() {
                 <option value="classic">Classic (Klasik)</option>
                 <option value="race">Race (Balapan Skor)</option>
                 <option value="zen">Zen (Santai)</option>
-                <option value="snakes_and_ladders">Snakes & Ladders (Ular Tangga)</option>
+                <option value="snakes_and_ladders">Snakes &amp; Ladders (Ular Tangga)</option>
+                <option value="tic_tac_toe">Tic Tac Toe</option>
               </select>
             </div>
 
@@ -1113,12 +1171,21 @@ export default function RoomPage() {
                   setNextMaxPlayers(Number(e.target.value));
                   setIsApplied(false);
                 }}
-                className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground"
+                disabled={nextMode === 'tic_tac_toe'}
+                className={`w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground ${
+                  nextMode === 'tic_tac_toe' ? 'opacity-80 bg-secondary/10 cursor-not-allowed' : ''
+                }`}
               >
-                <option value={2}>2 Pemain</option>
-                <option value={4}>4 Pemain</option>
-                <option value={6}>6 Pemain</option>
-                <option value={8}>8 Pemain</option>
+                {nextMode === 'tic_tac_toe' ? (
+                  <option value={2}>2 Pemain (Maksimal)</option>
+                ) : (
+                  <>
+                    <option value={2}>2 Pemain</option>
+                    <option value={4}>4 Pemain</option>
+                    <option value={6}>6 Pemain</option>
+                    <option value={8}>8 Pemain</option>
+                  </>
+                )}
               </select>
             </div>
 

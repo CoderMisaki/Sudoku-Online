@@ -1,5 +1,5 @@
 /**
- * Sound Effects Engine — Ular Tangga & Dungeon Sounds
+ * Sound Effects Engine — Ular Tangga, Sudoku & Tic Tac Toe Sounds
  * ---------------------------------------------------
  * Semua efek suara disintesis langsung lewat Web Audio API (tanpa file asset),
  * sehingga:
@@ -485,6 +485,93 @@ class SoundFX {
         dur: 0.4,
         gain: 0.045,
         attack: 0.12,
+      });
+    } catch {
+      /* abaikan */
+    }
+  }
+
+  // ─────────────────────────── TIC TAC TOE ──────────────────────────────────
+  /** Menaruh simbol X atau O di papan: tactile pop dengan pitch berbeda. */
+  ticTacToePlace(symbol: 'X' | 'O'): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      const freq = symbol === 'X' ? 620 : 440;
+      this.tone(ctx, this.master, t, {
+        type: 'triangle',
+        freq,
+        freqEnd: freq * 0.85,
+        dur: 0.08,
+        gain: 0.2,
+      });
+      this.noiseBurst(ctx, this.master, t, {
+        type: 'bandpass',
+        freq: 2400,
+        dur: 0.03,
+        gain: 0.06,
+      });
+    } catch {
+      /* abaikan */
+    }
+  }
+
+  /** Menang Tic Tac Toe: fanfare kemenangan nada naik + shimmer */
+  ticTacToeWin(): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      const notes = [523.25, 659.25, 783.99, 1046.5]; // C5, E5, G5, C6
+      notes.forEach((f, i) => {
+        this.tone(ctx, this.master!, t + i * 0.08, {
+          freq: f,
+          dur: 0.35,
+          gain: 0.12,
+          shimmerSend: 0.45,
+        });
+      });
+    } catch {
+      /* abaikan */
+    }
+  }
+
+  /** Kalah dari Bot / Lawan: nada menurun */
+  ticTacToeLose(): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      const notes = [440, 392, 349.23, 293.66];
+      notes.forEach((f, i) => {
+        this.tone(ctx, this.master!, t + i * 0.09, {
+          type: 'sawtooth',
+          freq: f,
+          dur: 0.25,
+          gain: 0.08,
+        });
+      });
+    } catch {
+      /* abaikan */
+    }
+  }
+
+  /** Hasil Seri / Draw: dua nada harmonis tenang */
+  ticTacToeDraw(): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      this.tone(ctx, this.master, t, {
+        freq: 440,
+        dur: 0.3,
+        gain: 0.1,
+      });
+      this.tone(ctx, this.master, t + 0.1, {
+        freq: 554.37,
+        dur: 0.3,
+        gain: 0.09,
       });
     } catch {
       /* abaikan */

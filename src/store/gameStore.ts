@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Grid, RoomState, Player, ChatMessage, SnakesState } from '../types/game';
+import { Grid, RoomState, Player, ChatMessage, SnakesState, TicTacToeState } from '../types/game';
 import { checkConflicts } from '../utils/sudoku';
 import { generateInitialSnakesState, areSnakesLayoutsEqual } from '../utils/snakesAndLaddersData';
+import { createInitialTicTacToeState } from '../utils/ticTacToe';
 
 // Debug logging off by default. Enable with: localStorage.setItem('sudoku_debug_snakes', '1')
 const isSnakesDebugEnabled = (): boolean => {
@@ -53,6 +54,7 @@ interface GameStore {
   // UI State
   messages: ChatMessage[];
   snakesState?: SnakesState;
+  ticTacToeState?: TicTacToeState;
   addMessage: (msg: ChatMessage) => void;
   setMessages: (msgs: ChatMessage[]) => void;
 
@@ -68,6 +70,8 @@ interface GameStore {
    * (e.g. reconnect after host restart, or brand-new game with revision 1).
    */
   replaceAllSnakesState: (state: SnakesState) => void;
+  updateTicTacToeState: (state: Partial<TicTacToeState>) => void;
+  replaceAllTicTacToeState: (state: TicTacToeState) => void;
   enterRoom: (roomId: string) => void;
   clearPersistedStorage: () => void;
 }
@@ -407,6 +411,7 @@ export const useGameStore = create<GameStore>()(
 
       selectedCell: null,
       snakesState: undefined,
+      ticTacToeState: undefined,
       setSelectedCell: (cell) => set({ selectedCell: cell }),
       updateSnakesState: (updates) => set((state) => {
         const current = state.snakesState as SnakesState | undefined;
@@ -471,14 +476,65 @@ export const useGameStore = create<GameStore>()(
         debugSnakesState(`replaceAll -> revision ${next.revision} board=${(next.boardId || '').slice(0, 8)}`, next);
         return { snakesState: next };
       }),
-      resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null, snakesState: undefined }),
+      updateTicTacToeState: (updates) => set((state) => {
+        const current = state.ticTacToeState;
+        const incomingRevision = updates.revision;
+        const incomingBoardId = updates.boardId;
+
+        const isDifferentBoard = Boolean(
+          incomingBoardId && current?.boardId && incomingBoardId !== current.boardId
+        );
+
+        if (!isDifferentBoard && current && typeof incomingRevision === 'number' && typeof current.revision === 'number') {
+          if (incomingRevision <= current.revision) {
+            return state;
+          }
+        }
+
+        let nextRevision = incomingRevision;
+        if (typeof nextRevision !== 'number' && current && typeof current.revision === 'number' && !isDifferentBoard) {
+          nextRevision = current.revision + 1;
+        } else if (typeof nextRevision !== 'number') {
+          nextRevision = 1;
+        }
+
+        const merged: TicTacToeState = isDifferentBoard || !current
+          ? ({ ...current, ...updates, revision: nextRevision } as TicTacToeState)
+          : ({ ...current, ...updates, revision: nextRevision });
+
+        return { ticTacToeState: merged };
+      }),
+      replaceAllTicTacToeState: (incoming) => set((state) => {
+        const current = state.ticTacToeState;
+        if (
+          current &&
+          incoming.boardId &&
+          current.boardId &&
+          incoming.boardId === current.boardId &&
+          typeof incoming.revision === 'number' &&
+          typeof current.revision === 'number' &&
+          incoming.revision < current.revision
+        ) {
+          return state;
+        }
+        const next: TicTacToeState = {
+          ...incoming,
+          revision: typeof incoming.revision === 'number'
+            ? incoming.revision
+            : Math.max(current?.revision ?? 0, 0) + 1,
+        };
+        return { ticTacToeState: next };
+      }),
+      resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null, snakesState: undefined, ticTacToeState: undefined }),
 
       startNextGame: (newGrid, newSolutionToken) => set((state) => {
         if (!state.room) return state;
 
         const newPlayers = { ...state.room.players };
         const isSnakesMode = state.room.mode === 'snakes_and_ladders';
+        const isTicTacToeMode = state.room.mode === 'tic_tac_toe';
         let newSnakesState = state.snakesState;
+        let newTicTacToeState = state.ticTacToeState;
 
         if (isSnakesMode) {
           const fresh = generateInitialSnakesState(state.room.difficulty, Object.keys(newPlayers));
@@ -488,7 +544,15 @@ export const useGameStore = create<GameStore>()(
             ...fresh,
             revision: Math.max(fresh.revision ?? 1, (state.snakesState?.revision ?? 0) + 1),
           } as SnakesState;
+        } else if (isTicTacToeMode) {
+          const activeList = Object.values(newPlayers).filter(p => !p.isSpectator && p.status !== 'left');
+          const fresh = createInitialTicTacToeState(state.room.difficulty, activeList, state.room.hostId);
+          newTicTacToeState = {
+            ...fresh,
+            revision: Math.max(fresh.revision ?? 1, (state.ticTacToeState?.revision ?? 0) + 1),
+          };
         }
+
         Object.keys(newPlayers).forEach(playerId => {
           newPlayers[playerId] = {
             ...newPlayers[playerId],
@@ -511,10 +575,11 @@ export const useGameStore = create<GameStore>()(
             startedAt: Date.now(),
             status: 'playing'
           },
-          grid: checkConflicts(newGrid),
-          solutionToken: newSolutionToken,
+          grid: isTicTacToeMode ? null : checkConflicts(newGrid),
+          solutionToken: isTicTacToeMode ? null : newSolutionToken,
           selectedCell: null,
-          snakesState: newSnakesState,
+          snakesState: isSnakesMode ? newSnakesState : undefined,
+          ticTacToeState: isTicTacToeMode ? newTicTacToeState : undefined,
         };
       }),
 
@@ -522,7 +587,7 @@ export const useGameStore = create<GameStore>()(
         const state = get();
         if (state.room?.id === roomId) {
           // Already inside this exact room (e.g. a page reload / re-render of an
-          // in-progress game). Keep room + grid + snakesState so a refresh does
+          // in-progress game). Keep room + grid + snakesState + ticTacToeState so a refresh does
           // NOT wipe the running game back to a brand-new room. Ephemeral
           // handshake state is reconciled by the realtime channel on subscribe.
           return;
@@ -534,6 +599,7 @@ export const useGameStore = create<GameStore>()(
           messages: [],
           selectedCell: null,
           snakesState: undefined,
+          ticTacToeState: undefined,
         });
       },
 
@@ -559,12 +625,9 @@ export const useGameStore = create<GameStore>()(
         grid: state.grid,
         solutionToken: state.solutionToken,
         messages: state.messages,
-        // Persist snakesState so a refresh / reload of an in-progress snakes & ladders
-        // room resumes the same board (positions, turn, obstacles) instead of resetting
-        // everyone to a brand-new game. Stale snapshots are already reconciled safely:
-        // updateSnakesState ignores lower revisions only for the SAME boardId+layout, and
-        // replaceAllSnakesState adopts any differently-boardId / differently-layout snapshot.
+        // Persist snakesState & ticTacToeState so a refresh / reload of an in-progress room resumes the same board
         snakesState: state.snakesState,
+        ticTacToeState: state.ticTacToeState,
       }),
     }
   )
