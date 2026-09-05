@@ -1,31 +1,40 @@
 /**
- * Verifikasi runtime engine Arrow Puzzle Master.
- * Dijalankan lewat `node .jules/verify-arrow-puzzle.js` setelah `npm run verify:arrow`
- * (lihat package.json) yang mengompilasi src/utils/arrowPuzzle.ts lebih dulu.
+ * Verifikasi runtime engine Arrow Puzzle Master (ARROW REMOVAL PUZZLE).
+ * Jalankan: npm run verify:arrow
+ * (mengompilasi src/utils/arrowPuzzle.ts ke .tmp-arrow-build lebih dulu)
  */
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+/* eslint-disable @typescript-eslint/no-require-imports */
 const assert = require('node:assert');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require('node:path');
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const engine = require(path.join(__dirname, '..', '.tmp-arrow-build', 'utils', 'arrowPuzzle.js'));
 
 const {
   ARROW_DIRS,
   ARROW_DIFFICULTY,
+  ARROW_CORRECT_POINTS,
+  ARROW_TEAM_BONUS,
+  ARROW_FINISH_BONUS,
   generateArrowPuzzle,
-  countArrowPaths,
+  generateArrowPuzzleDetailed,
+  solveArrowPuzzle,
+  isValidArrowGeometry,
+  getArrowSweep,
+  getArrowExitDistance,
+  findBlockers,
+  isArrowFree,
   applyArrowMove,
   evaluateArrowTap,
+  getActiveArrows,
+  getMovableArrowIds,
   getArrowProgress,
-  getPlayerArrowPath,
-  getExpectedNextCell,
+  getRemovedArrowIds,
   isArrowPuzzleFinished,
-  getArrowNextPenalty,
   getArrowWrongPenalty,
-  isLegalArrowStep,
+  getArrowNextPenalty,
   buildArrowSeed,
+  isValidArrowPuzzleState,
+  createArrowRound,
 } = engine;
 
 let checks = 0;
@@ -33,221 +42,264 @@ const ok = (cond, label) => {
   assert.ok(cond, label);
   checks++;
 };
+const eq = (a, b, label) => {
+  assert.strictEqual(a, b, `${label} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
+  checks++;
+};
 
-// ── 1. Generator: unik, sah, deterministik ────────────────────────────────────
 const difficulties = ['easy', 'medium', 'hard', 'expert', 'evil'];
+const SAMPLES = { easy: 120, medium: 100, hard: 60, expert: 40, evil: 20 };
 
+// ── 1. Generator: solvable, geometri valid, deterministik, sesuai difficulty ─
 for (const diff of difficulties) {
-  for (let i = 0; i < 200; i++) {
+  const cfg = ARROW_DIFFICULTY[diff];
+  let totalBlocked = 0;
+  let totalArrows = 0;
+  let shapesWithTurn = 0;
+  const dirsSeen = new Set();
+
+  for (let i = 0; i < SAMPLES[diff]; i++) {
     const seed = buildArrowSeed(`ROOM${i}`, diff, i);
-    const puzzle = generateArrowPuzzle(diff, i % 2 === 0 ? 'classic' : 'competition', seed);
-    const cfg = ARROW_DIFFICULTY[diff];
+    const { state, solutionOrder } = generateArrowPuzzleDetailed(diff, i % 2 === 0 ? 'classic' : 'competition', seed);
 
-    ok(puzzle.size === cfg.size, `${diff} #${i}: ukuran papan ${puzzle.size} == ${cfg.size}`);
-    ok(puzzle.arrows.length === cfg.size, `${diff} #${i}: baris arrows`);
-    ok(puzzle.arrows.every((row) => row.length === cfg.size), `${diff} #${i}: kolom arrows`);
-    ok(puzzle.difficulty === diff, `${diff} #${i}: difficulty tersimpan`);
-    ok(puzzle.variant === (i % 2 === 0 ? 'classic' : 'competition'), `${diff} #${i}: variant tersimpan`);
+    eq(state.size, cfg.size, `${diff} #${i}: ukuran papan`);
+    eq(state.difficulty, diff, `${diff} #${i}: difficulty tersimpan`);
+    ok(state.arrows.length >= 3, `${diff} #${i}: minimal 3 arrow`);
+    ok(!state.boardId.includes('fallback'), `${diff} #${i}: bukan fallback`);
+    ok(isValidArrowPuzzleState(state), `${diff} #${i}: state valid`);
 
-    // START tidak pernah tembok & GOAL selalu berbeda dari START
-    ok(puzzle.arrows[puzzle.start.row][puzzle.start.col] !== null, `${diff} #${i}: START bukan tembok`);
-    ok(puzzle.arrows[puzzle.goal.row][puzzle.goal.col] !== null, `${diff} #${i}: GOAL bukan tembok`);
-    ok(
-      puzzle.goal.row !== puzzle.start.row || puzzle.goal.col !== puzzle.start.col,
-      `${diff} #${i}: GOAL != START`
-    );
-
-    // Hanya ada SATU jalur sah
-    ok(
-      countArrowPaths(puzzle.arrows, puzzle.start, puzzle.goal, 3) === 1,
-      `${diff} #${i}: jumlah jalur sah harus 1`
-    );
-
-    // solutionPath: mulai di START, berakhir di GOAL, tiap langkah menempel + sah
-    const sp = puzzle.solutionPath;
-    ok(sp[0].row === puzzle.start.row && sp[0].col === puzzle.start.col, `${diff} #${i}: path mulai di START`);
-    ok(
-      sp[sp.length - 1].row === puzzle.goal.row && sp[sp.length - 1].col === puzzle.goal.col,
-      `${diff} #${i}: path berakhir di GOAL`
-    );
-    for (let s = 1; s < sp.length; s++) {
-      const from = sp[s - 1];
-      const to = sp[s];
-      ok(Math.abs(from.row - to.row) + Math.abs(from.col - to.col) === 1, `${diff} #${i}: langkah ${s} menempel`);
-      ok(isLegalArrowStep(puzzle, from, to), `${diff} #${i}: langkah ${s} sah menurut panah`);
+    // Geometri valid & tidak ada sel yang dipakai dua arrow
+    const occ = new Set();
+    for (const a of state.arrows) {
+      ok(isValidArrowGeometry(a, state.size), `${diff} #${i}: geometri ${a.id} valid`);
+      ok(a.cells.length >= 2, `${diff} #${i}: ${a.id} minimal 2 sel`);
+      for (const c of a.cells) {
+        const k = `${c.row}:${c.col}`;
+        ok(!occ.has(k), `${diff} #${i}: sel ${k} tidak tumpang tindih`);
+        occ.add(k);
+      }
+      dirsSeen.add(a.direction);
+      const rows = new Set(a.cells.map((c) => c.row));
+      const cols = new Set(a.cells.map((c) => c.col));
+      if (rows.size > 1 && cols.size > 1) shapesWithTurn++;
     }
-    ok(sp.length >= 3, `${diff} #${i}: jalur minimal 3 kotak (dapat ${sp.length})`);
+    const ids = new Set(state.arrows.map((a) => a.id));
+    eq(ids.size, state.arrows.length, `${diff} #${i}: id unik`);
 
-    // Deterministik: seed sama -> papan sama
-    const twin = generateArrowPuzzle(diff, puzzle.variant, seed);
-    ok(JSON.stringify(twin.arrows) === JSON.stringify(puzzle.arrows), `${diff} #${i}: seed deterministik`);
-    ok(
-      JSON.stringify(twin.solutionPath) === JSON.stringify(puzzle.solutionPath),
-      `${diff} #${i}: jalur deterministik`
-    );
-    ok(twin.goal.row === puzzle.goal.row && twin.goal.col === puzzle.goal.col, `${diff} #${i}: GOAL deterministik`);
-  }
-  console.log(`  ✓ ${diff}: 200 puzzle unik + sah + deterministik`);
-}
+    // Solvable: solver menemukan urutan dan urutan internal generator valid
+    const solved = solveArrowPuzzle(state.arrows, state.size);
+    ok(solved && solved.length === state.arrows.length, `${diff} #${i}: solvable`);
+    eq(solutionOrder.length, state.arrows.length, `${diff} #${i}: solution order lengkap`);
 
-// ── 2. Tabel penalti kelipatan 2x ─────────────────────────────────────────────
-ok(getArrowWrongPenalty(1) === 5, 'salah #1 = -5');
-ok(getArrowWrongPenalty(2) === 10, 'salah #2 = -10');
-ok(getArrowWrongPenalty(3) === 20, 'salah #3 = -20');
-ok(getArrowWrongPenalty(4) === 40, 'salah #4 = -40');
-ok(getArrowWrongPenalty(5) === 80, 'salah #5 = -80');
-ok(getArrowWrongPenalty(9) === 80, 'salah #9 tetap -80 (batas atas)');
-console.log('  ✓ penalti 5 → 10 → 20 → 40 → 80 (maks)');
-
-// ── 3. Simulasi tap: benar +10, salah -5/-10/-20, streak reset ────────────────
-{
-  const seed = buildArrowSeed('SCORE', 'easy', 1);
-  const base = generateArrowPuzzle('easy', 'classic', seed);
-  const me = 'p1';
-  let state = base;
-  let score = 0;
-
-  const firstStep = base.solutionPath[1];
-
-  // Salah #1 -> -5
-  let r = applyArrowMove(state, me, base.start, 'P1');
-  ok(r.correct === false, 'tap kotak sendiri = salah');
-  ok(r.scoreDelta === -5 && r.penalty === 5, `salah pertama -5 (dapat ${r.scoreDelta})`);
-  score += r.scoreDelta;
-  state = r.state;
-  ok(getArrowNextPenalty(state, me) === 10, 'ancaman penalti berikutnya -10');
-
-  // Salah #2 -> -10
-  r = applyArrowMove(state, me, base.start, 'P1');
-  ok(r.scoreDelta === -10, `salah kedua -10 (dapat ${r.scoreDelta})`);
-  score += r.scoreDelta;
-  state = r.state;
-
-  // Salah #3 -> -20
-  r = applyArrowMove(state, me, base.start, 'P1');
-  ok(r.scoreDelta === -20, `salah ketiga -20 (dapat ${r.scoreDelta})`);
-  score += r.scoreDelta;
-  state = r.state;
-  ok(score === -35, `total setelah 3 salah = -35 (dapat ${score})`);
-
-  // Benar -> +10 dan streak kembali nol
-  r = applyArrowMove(state, me, firstStep, 'P1');
-  ok(r.correct === true && r.scoreDelta === 10, `benar +10 (dapat ${r.scoreDelta})`);
-  score += r.scoreDelta;
-  state = r.state;
-  ok(getArrowNextPenalty(state, me) === 5, 'streak salah direset setelah benar');
-  ok(getPlayerArrowPath(state, me).length === 1, 'jalur bertambah 1 kotak');
-  console.log(`  ✓ simulasi skor: 3x salah (-5,-10,-20) lalu benar (+10) = ${score}`);
-}
-
-// ── 4. Menuntaskan puzzle Classic (ko-op dua pemain bergantian) ───────────────
-{
-  const seed = buildArrowSeed('COOP', 'medium', 7);
-  let state = generateArrowPuzzle('medium', 'classic', seed);
-  const scores = { p1: 0, p2: 0 };
-  const steps = state.solutionPath.slice(1);
-
-  steps.forEach((cell, i) => {
-    const who = i % 2 === 0 ? 'p1' : 'p2';
-    const res = applyArrowMove(state, who, cell, who.toUpperCase());
-    assert.ok(res.correct, `langkah ${i + 1} oleh ${who} harus benar`);
-    scores[who] += res.scoreDelta;
-    state = res.state;
-
-    if (i === steps.length - 1) {
-      ok(res.justFinished === true, 'langkah terakhir menandai justFinished');
-      ok(res.justCompleted === true, 'langkah terakhir menandai justCompleted');
-      ok(res.scoreDelta === 60, `finis Classic = +10 langkah & +50 bonus tim (dapat ${res.scoreDelta})`);
-    } else {
-      ok(res.scoreDelta === 10, `langkah biasa +10 (dapat ${res.scoreDelta})`);
+    // Mainkan solution order internal lewat applyArrowMove -> harus tuntas
+    let s = state;
+    for (const id of solutionOrder) {
+      const r = applyArrowMove(s, 'p1', id, 'P1');
+      ok(r.correct, `${diff} #${i}: solution step ${id} sukses`);
+      s = r.state;
     }
-  });
+    ok(isArrowPuzzleFinished(s, 'p1'), `${diff} #${i}: selesai setelah solution order`);
+    eq(getActiveArrows(s, 'p1').length, 0, `${diff} #${i}: activeArrows kosong`);
 
-  ok(state.completed === true, 'puzzle Classic selesai');
-  const lastMover = (steps.length - 1) % 2 === 0 ? 'p1' : 'p2';
-  ok(state.winnerId === lastMover, `winnerId = penentu langkah terakhir (${lastMover})`);
-  ok(state.currentPath.length === state.solutionPath.length - 1, 'jejak bersama penuh (START tidak dihitung sebagai langkah)');
-  ok(getArrowProgress(state, 'p1') === 100, 'progress 100%');
-  ok(getArrowProgress(state, 'p2') === 100, 'progress bersama 100% untuk semua pemain');
-  ok(scores.p1 + scores.p2 === steps.length * 10 + 50, 'total poin tim = 10/langkah + bonus 50');
-  console.log(`  ✓ Classic ko-op: ${steps.length} langkah tuntas, skor tim ${scores.p1 + scores.p2}`);
+    // Tidak semua arrow bebas di awal, tetapi ada yang bebas
+    const movable = getMovableArrowIds(state, 'p1');
+    ok(movable.length >= 1, `${diff} #${i}: ada arrow bebas di awal`);
+    ok(movable.length < state.arrows.length, `${diff} #${i}: tidak semua arrow bebas di awal`);
+    totalBlocked += state.arrows.length - movable.length;
+    totalArrows += state.arrows.length;
 
-  // Tap setelah selesai ditolak tanpa mengubah skor
-  const extra = applyArrowMove(state, 'p1', state.goal, 'P1');
-  ok(extra.scoreDelta === 0 && extra.state === state, 'tap setelah selesai tidak mengubah apa pun');
-}
+    // Deterministik
+    const again = generateArrowPuzzle(diff, 'classic', seed);
+    eq(JSON.stringify(again.arrows), JSON.stringify(state.arrows), `${diff} #${i}: deterministik`);
 
-// ── 5. Competition: papan per pemain, ranking finis ───────────────────────────
-{
-  const seed = buildArrowSeed('RACE', 'hard', 3);
-  let state = generateArrowPuzzle('hard', 'competition', seed);
-  const steps = state.solutionPath.slice(1);
-  const scores = { a: 0, b: 0 };
-
-  // Pemain B salah dua kali dulu, pemain A jalan mulus
-  let res = applyArrowMove(state, 'b', state.start, 'B');
-  scores.b += res.scoreDelta;
-  state = res.state;
-  res = applyArrowMove(state, 'b', state.start, 'B');
-  scores.b += res.scoreDelta;
-  state = res.state;
-  ok(scores.b === -15, `B: -5 lalu -10 = -15 (dapat ${scores.b})`);
-
-  steps.forEach((cell) => {
-    res = applyArrowMove(state, 'a', cell, 'A');
-    scores.a += res.scoreDelta;
-    state = res.state;
-  });
-
-  ok(isArrowPuzzleFinished(state, 'a'), 'A selesai');
-  ok(!isArrowPuzzleFinished(state, 'b'), 'B belum selesai (jalur sendiri)');
-  ok(getPlayerArrowPath(state, 'b').length === 0, 'jalur B tidak terpengaruh langkah A');
-  ok(res.rank === 1, 'A finis pertama -> rank 1');
-  ok(scores.a === steps.length * 10 + 100, `A: ${steps.length}×10 + bonus juara 100 = ${scores.a}`);
-  ok(state.winners[0] === 'a', 'winners[0] = A');
-  ok(state.winnerId === 'a', 'winnerId = A');
-  ok(getArrowProgress(state, 'a') === 100, 'progress A 100%');
-  ok(getArrowProgress(state, 'b') === 0, 'progress B 0%');
-
-  // B menyusul finis -> rank 2, bonus 60
-  steps.forEach((cell) => {
-    res = applyArrowMove(state, 'b', cell, 'B');
-    scores.b += res.scoreDelta;
-    state = res.state;
-  });
-  ok(res.rank === 2, 'B finis kedua -> rank 2');
-  ok(scores.b === -15 + steps.length * 10 + 60, `B: -15 + ${steps.length}×10 + 60 = ${scores.b}`);
-  console.log(`  ✓ Competition: A=${scores.a} (juara 1), B=${scores.b} (juara 2)`);
-}
-
-// ── 6. Evaluasi tap memberi alasan yang tepat ─────────────────────────────────
-{
-  const seed = buildArrowSeed('REASON', 'easy', 11);
-  const state = generateArrowPuzzle('easy', 'classic', seed);
-  const me = 'x';
-  const expected = getExpectedNextCell(state, me);
-  ok(expected !== null, 'ada kotak tujuan berikutnya');
-  ok(evaluateArrowTap(state, me, expected).correct === true, 'tap kotak tujuan = benar');
-  ok(evaluateArrowTap(state, me, state.start).reason.length > 0, 'tap salah punya pesan alasan');
-  ok(evaluateArrowTap(state, me, state.goal).correct === false, 'lompat langsung ke GOAL = salah');
-  console.log('  ✓ evaluateArrowTap memberi alasan tiap tap salah');
-}
-
-// ── 7. Panah tiap sel tree menunjuk ke induknya (invarian desain) ─────────────
-{
-  const seed = buildArrowSeed('INVARIANT', 'evil', 42);
-  const puzzle = generateArrowPuzzle('evil', 'classic', seed);
-  for (let s = 1; s < puzzle.solutionPath.length; s++) {
-    const from = puzzle.solutionPath[s - 1];
-    const to = puzzle.solutionPath[s];
-    const dir = puzzle.arrows[to.row][to.col];
-    ok(dir !== null, 'kotak di jalur punya panah');
-    ok(
-      to.row + ARROW_DIRS[dir].dr === from.row && to.col + ARROW_DIRS[dir].dc === from.col,
-      `panah kotak (${to.row},${to.col}) menunjuk balik ke (${from.row},${from.col})`
-    );
+    // Solution order tidak bocor ke state
+    ok(!('solutionOrder' in state) && !('solutionPath' in state), `${diff} #${i}: solusi tidak ada di state`);
   }
-  console.log('  ✓ invarian panah: setiap kotak jalur menunjuk ke kotak sebelumnya');
+  eq(dirsSeen.size, 4, `${diff}: keempat arah muncul`);
+  ok(shapesWithTurn > 0, `${diff}: ada arrow berbentuk siku/zig-zag`);
+  console.log(
+    `  ${diff.padEnd(6)} avg arrows ${(totalArrows / SAMPLES[diff]).toFixed(1)}, avg blocked ${(totalBlocked / SAMPLES[diff]).toFixed(1)}`
+  );
 }
 
-console.log(`\nSEMUA LOLOS — ${checks} assertions, 1000 puzzle diverifikasi.`);
+// Progression: makin sulit makin banyak arrow
+for (let i = 1; i < difficulties.length; i++) {
+  ok(
+    ARROW_DIFFICULTY[difficulties[i]].arrowCount > ARROW_DIFFICULTY[difficulties[i - 1]].arrowCount,
+    `progression arrowCount ${difficulties[i - 1]} < ${difficulties[i]}`
+  );
+}
+
+// ── 2. Collision engine — kasus geometri buatan tangan ─────────────────────
+const SIZE = 6;
+// A: horizontal (1,0)-(1,2) keluar kanan. B: vertikal (0,4)-(2,4) keluar atas -> menghalangi A.
+const A = { id: 'A', cells: [{ row: 1, col: 0 }, { row: 1, col: 1 }, { row: 1, col: 2 }], direction: 1 };
+const B = { id: 'B', cells: [{ row: 2, col: 4 }, { row: 1, col: 4 }, { row: 0, col: 4 }], direction: 0 };
+// C: L-shape ekor (5,1)->(4,1)->(4,2) keluar kanan; lintasan baris 4 & 5 ke kanan
+const C = { id: 'C', cells: [{ row: 5, col: 1 }, { row: 4, col: 1 }, { row: 4, col: 2 }], direction: 1 };
+// D: vertikal (5,5)-(4,5) keluar bawah -> berada di lintasan C (baris 5 kolom 5 & baris 4 kolom 5)
+const D = { id: 'D', cells: [{ row: 4, col: 5 }, { row: 5, col: 5 }], direction: 2 };
+
+eq(JSON.stringify(findBlockers(A, [A, B, C, D], SIZE)), '["B"]', 'A terhalang B (horizontal vs vertikal)');
+ok(isArrowFree(B, [A, B, C, D], SIZE), 'B bebas ke atas');
+eq(JSON.stringify(findBlockers(C, [A, B, C, D], SIZE)), '["D"]', 'L-shape C terhalang D lewat sel ekornya');
+ok(isArrowFree(D, [A, B, C, D], SIZE), 'D bebas ke bawah');
+ok(isArrowFree(A, [A, C, D], SIZE), 'setelah B keluar, A bebas (arrow keluar bukan obstacle lagi)');
+ok(isArrowFree(C, [A, B, C], SIZE), 'setelah D keluar, C bebas');
+
+// Sweep A = baris 1 kolom 3..5
+eq(JSON.stringify(getArrowSweep(A, SIZE)), JSON.stringify([{ row: 1, col: 3 }, { row: 1, col: 4 }, { row: 1, col: 5 }]), 'sweep A');
+eq(getArrowExitDistance(A, SIZE), 6, 'jarak keluar A = 6 (ekor di kolom 0)');
+eq(getArrowExitDistance(B, SIZE), 3, 'jarak keluar B = 3');
+
+// U-shape: (0,0)->(1,0)->(1,1)->(0,1) keluar atas. E di (0,3) keluar kiri menghalangi? tidak (baris 0 kolom 3 bukan di sweep U).
+const Ushape = { id: 'U', cells: [{ row: 0, col: 0 }, { row: 1, col: 0 }, { row: 1, col: 1 }, { row: 0, col: 1 }], direction: 0 };
+ok(isValidArrowGeometry(Ushape, SIZE), 'U-shape geometri valid');
+ok(isArrowFree(Ushape, [Ushape, B], SIZE), 'U-shape bebas ke atas');
+// Arrow tepat di depan kepala U (tidak mungkin karena baris 0 = tepi), coba U dipindah ke bawah 1 baris
+const U2 = { id: 'U2', cells: [{ row: 1, col: 0 }, { row: 2, col: 0 }, { row: 2, col: 1 }, { row: 1, col: 1 }], direction: 0 };
+const blockerU = { id: 'X', cells: [{ row: 0, col: 1 }, { row: 0, col: 2 }], direction: 1 };
+eq(JSON.stringify(findBlockers(U2, [U2, blockerU], SIZE)), '["X"]', 'U-shape terhalang arrow tepat di depan kepalanya');
+const blockerU0 = { id: 'Y', cells: [{ row: 0, col: 0 }, { row: 0, col: 5 }].slice(0, 1).concat([{ row: 0, col: 0 }]).slice(0, 1), direction: 3 };
+blockerU0.cells = [{ row: 0, col: 0 }];
+eq(JSON.stringify(findBlockers(U2, [U2, blockerU0], SIZE)), '["Y"]', 'U-shape terhalang arrow di depan EKORNYA (benda kaku)');
+
+// Zig-zag
+const Z = {
+  id: 'Z',
+  cells: [{ row: 3, col: 0 }, { row: 3, col: 1 }, { row: 2, col: 1 }, { row: 2, col: 2 }, { row: 1, col: 2 }, { row: 1, col: 3 }],
+  direction: 1,
+};
+ok(isValidArrowGeometry(Z, SIZE), 'zig-zag geometri valid');
+eq(getArrowSweep(Z, SIZE).length, 4 + 3 + 2, 'sweep zig-zag mencakup semua baris tubuhnya');
+
+// Geometri tidak valid
+ok(!isValidArrowGeometry({ id: 'bad1', cells: [{ row: 0, col: 0 }, { row: 2, col: 0 }], direction: 0 }, SIZE), 'sel lompat = invalid');
+ok(!isValidArrowGeometry({ id: 'bad2', cells: [{ row: 0, col: 0 }, { row: 0, col: 1 }], direction: 0 }, SIZE), 'kepala tidak segaris = invalid');
+ok(!isValidArrowGeometry({ id: 'bad3', cells: [{ row: 0, col: 0 }, { row: 0, col: 1 }, { row: 0, col: 0 }], direction: 3 }, SIZE), 'tumpang tindih diri = invalid');
+ok(!isValidArrowGeometry({ id: 'bad4', cells: [{ row: -1, col: 0 }, { row: 0, col: 0 }], direction: 2 }, SIZE), 'di luar papan = invalid');
+
+// Deadlock terdeteksi solver: dua arrow saling menghalangi
+const L1 = { id: 'L1', cells: [{ row: 0, col: 0 }, { row: 0, col: 1 }], direction: 1 };
+const L2 = { id: 'L2', cells: [{ row: 0, col: 3 }, { row: 0, col: 2 }], direction: 3 };
+eq(solveArrowPuzzle([L1, L2], 4), null, 'solver mendeteksi deadlock');
+
+// ── 3. applyArrowMove — Classic ───────────────────────────────────────────
+function mkState(variant, arrows, size = SIZE) {
+  return {
+    boardId: 'T', seed: 't', size, arrows, variant, difficulty: 'easy',
+    removedArrowIds: [], playerRemoved: {}, wrongStreak: {}, winnerId: null, winners: [],
+    completed: false, revision: 1, lastMove: null,
+  };
+}
+
+{
+  let s = mkState('classic', [A, B, C, D]);
+  // Blocked tap
+  let r = applyArrowMove(s, 'u1', 'A', 'U1');
+  ok(!r.correct, 'classic: A blocked -> ditolak');
+  eq(r.penalty, 5, 'classic: penalti pertama 5');
+  eq(r.scoreDelta, -5, 'classic: skor -5');
+  eq(JSON.stringify(r.blockers), '["B"]', 'classic: blockers dilaporkan');
+  eq(getRemovedArrowIds(r.state, 'u1').length, 0, 'classic: arrow blocked tidak dihapus');
+  ok(r.state !== s, 'classic: state baru (streak) walau blocked');
+  s = r.state;
+  r = applyArrowMove(s, 'u1', 'A', 'U1');
+  eq(r.penalty, 10, 'classic: penalti kedua 10');
+  s = r.state;
+  eq(getArrowNextPenalty(s, 'u1'), 20, 'classic: penalti berikutnya 20');
+  eq(getArrowWrongPenalty(6), 80, 'penalti dibatasi 80');
+
+  // Free tap
+  r = applyArrowMove(s, 'u1', 'B', 'U1');
+  ok(r.correct, 'classic: B bebas -> keluar');
+  eq(r.scoreDelta, ARROW_CORRECT_POINTS, 'classic: +10');
+  eq(JSON.stringify(r.state.removedArrowIds), '["B"]', 'classic: B tercatat keluar');
+  eq(getActiveArrows(r.state, 'u1').length, 3, 'classic: 3 arrow aktif tersisa');
+  eq(r.state.wrongStreak.u1, 0, 'classic: streak reset');
+  eq(getArrowProgress(r.state, 'u1'), 25, 'classic: progress 25%');
+  s = r.state;
+
+  // Double tap / tap ke arrow yang sudah keluar -> no-op total
+  const dbl = applyArrowMove(s, 'u2', 'B', 'U2');
+  ok(dbl.state === s, 'double tap arrow yang sudah keluar = no-op');
+  eq(dbl.scoreDelta, 0, 'double tap tanpa skor');
+  eq(dbl.penalty, 0, 'double tap tanpa penalti');
+
+  // Sekarang A bebas; pemain lain (u2) mengeluarkannya -> papan bersama
+  r = applyArrowMove(s, 'u2', 'A', 'U2');
+  ok(r.correct, 'classic: setelah B keluar, A bebas untuk pemain lain');
+  s = r.state;
+  eq(getArrowProgress(s, 'u1'), 50, 'classic: progress bersama untuk u1');
+  eq(getArrowProgress(s, 'u2'), 50, 'classic: progress bersama untuk u2');
+
+  r = applyArrowMove(s, 'u1', 'C', 'U1');
+  ok(!r.correct, 'classic: C masih terhalang D');
+  s = r.state;
+  r = applyArrowMove(s, 'u1', 'D', 'U1');
+  ok(r.correct, 'classic: D keluar');
+  s = r.state;
+  r = applyArrowMove(s, 'u2', 'C', 'U2');
+  ok(r.correct && r.justFinished && r.justCompleted, 'classic: arrow terakhir -> completed');
+  eq(r.scoreDelta, ARROW_CORRECT_POINTS + ARROW_TEAM_BONUS, 'classic: +10 + bonus tim');
+  ok(r.state.completed, 'classic: completed=true');
+  eq(r.state.winnerId, 'u2', 'classic: winner = pengetuk terakhir');
+  eq(getActiveArrows(r.state, 'u1').length, 0, 'classic: activeArrows.length === 0');
+  s = r.state;
+  const after = applyArrowMove(s, 'u1', 'A', 'U1');
+  ok(after.state === s, 'classic: tap setelah selesai = no-op');
+  eq(after.reason, 'Puzzle sudah selesai', 'classic: alasan selesai');
+}
+
+// ── 4. applyArrowMove — Competition (isolasi papan) ──────────────────────
+{
+  let s = mkState('competition', [A, B, C, D]);
+  let r = applyArrowMove(s, 'p1', 'B', 'P1');
+  ok(r.correct, 'comp: p1 keluarkan B');
+  s = r.state;
+  eq(JSON.stringify(getRemovedArrowIds(s, 'p1')), '["B"]', 'comp: p1 removed [B]');
+  eq(getRemovedArrowIds(s, 'p2').length, 0, 'comp: p2 tidak terpengaruh');
+  eq(s.removedArrowIds.length, 0, 'comp: removedArrowIds bersama tetap kosong');
+  // p2 tetap terhalang untuk A karena B masih ada di papan p2
+  r = applyArrowMove(s, 'p2', 'A', 'P2');
+  ok(!r.correct, 'comp: p2 masih terhalang B (isolasi)');
+  s = r.state;
+  // p1: A kini bebas
+  r = applyArrowMove(s, 'p1', 'A', 'P1');
+  ok(r.correct, 'comp: p1 A bebas');
+  s = r.state;
+  r = applyArrowMove(s, 'p1', 'D', 'P1'); s = r.state;
+  r = applyArrowMove(s, 'p1', 'C', 'P1');
+  ok(r.correct && r.justFinished, 'comp: p1 selesai');
+  eq(r.rank, 1, 'comp: p1 juara 1');
+  eq(r.scoreDelta, ARROW_CORRECT_POINTS + ARROW_FINISH_BONUS[0], 'comp: +10 + bonus juara 1');
+  ok(!r.justCompleted, 'comp: justCompleted hanya untuk classic');
+  ok(!r.state.completed, 'comp: completed bersama tidak di-set');
+  s = r.state;
+  eq(getArrowProgress(s, 'p2'), 0, 'comp: progress p2 tetap 0');
+  // p2 menyelesaikan -> juara 2
+  for (const id of ['B', 'A', 'D', 'C']) { r = applyArrowMove(s, 'p2', id, 'P2'); s = r.state; }
+  eq(r.rank, 2, 'comp: p2 juara 2');
+  eq(JSON.stringify(s.winners), '["p1","p2"]', 'comp: winners urut');
+  // silentScore (Auto/All): tanpa poin
+  const s2 = mkState('competition', [A, B, C, D]);
+  const silent = applyArrowMove(s2, 'p1', 'B', 'P1', { silentScore: true });
+  ok(silent.correct && silent.scoreDelta === 0, 'silentScore: sukses tanpa poin');
+  const silentBlocked = applyArrowMove(s2, 'p1', 'A', 'P1', { silentScore: true });
+  ok(!silentBlocked.correct && silentBlocked.penalty === 0 && silentBlocked.scoreDelta === 0, 'silentScore: blocked tanpa penalti');
+}
+
+// ── 5. evaluateArrowTap & validasi state lama ─────────────────────────────
+{
+  const s = mkState('classic', [A, B]);
+  eq(evaluateArrowTap(s, 'u', 'A').correct, false, 'evaluate: A blocked');
+  eq(evaluateArrowTap(s, 'u', 'B').correct, true, 'evaluate: B free');
+  eq(evaluateArrowTap(s, 'u', 'nope').reason, 'Arrow tidak dikenal', 'evaluate: id asing');
+  ok(!isValidArrowPuzzleState({ size: 5, arrows: [[0, 1], [null, 2]], start: { row: 0, col: 0 }, goal: { row: 1, col: 1 }, solutionPath: [] }), 'state format lama START/GOAL ditolak');
+  ok(isValidArrowPuzzleState(s), 'state baru diterima');
+  const round = createArrowRound('hard', 'classic', 'seed-x', 7);
+  ok(round.revision >= 8, 'createArrowRound menaikkan revision');
+  ok(ARROW_DIRS.length === 4, 'ARROW_DIRS 4 arah');
+}
+
+console.log(`\n✅ verify-arrow-puzzle: ${checks} pemeriksaan lulus`);

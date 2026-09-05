@@ -1,20 +1,19 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { motion, AnimatePresence, useAnimation } from 'framer-motion';
 import {
-  ArrowUp,
   Crown,
-  Flag,
+  FastForward,
   Play,
   RotateCcw,
   Sparkles,
   Swords,
-  Target,
   Trophy,
   Users,
   Volume2,
   VolumeX,
+  Wand2,
   XCircle,
 } from 'lucide-react';
 import { useGameStore } from '@/store/gameStore';
@@ -28,28 +27,228 @@ import {
   applyArrowMove,
   buildArrowSeed,
   createArrowRound,
-  getArrowCurrentCell,
+  getActiveArrows,
+  getArrowExitDistance,
   getArrowNextPenalty,
   getArrowProgress,
   getArrowWrongStreak,
-  getPlayerArrowPath,
+  getMovableArrowIds,
+  getRemovedArrowIds,
   isArrowPuzzleFinished,
   normalizeArrowDifficulty,
 } from '@/utils/arrowPuzzle';
-import { ArrowCoord, ArrowPuzzleState, Player } from '@/types/game';
+import { ArrowObject, ArrowPuzzleState, Player } from '@/types/game';
 import toast from 'react-hot-toast';
 
 interface ArrowPuzzleBoardProps {
   /** Mode Classic: siarkan papan utuh ke semua pemain (host). */
   broadcastArrowPuzzleState?: (state: ArrowPuzzleState) => void;
-  /** Mode Classic: kirim satu tap supaya pemain lain ikut maju secara realtime. */
-  sendArrowMove?: (row: number, col: number, basePathLength: number) => void;
+  /** Mode Classic: kirim satu tap arrow supaya pemain lain melihat arrow yang sama keluar. */
+  sendArrowMove?: (arrowId: string, baseRevision: number) => void;
   /** Sinkronkan skor/progress/peringkat milik sendiri ke pemain lain. */
   broadcastPlayerStats?: (stats: { score?: number; progress?: number; rank?: number | null }) => void;
 }
 
 const EMPTY_PLAYERS: Record<string, Player> = {};
-const cellKey = (row: number, col: number) => `${row}:${col}`;
+
+/** Ukuran satu sel dalam satuan viewBox SVG. */
+const U = 100;
+/** Padding di sekeliling papan (viewBox) supaya kepala panah di tepi tidak terpotong. */
+const PAD = 0.5 * U;
+/** Durasi animasi arrow meluncur keluar (detik). */
+const EXIT_DURATION = 0.42;
+/** Warna track sesuai referensi: dark navy di atas putih. */
+const TRACK_COLOR = '#1f2a48';
+const TRACK_WIDTH = 0.36 * U;
+
+const cx = (col: number) => PAD + (col + 0.5) * U;
+const cy = (row: number) => PAD + (row + 0.5) * U;
+
+/** Path SVG (garis tengah) dari ekor ke kepala arrow. */
+function arrowPathD(arrow: ArrowObject): string {
+  return arrow.cells.map((c, i) => `${i === 0 ? 'M' : 'L'} ${cx(c.col)} ${cy(c.row)}`).join(' ');
+}
+
+/** Titik-titik segitiga kepala panah di sel kepala. */
+function arrowHeadPoints(arrow: ArrowObject): string {
+  const head = arrow.cells[arrow.cells.length - 1];
+  const { dr, dc } = ARROW_DIRS[arrow.direction];
+  const hx = cx(head.col);
+  const hy = cy(head.row);
+  // Tip menjorok ke tepi sel, pangkal sedikit di belakang pusat sel.
+  const tipX = hx + dc * 0.46 * U;
+  const tipY = hy + dr * 0.46 * U;
+  const baseX = hx - dc * 0.06 * U;
+  const baseY = hy - dr * 0.06 * U;
+  // Vektor tegak lurus.
+  const px = -dr;
+  const py = dc;
+  const half = 0.36 * U;
+  return [
+    `${tipX},${tipY}`,
+    `${baseX + px * half},${baseY + py * half}`,
+    `${baseX - px * half},${baseY - py * half}`,
+  ].join(' ');
+}
+
+interface ExitingArrow {
+  arrow: ArrowObject;
+  distance: number;
+  /** Penanda unik supaya AnimatePresence tidak menyatukan dua exit arrow yang sama. */
+  key: string;
+}
+
+interface ArrowGlyphProps {
+  arrow: ArrowObject;
+  state: 'idle' | 'exiting';
+  distance?: number;
+  shakeToken?: number;
+  highlightBlocked?: boolean;
+  disabled?: boolean;
+  onTap?: (arrowId: string) => void;
+  onExitDone?: (arrowId: string) => void;
+}
+
+const ArrowGlyph: React.FC<ArrowGlyphProps> = ({
+  arrow,
+  state,
+  distance = 0,
+  shakeToken = 0,
+  highlightBlocked = false,
+  disabled = false,
+  onTap,
+  onExitDone,
+}) => {
+  const { dr, dc } = ARROW_DIRS[arrow.direction];
+  const horizontal = dr === 0;
+  const controls = useAnimation();
+
+  const exitX = dc * (distance + 0.6) * U;
+  const exitY = dr * (distance + 0.6) * U;
+
+  // Animasi keluar: meluncur searah panah, akselerasi lalu melambat, fade/scale di ujung.
+  useEffect(() => {
+    if (state !== 'exiting') return;
+    let cancelled = false;
+    controls
+      .start({
+        x: exitX,
+        y: exitY,
+        opacity: [1, 1, 0.9, 0],
+        scale: [1, 1.02, 1, 0.94],
+        transition: {
+          duration: EXIT_DURATION,
+          ease: [0.4, 0, 0.2, 1],
+          opacity: { duration: EXIT_DURATION, times: [0, 0.55, 0.8, 1] },
+          scale: { duration: EXIT_DURATION, times: [0, 0.2, 0.7, 1] },
+        },
+      })
+      .then(() => {
+        if (!cancelled) onExitDone?.(arrow.id);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- hanya saat mulai keluar
+  }, [state]);
+
+  // Getar searah orientasi arrow saat terhalang (150–250ms), lalu kembali ke posisi semula.
+  useEffect(() => {
+    if (state !== 'idle' || !shakeToken) return;
+    const seq = [0, -9, 9, -6, 6, 0];
+    controls.start(
+      horizontal
+        ? { x: seq, y: 0, transition: { duration: 0.22, ease: 'easeInOut' } }
+        : { y: seq, x: 0, transition: { duration: 0.22, ease: 'easeInOut' } }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- retrigger hanya via token
+  }, [shakeToken]);
+
+  const color = highlightBlocked ? '#e11d48' : TRACK_COLOR;
+
+  const handlePointer = (e: React.PointerEvent<SVGGElement>) => {
+    if (disabled || state !== 'idle' || !onTap) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onTap(arrow.id);
+  };
+
+  return (
+    <motion.g
+      data-arrow-id={arrow.id}
+      data-arrow-state={state}
+      role={state === 'idle' ? 'button' : undefined}
+      aria-label={state === 'idle' ? `Arrow ${arrow.id} ke ${ARROW_DIRS[arrow.direction].name}` : undefined}
+      tabIndex={state === 'idle' && !disabled ? 0 : -1}
+      initial={false}
+      animate={controls}
+      onPointerDown={handlePointer}
+      onKeyDown={(e) => {
+        if ((e.key === 'Enter' || e.key === ' ') && state === 'idle' && !disabled) {
+          e.preventDefault();
+          onTap?.(arrow.id);
+        }
+      }}
+      style={{
+        cursor: state === 'idle' && !disabled ? 'pointer' : 'default',
+        pointerEvents: state === 'idle' ? 'auto' : 'none',
+        outline: 'none',
+        transformBox: 'fill-box',
+        transformOrigin: 'center',
+      }}
+    >
+      {/* Area tap lebar (transparan) supaya mudah ditekan di layar sentuh. */}
+      <path
+        d={arrowPathD(arrow)}
+        fill="none"
+        stroke="transparent"
+        strokeWidth={0.86 * U}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* Bayangan lembut */}
+      <path
+        d={arrowPathD(arrow)}
+        fill="none"
+        stroke="rgba(15, 23, 42, 0.12)"
+        strokeWidth={TRACK_WIDTH + 0.06 * U}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        transform="translate(0, 5)"
+      />
+      <polygon points={arrowHeadPoints(arrow)} fill="rgba(15, 23, 42, 0.12)" transform="translate(0, 5)" />
+      {/* Track */}
+      <path
+        d={arrowPathD(arrow)}
+        fill="none"
+        stroke={color}
+        strokeWidth={TRACK_WIDTH}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        style={{ transition: 'stroke 160ms ease' }}
+      />
+      {/* Kepala panah */}
+      <polygon
+        points={arrowHeadPoints(arrow)}
+        fill={color}
+        stroke={color}
+        strokeWidth={0.05 * U}
+        strokeLinejoin="round"
+        style={{ transition: 'fill 160ms ease, stroke 160ms ease' }}
+      />
+      {/* Sorot tipis di atas track agar terasa 3D halus */}
+      <path
+        d={arrowPathD(arrow)}
+        fill="none"
+        stroke="rgba(255,255,255,0.14)"
+        strokeWidth={0.1 * U}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        transform="translate(0, -6)"
+      />
+    </motion.g>
+  );
+};
 
 export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
   broadcastArrowPuzzleState,
@@ -64,8 +263,17 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
   const updatePlayer = useGameStore((state) => state.updatePlayer);
 
   const [sfxMuted, setSfxMuted] = useState(false);
-  const [flash, setFlash] = useState<{ key: string; correct: boolean; id: number } | null>(null);
+  const [shakes, setShakes] = useState<Record<string, number>>({});
+  const [blockedHighlight, setBlockedHighlight] = useState<Set<string>>(new Set());
   const [lastReason, setLastReason] = useState<string | null>(null);
+  const [autoRunning, setAutoRunning] = useState<false | 'auto' | 'all'>(false);
+  const [showComplete, setShowComplete] = useState(false);
+
+  // Arrow yang sedang meluncur keluar (terkunci dari tap ganda) + jejak removed terakhir.
+  const lockedRef = useRef<Set<string>>(new Set());
+  // Tap yang sudah diterapkan tetapi render berikutnya belum terjadi (anti double-tap sinkron).
+  const pendingRef = useRef<Set<string>>(new Set());
+  const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const variant = room?.mode === 'arrow_competition' ? 'competition' : 'classic';
   const isClassic = variant === 'classic';
@@ -73,8 +281,6 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
   const difficultyKey = room?.difficulty ?? 'medium';
   const normalizedDifficulty = normalizeArrowDifficulty(difficultyKey);
 
-  // Seed yang sama di semua client (roomId + difficulty + ronde) sehingga mode
-  // Competition tetap memakai papan identik tanpa perlu server.
   const seed = useMemo(
     () => buildArrowSeed(room?.id ?? '', difficultyKey, room?.startedAt ?? 0),
     [room?.id, difficultyKey, room?.startedAt]
@@ -86,16 +292,10 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
   }, []);
 
   // ── Siapkan papan ──────────────────────────────────────────────────────────
-  // Classic : hanya host yang membuat papan lalu menyiarkannya (guest menunggu sync).
-  // Competition: setiap pemain membuat papan sendiri dari seed ronde yang sama.
   useEffect(() => {
     if (!room || !userId) return;
     if (isClassic && !isHost) return;
 
-    // Papan baru dibuat HANYA bila belum ada papan, atau papan yang ada bukan
-    // milik varian/tingkat kesulitan ini. Membandingkan `seed` di sini akan
-    // membatalkan "Papan Baru" buatan host: setiap update room memicu effect ini
-    // lagi dan papan manual akan ditimpa papan bawaan seed.
     const current = useGameStore.getState().arrowPuzzleState;
     if (current && current.variant === variant && current.difficulty === normalizedDifficulty) return;
 
@@ -120,24 +320,69 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
     [players]
   );
 
-  const myPath = useMemo(
-    () => (arrowState && userId ? getPlayerArrowPath(arrowState, userId) : []),
+  const activeArrows = useMemo(
+    () => (arrowState && userId ? getActiveArrows(arrowState, userId) : []),
     [arrowState, userId]
   );
+  const removedIds = useMemo(
+    () => (arrowState && userId ? getRemovedArrowIds(arrowState, userId) : []),
+    [arrowState, userId]
+  );
+  const totalArrows = arrowState?.arrows.length ?? 0;
   const myProgress = arrowState && userId ? getArrowProgress(arrowState, userId) : 0;
   const myStreak = arrowState && userId ? getArrowWrongStreak(arrowState, userId) : 0;
   const nextPenalty = arrowState && userId ? getArrowNextPenalty(arrowState, userId) : 5;
   const finished = Boolean(arrowState && userId && isArrowPuzzleFinished(arrowState, userId));
   const puzzleDone = isClassic ? Boolean(arrowState?.completed) : finished;
 
-  const visitedSteps = useMemo(() => {
-    const map = new Map<string, number>();
-    myPath.forEach((c, i) => map.set(cellKey(c.row, c.col), i + 1));
-    return map;
-  }, [myPath]);
+  // ── Deteksi arrow yang baru keluar (lokal maupun dari pemain lain) → animasi ──
+  // Derived state: arrow yang tercatat keluar SETELAH papan ini pertama dilihat
+  // dan animasinya belum selesai = sedang "exiting". Tidak ada setState di effect.
+  const [boardSnapshot, setBoardSnapshot] = useState<{ boardId: string; initialRemoved: string[] } | null>(null);
+  const [finishedExitIds, setFinishedExitIds] = useState<string[]>([]);
+  const boardId = arrowState?.boardId ?? null;
+  if (boardId && boardSnapshot?.boardId !== boardId) {
+    // Papan baru: catat arrow yang sudah keluar sebelum kita melihatnya (tidak dianimasikan).
+    setBoardSnapshot({ boardId, initialRemoved: removedIds });
+    setFinishedExitIds([]);
+    setShowComplete(false);
+  }
 
-  const currentCell: ArrowCoord | null =
-    arrowState && userId ? getArrowCurrentCell(arrowState, userId) : null;
+  const exiting = useMemo<ExitingArrow[]>(() => {
+    if (!arrowState || !boardSnapshot || boardSnapshot.boardId !== arrowState.boardId) return [];
+    const initial = new Set(boardSnapshot.initialRemoved);
+    const done = new Set(finishedExitIds);
+    const out: ExitingArrow[] = [];
+    for (const id of removedIds) {
+      if (initial.has(id) || done.has(id)) continue;
+      const arrow = arrowState.arrows.find((a) => a.id === id);
+      if (!arrow) continue;
+      out.push({ arrow, distance: getArrowExitDistance(arrow, arrowState.size), key: `${arrowState.boardId}:${id}` });
+    }
+    return out;
+  }, [arrowState, boardSnapshot, finishedExitIds, removedIds]);
+
+  // Kunci arrow yang sedang keluar (anti double-tap). Ditulis di effect, dibaca di handler.
+  useEffect(() => {
+    lockedRef.current = new Set(exiting.map((e) => e.arrow.id));
+    for (const id of removedIds) pendingRef.current.delete(id);
+  }, [exiting, removedIds]);
+
+  const handleExitDone = useCallback((arrowId: string) => {
+    setFinishedExitIds((ids) => (ids.includes(arrowId) ? ids : [...ids, arrowId]));
+  }, []);
+
+  // Overlay selesai muncul setelah arrow terakhir benar-benar meninggalkan papan.
+  useEffect(() => {
+    if (!puzzleDone) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset overlay saat ronde baru
+      setShowComplete(false);
+      return;
+    }
+    if (exiting.length > 0) return;
+    const t = setTimeout(() => setShowComplete(true), 120);
+    return () => clearTimeout(t);
+  }, [puzzleDone, exiting.length]);
 
   const leaderboard = useMemo(() => {
     return activePlayers
@@ -145,7 +390,6 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
         player: p,
         score: p.score ?? 0,
         progress: arrowState && isClassic ? getArrowProgress(arrowState, p.id) : (p.progress ?? 0),
-        streak: arrowState?.wrongStreak[p.id] ?? 0,
       }))
       .sort((a, b) => b.progress - a.progress || b.score - a.score);
   }, [activePlayers, arrowState, isClassic]);
@@ -157,25 +401,26 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
     [broadcastPlayerStats]
   );
 
-  // ── Tap kotak ──────────────────────────────────────────────────────────────
-  const handleCellTap = useCallback(
-    (row: number, col: number) => {
-      if (!userId || !room) return;
+  // ── Tap arrow ──────────────────────────────────────────────────────────────
+  const performTap = useCallback(
+    (arrowId: string, opts: { silent?: boolean } = {}): boolean => {
+      if (!userId || !room) return false;
       const state = useGameStore.getState().arrowPuzzleState;
-      // Jangan menilai tap memakai papan milik varian lain (mis. sisa papan Classic
-      // saat room berpindah ke Competition). Seed TIDAK dipakai sebagai penjaga di
-      // sini karena papan hasil "Papan Baru" memang memakai seed manual.
-      if (!state || state.variant !== variant) return;
+      if (!state || state.variant !== variant) return false;
+      if (lockedRef.current.has(arrowId) || pendingRef.current.has(arrowId)) return false;
 
-      const pathBefore = getPlayerArrowPath(state, userId);
-      if (pathBefore.length >= state.solutionPath.length - 1) {
-        toast('Puzzle sudah selesai! Tekan Next Game untuk papan baru.', { icon: '✅' });
-        return;
+      if ((isClassic && state.completed) || isArrowPuzzleFinished(state, userId)) {
+        if (!opts.silent) toast('Puzzle sudah selesai! Tekan Next Game untuk papan baru.', { icon: '✅' });
+        return false;
       }
 
       const myName = room.players[userId]?.username || 'Kamu';
-      const result = applyArrowMove(state, userId, { row, col }, myName);
+      const baseRevision = state.revision;
+      const result = applyArrowMove(state, userId, arrowId, myName, { silentScore: opts.silent });
 
+      if (result.state === state) return false; // arrow sudah tidak ada / tap ganda
+
+      if (result.correct) pendingRef.current.add(arrowId);
       replaceAllArrowPuzzleState(result.state);
 
       const me = useGameStore.getState().room?.players[userId];
@@ -185,48 +430,91 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
       updatePlayer(userId, { score: newScore, progress: newProgress, rank: newRank });
       publishStats(newScore, newProgress, newRank);
 
-      // Mode Classic: teruskan tap ke pemain lain supaya maju bersama realtime.
-      if (isClassic) sendArrowMove?.(row, col, pathBefore.length);
-
-      setFlash({ key: cellKey(row, col), correct: result.correct, id: Date.now() });
-      setLastReason(result.correct ? null : result.reason);
+      if (isClassic && result.correct) sendArrowMove?.(arrowId, baseRevision);
 
       if (result.correct) {
-        sounds.arrowStep(pathBefore.length + 1);
+        setLastReason(null);
+        sounds.arrowStep(getRemovedArrowIds(result.state, userId).length);
         if (result.justFinished) {
-          sounds.arrowComplete();
+          setTimeout(() => sounds.arrowComplete(), EXIT_DURATION * 1000);
           if (isClassic) {
-            toast.success(`Puzzle tuntas bersama! +${ARROW_CORRECT_POINTS} & bonus tim +${ARROW_TEAM_BONUS}`, {
-              duration: 3200,
-              icon: '🤝',
-            });
+            toast.success(`Semua arrow keluar! Bonus tim +${ARROW_TEAM_BONUS}`, { duration: 3200, icon: '🤝' });
           } else {
-            toast.success(
-              `Kamu mencapai GOAL! Peringkat ${result.rank ?? '-'} (+${result.scoreDelta} poin)`,
-              { duration: 3200, icon: '🏁' }
-            );
+            toast.success(`Puzzle Complete! Peringkat ${result.rank ?? '-'} (+${result.scoreDelta} poin)`, {
+              duration: 3200,
+              icon: '🏆',
+            });
           }
-        } else {
-          toast.success(`Langkah benar! +${ARROW_CORRECT_POINTS} poin`, {
-            duration: 1200,
-            position: 'top-center',
-          });
         }
       } else {
+        // Blocked: getar arrow + sorot sebentar arrow yang menghalangi.
+        setShakes((s) => ({ ...s, [arrowId]: (s[arrowId] ?? 0) + 1 }));
+        setBlockedHighlight(new Set(result.blockers));
+        setTimeout(() => setBlockedHighlight(new Set()), 420);
+        setLastReason(result.penalty > 0 ? `${result.reason} · -${result.penalty}` : result.reason);
         sounds.arrowWrong(getArrowWrongStreak(result.state, userId));
-        toast.error(`${result.reason} — skor -${result.penalty}`, {
-          duration: 1900,
-          position: 'top-center',
-        });
       }
+      return result.correct;
     },
     [userId, room, variant, isClassic, replaceAllArrowPuzzleState, updatePlayer, publishStats, sendArrowMove]
   );
+
+  const handleArrowTap = useCallback(
+    (arrowId: string) => {
+      if (autoRunning) return;
+      performTap(arrowId);
+    },
+    [autoRunning, performTap]
+  );
+
+  // ── Auto / All ─────────────────────────────────────────────────────────────
+  const stopAuto = useCallback(() => {
+    if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+    autoTimerRef.current = null;
+    setAutoRunning(false);
+  }, []);
+
+  useEffect(() => () => stopAuto(), [stopAuto]);
+
+  const runAutoStep = useCallback((): boolean => {
+    const state = useGameStore.getState().arrowPuzzleState;
+    if (!state || !userId) return false;
+    const movable = getMovableArrowIds(state, userId).filter(
+      (id) => !lockedRef.current.has(id) && !pendingRef.current.has(id)
+    );
+    if (movable.length === 0) return false;
+    return performTap(movable[0], { silent: true });
+  }, [performTap, userId]);
+
+  const handleAuto = useCallback(() => {
+    if (autoRunning || puzzleDone) return;
+    setAutoRunning('auto');
+    runAutoStep();
+    autoTimerRef.current = setTimeout(() => setAutoRunning(false), EXIT_DURATION * 1000 + 40);
+  }, [autoRunning, puzzleDone, runAutoStep]);
+
+  const handleAll = useCallback(() => {
+    if (autoRunning || puzzleDone) return;
+    setAutoRunning('all');
+    const tick = () => {
+      const moved = runAutoStep();
+      const state = useGameStore.getState().arrowPuzzleState;
+      const done = !state || !userId || isArrowPuzzleFinished(state, userId);
+      if (!moved || done) {
+        autoTimerRef.current = setTimeout(() => setAutoRunning(false), EXIT_DURATION * 1000);
+        return;
+      }
+      // Satu per satu, sedikit lebih rapat dari durasi exit supaya terasa mengalir.
+      autoTimerRef.current = setTimeout(tick, EXIT_DURATION * 1000 * 0.7);
+    };
+    tick();
+  }, [autoRunning, puzzleDone, runAutoStep, userId]);
 
   // ── Papan baru ─────────────────────────────────────────────────────────────
   const canResetBoard = isClassic ? isHost : true;
   const handleNewBoard = useCallback(() => {
     if (!room || !userId) return;
+    stopAuto();
     const current = useGameStore.getState().arrowPuzzleState;
     const fresh = createArrowRound(
       difficultyKey,
@@ -237,132 +525,86 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
     replaceAllArrowPuzzleState(fresh);
     if (isClassic && broadcastArrowPuzzleState) broadcastArrowPuzzleState(fresh);
     setLastReason(null);
-    setFlash(null);
+    setShakes({});
     toast.success('Papan Arrow baru dibuat!', { icon: '🔄' });
-  }, [
-    room,
-    userId,
-    difficultyKey,
-    variant,
-    seed,
-    isClassic,
-    replaceAllArrowPuzzleState,
-    broadcastArrowPuzzleState,
-  ]);
+  }, [room, userId, stopAuto, difficultyKey, variant, seed, isClassic, replaceAllArrowPuzzleState, broadcastArrowPuzzleState]);
 
   if (!arrowState) {
     return (
       <div className="flex flex-col items-center justify-center p-8 text-center gap-3">
         <div className="w-8 h-8 border-3 border-foreground border-t-transparent rounded-full animate-spin" />
         <p className="text-secondary text-sm">
-          {isClassic && !isHost
-            ? 'Mengambil papan Arrow Puzzle dari host...'
-            : 'Menyusun labirin panah...'}
+          {isClassic && !isHost ? 'Mengambil papan Arrow Puzzle dari host...' : 'Menyusun arrow puzzle...'}
         </p>
       </div>
     );
   }
 
-  const { size, arrows, start, goal } = arrowState;
-  const totalSteps = Math.max(1, arrowState.solutionPath.length - 1);
-  const difficultyInfo = ARROW_DIFFICULTY[normalizedDifficulty];
-
-  const candidates = new Set<string>();
-  if (currentCell && !puzzleDone) {
-    ARROW_DIRS.forEach((d) => {
-      const nr = currentCell.row + d.dr;
-      const nc = currentCell.col + d.dc;
-      if (nr < 0 || nr >= size || nc < 0 || nc >= size) return;
-      if (arrows[nr][nc] === null) return;
-      candidates.add(cellKey(nr, nc));
-    });
-  }
+  const size = arrowState.size;
+  const viewSize = size * U + PAD * 2;
+  const cfg = ARROW_DIFFICULTY[normalizeArrowDifficulty(arrowState.difficulty)];
+  const removedCount = removedIds.length;
+  const exitingIds = new Set(exiting.map((e) => e.arrow.id));
 
   return (
-    <div className="flex flex-col items-center gap-4 w-full max-w-[620px] mx-auto select-none">
-      {/* Baris mode + tingkat kesulitan */}
-      <div className="w-full flex flex-wrap items-center justify-center gap-2 text-xs">
-        <span
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-semibold ${
-            isClassic
-              ? 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400'
-              : 'bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400'
-          }`}
-        >
-          {isClassic ? <Users className="w-3.5 h-3.5" /> : <Swords className="w-3.5 h-3.5" />}
-          {isClassic ? 'Arrow Classic (Ko-op Realtime)' : 'Arrow Competition (Papan Sendiri)'}
-        </span>
-        <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-border bg-card text-secondary font-semibold">
-          <Target className="w-3.5 h-3.5 text-amber-500" />
-          {difficultyInfo?.label ?? 'Medium'} · {size}×{size} · {totalSteps} langkah
-        </span>
+    <div className="flex flex-col items-center gap-3 w-full max-w-[560px] mx-auto px-1">
+      {/* Header level & progress */}
+      <div className="w-full bg-card border border-border rounded-2xl px-4 py-3 shadow-md">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="w-9 h-9 rounded-xl bg-amber-400 text-slate-900 font-black flex items-center justify-center shadow-sm">
+              {isClassic ? <Users className="w-4 h-4" /> : <Swords className="w-4 h-4" />}
+            </span>
+            <div className="leading-tight">
+              <p className="text-sm font-bold">
+                Arrow Puzzle · {cfg.label}
+              </p>
+              <p className="text-[11px] text-secondary">
+                {isClassic ? 'Classic — satu papan, kerja sama' : 'Competition — papan sendiri, adu cepat'}
+              </p>
+            </div>
+          </div>
+          <div className="text-right leading-tight">
+            <p className="text-[11px] text-secondary">Skor</p>
+            <p className="font-mono font-black text-lg">{players[userId || '']?.score ?? 0}</p>
+          </div>
+        </div>
+
+        <div className="mt-3">
+          <div className="flex items-center justify-between text-[11px] text-secondary mb-1">
+            <span>
+              Arrow keluar <span className="font-bold text-foreground">{removedCount}</span> / {totalArrows}
+            </span>
+            <span className="font-mono">{myProgress}%</span>
+          </div>
+          <div className="h-2.5 rounded-full bg-secondary/15 overflow-hidden">
+            <motion.div
+              className="h-full bg-gradient-to-r from-amber-400 to-orange-400"
+              initial={false}
+              animate={{ width: `${myProgress}%` }}
+              transition={{ type: 'spring', stiffness: 180, damping: 24 }}
+            />
+          </div>
+          {myStreak > 0 && !puzzleDone && (
+            <p className="mt-1 text-[11px] text-red-500 font-semibold flex items-center gap-1">
+              <XCircle className="w-3 h-3" /> Terhalang beruntun ×{myStreak} — tap terhalang berikutnya -{nextPenalty}
+            </p>
+          )}
+        </div>
       </div>
 
-      {/* Penjelasan aturan */}
-      <p className="text-center text-[11px] sm:text-xs text-secondary leading-relaxed max-w-[540px]">
-        Panah di sebuah kotak menunjuk ke kotak sebelumnya. Kamu hanya boleh melangkah ke kotak
-        menempel yang <b>panahnya menunjuk balik ke kotakmu</b>. Tap kotak untuk maju dari{' '}
-        <b className="text-emerald-500">START</b> ke <b className="text-amber-500">GOAL</b> — hati-hati,
-        cabang buntu memotong skor.
-      </p>
-
-      {/* Papan skor */}
-      {isClassic ? (
-        <div className="w-full flex flex-wrap justify-center gap-2">
-          {leaderboard.map((entry) => (
+      {/* Leaderboard multiplayer */}
+      {activePlayers.length > 1 && (
+        <div className="w-full bg-card border border-border rounded-2xl p-2 shadow-sm flex flex-col gap-1">
+          {leaderboard.slice(0, 6).map((entry, i) => (
             <div
               key={entry.player.id}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs ${
-                entry.player.id === userId
-                  ? 'bg-foreground/5 border-foreground/25'
-                  : 'bg-card border-border'
+              className={`flex items-center gap-2 text-xs px-2 py-1 rounded-lg ${
+                entry.player.id === userId ? 'bg-amber-400/10' : ''
               }`}
             >
-              {entry.player.avatar ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={entry.player.avatar}
-                  alt={entry.player.username}
-                  className="w-5 h-5 rounded-full object-cover border border-border"
-                />
-              ) : (
-                <span
-                  className="w-2.5 h-2.5 rounded-full"
-                  style={{ backgroundColor: entry.player.color }}
-                />
-              )}
-              <span className="font-semibold max-w-[110px] truncate">
-                {entry.player.username || 'Pemain'}
-                {entry.player.id === userId ? ' (Kamu)' : ''}
-              </span>
-              <span className="font-mono font-bold">{entry.score}</span>
-              {entry.streak > 0 && (
-                <span className="text-[10px] bg-red-500/15 text-red-500 px-1.5 py-0.5 rounded font-bold">
-                  salah ×{entry.streak}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="w-full bg-card border border-border rounded-2xl p-3 space-y-2">
-          <div className="flex items-center justify-between text-xs font-semibold text-secondary">
-            <span className="flex items-center gap-1.5">
-              <Trophy className="w-3.5 h-3.5 text-amber-500" /> Papan Peringkat
-            </span>
-            <span>+{ARROW_CORRECT_POINTS} benar · -5/-10/-20 salah beruntun</span>
-          </div>
-          {leaderboard.map((entry, i) => (
-            <div
-              key={entry.player.id}
-              className={`flex items-center gap-2 text-xs rounded-xl px-2 py-1.5 ${
-                entry.player.id === userId ? 'bg-foreground/5 ring-1 ring-foreground/15' : 'bg-background'
-              }`}
-            >
-              <span className="w-5 text-center font-bold">
-                {entry.player.rank ? (
-                  entry.player.rank === 1 ? '🥇' : entry.player.rank === 2 ? '🥈' : entry.player.rank === 3 ? '🥉' : entry.player.rank
-                ) : i === 0 && entry.progress === 100 ? (
+              <span className="w-5 text-center">
+                {i === 0 && entry.progress === 100 ? (
                   <Crown className="w-3.5 h-3.5 text-amber-500 mx-auto" />
                 ) : (
                   <span className="text-secondary">{i + 1}</span>
@@ -373,10 +615,7 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
                 {entry.player.id === userId ? ' (Kamu)' : ''}
               </span>
               <div className="w-20 h-1.5 rounded-full bg-secondary/20 overflow-hidden">
-                <div
-                  className="h-full bg-emerald-500 transition-all duration-300"
-                  style={{ width: `${entry.progress}%` }}
-                />
+                <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${entry.progress}%` }} />
               </div>
               <span className="w-9 text-right text-secondary font-mono">{entry.progress}%</span>
               <span className="w-12 text-right font-mono font-bold">{entry.score}</span>
@@ -385,153 +624,79 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
         </div>
       )}
 
-      {/* Progress sendiri */}
-      <div className="w-full">
-        <div className="flex items-center justify-between text-[11px] text-secondary mb-1">
-          <span>
-            Langkah {myPath.length} / {totalSteps}
-          </span>
-          <span className="font-mono font-bold text-foreground">
-            Skor kamu: {players[userId || '']?.score ?? 0}
-          </span>
-        </div>
-        <div className="h-2 rounded-full bg-secondary/15 overflow-hidden">
-          <motion.div
-            className="h-full bg-gradient-to-r from-emerald-500 to-teal-400"
-            initial={false}
-            animate={{ width: `${myProgress}%` }}
-            transition={{ type: 'spring', stiffness: 180, damping: 24 }}
-          />
-        </div>
-        {myStreak > 0 && (
-          <p className="mt-1 text-[11px] text-red-500 font-semibold flex items-center gap-1">
-            <XCircle className="w-3 h-3" /> Salah beruntun ×{myStreak} — tap salah berikutnya -
-            {nextPenalty} poin
-          </p>
-        )}
-      </div>
-
-      {/* Papan panah */}
-      <div className="relative w-full aspect-square max-w-[520px] p-2 sm:p-3 bg-card border-2 border-border rounded-3xl shadow-xl">
-        <div
-          className="grid w-full h-full gap-1 sm:gap-1.5"
-          style={{
-            gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`,
-            gridTemplateRows: `repeat(${size}, minmax(0, 1fr))`,
-          }}
+      {/* Papan puzzle */}
+      <div
+        data-testid="arrow-board"
+        className="relative w-full aspect-square max-w-[560px] rounded-3xl bg-white border-4 border-slate-200 shadow-xl overflow-hidden touch-none select-none"
+      >
+        <svg
+          viewBox={`0 0 ${viewSize} ${viewSize}`}
+          className="w-full h-full block"
+          xmlns="http://www.w3.org/2000/svg"
+          style={{ overflow: 'visible' }}
         >
-          {arrows.map((rowArr, r) =>
-            rowArr.map((dir, c) => {
-              const key = cellKey(r, c);
-              const isStart = start.row === r && start.col === c;
-              const isGoal = goal.row === r && goal.col === c;
-              const isWall = dir === null;
-              const step = visitedSteps.get(key);
-              const isVisited = step !== undefined;
-              const isCurrent = currentCell?.row === r && currentCell?.col === c;
-              const isCandidate = candidates.has(key);
-              const isFlashing = flash?.key === key;
-              const disabled = puzzleDone || isWall || isVisited;
+          {/* Titik-titik halus sebagai tekstur papan (bukan grid Sudoku). */}
+          <defs>
+            <pattern id="arrow-dots" width={U} height={U} patternUnits="userSpaceOnUse" x={PAD} y={PAD}>
+              <circle cx={U / 2} cy={U / 2} r={3.2} fill="#cbd5e1" />
+            </pattern>
+          </defs>
+          <rect x={PAD} y={PAD} width={size * U} height={size * U} fill="url(#arrow-dots)" opacity={0.7} />
 
-              return (
-                <motion.button
-                  key={key}
-                  type="button"
-                  onClick={() => handleCellTap(r, c)}
-                  disabled={disabled}
-                  animate={
-                    isFlashing
-                      ? flash?.correct
-                        ? { scale: [1, 1.14, 1] }
-                        : { x: [0, -4, 4, -3, 3, 0] }
-                      : { scale: 1, x: 0 }
-                  }
-                  transition={{ duration: isFlashing ? 0.32 : 0.12 }}
-                  className={`relative flex items-center justify-center rounded-lg sm:rounded-xl border transition-colors duration-150 ${
-                    isWall
-                      ? 'bg-secondary/25 border-transparent'
-                      : isStart
-                      ? 'bg-emerald-500/20 border-emerald-500/50'
-                      : isGoal
-                      ? 'bg-amber-500/25 border-amber-500/60'
-                      : isVisited
-                      ? 'bg-blue-500/15 border-blue-500/35'
-                      : isCurrent
-                      ? 'bg-foreground/10 border-foreground/40 ring-2 ring-foreground/25'
-                      : isCandidate
-                      ? 'bg-background border-dashed border-foreground/30 hover:bg-secondary/20 cursor-pointer'
-                      : 'bg-background/70 border-border/50'
-                  } ${disabled ? 'cursor-default' : 'cursor-pointer'}`}
-                >
-                  {isWall ? (
-                    <span className="w-1/3 h-1/3 rounded-sm bg-secondary/50" />
-                  ) : isGoal ? (
-                    <Flag className="w-1/2 h-1/2 text-amber-500" strokeWidth={2.5} />
-                  ) : (
-                    <>
-                      <ArrowUp
-                        className={`w-1/2 h-1/2 transition-transform duration-200 ${
-                          isVisited
-                            ? 'text-blue-500 dark:text-blue-400'
-                            : isStart
-                            ? 'text-emerald-500'
-                            : 'text-foreground/70'
-                        }`}
-                        strokeWidth={2.75}
-                        style={{ transform: `rotate(${(dir ?? 0) * 90}deg)` }}
-                      />
-                      {isStart && (
-                        <span className="absolute bottom-0.5 right-1 text-[8px] sm:text-[9px] font-black text-emerald-600 dark:text-emerald-400">
-                          S
-                        </span>
-                      )}
-                    </>
-                  )}
-
-                  {isVisited && !isStart && (
-                    <span className="absolute top-0.5 left-1 text-[8px] sm:text-[9px] font-bold text-blue-500/80">
-                      {step}
-                    </span>
-                  )}
-
-                  {isCurrent && !puzzleDone && (
-                    <motion.span
-                      className="absolute inset-0 rounded-lg sm:rounded-xl border-2 border-foreground/40"
-                      animate={{ opacity: [0.9, 0.25, 0.9] }}
-                      transition={{ duration: 1.4, repeat: Infinity }}
-                    />
-                  )}
-                </motion.button>
-              );
-            })
+          {/* Arrow aktif */}
+          {activeArrows.map((arrow) =>
+            exitingIds.has(arrow.id) ? null : (
+              <ArrowGlyph
+                key={arrow.id}
+                arrow={arrow}
+                state="idle"
+                shakeToken={shakes[arrow.id] ?? 0}
+                highlightBlocked={blockedHighlight.has(arrow.id)}
+                disabled={puzzleDone || Boolean(autoRunning)}
+                onTap={handleArrowTap}
+              />
+            )
           )}
-        </div>
+
+          {/* Arrow yang sedang meluncur keluar papan */}
+          {exiting.map((e) => (
+            <ArrowGlyph
+              key={e.key}
+              arrow={e.arrow}
+              state="exiting"
+              distance={e.distance}
+              onExitDone={handleExitDone}
+            />
+          ))}
+        </svg>
 
         {/* Overlay selesai */}
         <AnimatePresence>
-          {puzzleDone && (
+          {showComplete && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 rounded-3xl bg-background/80 backdrop-blur-[2px] flex flex-col items-center justify-center gap-3 text-center p-6"
+              className="absolute inset-0 rounded-3xl bg-white/85 backdrop-blur-[2px] flex flex-col items-center justify-center gap-3 text-center p-6"
             >
-              <Trophy className="w-10 h-10 text-amber-500 animate-bounce" />
+              <motion.div
+                initial={{ scale: 0.6, rotate: -12 }}
+                animate={{ scale: 1, rotate: 0 }}
+                transition={{ type: 'spring', stiffness: 260, damping: 16 }}
+              >
+                <Trophy className="w-12 h-12 text-amber-500" />
+              </motion.div>
               <div>
-                <h3 className="font-bold text-lg">
-                  {isClassic ? 'Puzzle Dituntaskan Bersama!' : 'Kamu Mencapai GOAL!'}
-                </h3>
-                <p className="text-xs text-secondary mt-1">
+                <h3 className="font-black text-xl text-slate-900">Puzzle Complete!</h3>
+                <p className="text-xs text-slate-600 mt-1">
                   {isClassic
-                    ? `Tim menyelesaikan ${totalSteps} langkah. Setiap pemain mendapat bonus +${ARROW_TEAM_BONUS}.`
-                    : `Peringkat ${players[userId || '']?.rank ?? '-'} · Skor ${
-                        players[userId || '']?.score ?? 0
-                      }`}
+                    ? `Tim mengeluarkan ${totalArrows} arrow. Setiap pemain mendapat bonus +${ARROW_TEAM_BONUS}.`
+                    : `Peringkat ${players[userId || '']?.rank ?? '-'} · Skor ${players[userId || '']?.score ?? 0}`}
                 </p>
               </div>
               {isHost && (
-                <p className="text-[11px] text-emerald-500 font-semibold">
-                  Host bisa menekan Next Game untuk papan baru.
+                <p className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
+                  <Play className="w-3.5 h-3.5" /> Host bisa menekan Next Game untuk level berikutnya.
                 </p>
               )}
             </motion.div>
@@ -539,23 +704,25 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
         </AnimatePresence>
       </div>
 
-      {/* Pesan tap terakhir */}
-      <AnimatePresence mode="wait">
-        {lastReason && !puzzleDone && (
-          <motion.p
-            key={lastReason}
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="text-[11px] text-red-500 font-semibold flex items-center gap-1"
-          >
-            <XCircle className="w-3 h-3" /> {lastReason}
-          </motion.p>
-        )}
-      </AnimatePresence>
+      {/* Pesan blocked terakhir (kecil, tidak mengganggu) */}
+      <div className="h-4">
+        <AnimatePresence mode="wait">
+          {lastReason && !puzzleDone && (
+            <motion.p
+              key={lastReason}
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="text-[11px] text-red-500 font-semibold flex items-center gap-1"
+            >
+              <XCircle className="w-3 h-3" /> {lastReason}
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </div>
 
       {/* Bar kontrol */}
-      <div className="flex items-center justify-between gap-2 bg-card p-3 rounded-2xl border border-border shadow-md w-full">
+      <div className="flex items-center justify-between gap-2 bg-amber-400 text-slate-900 p-3 rounded-2xl shadow-md w-full">
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -569,29 +736,52 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
               }
             }}
             title={sfxMuted ? 'Nyalakan efek suara' : 'Matikan efek suara'}
-            className="w-9 h-9 flex items-center justify-center rounded-xl border border-border bg-background hover:bg-hover text-secondary hover:text-foreground transition-colors cursor-pointer"
+            className="w-9 h-9 flex items-center justify-center rounded-xl bg-white/70 hover:bg-white transition-colors cursor-pointer"
           >
             {sfxMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
-
-          <div className="flex items-center gap-1.5 text-[11px] text-secondary bg-background px-3 py-1.5 rounded-xl border border-border">
-            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-            <span className="font-medium">
-              Benar +{ARROW_CORRECT_POINTS} · Salah -5 → -10 → -20 → -40
-            </span>
+          <div className="hidden sm:flex items-center gap-1.5 text-[11px] bg-white/70 px-3 py-1.5 rounded-xl">
+            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+            <span className="font-semibold">Keluar +{ARROW_CORRECT_POINTS} · Terhalang -5 → -10 → -20</span>
           </div>
         </div>
 
-        {canResetBoard && !puzzleDone && (
-          <Button size="sm" variant="outline" onClick={handleNewBoard} className="gap-1.5 text-xs font-semibold">
-            <RotateCcw className="w-3.5 h-3.5" /> Papan Baru
-          </Button>
-        )}
-        {puzzleDone && isHost && (
-          <div className="flex items-center gap-1.5 text-xs text-emerald-500 font-semibold">
-            <Play className="w-3.5 h-3.5" /> Tekan Next Game
-          </div>
-        )}
+        <div className="flex items-center gap-1.5">
+          {!puzzleDone && (
+            <>
+              <button
+                type="button"
+                data-testid="arrow-auto"
+                onClick={handleAuto}
+                disabled={Boolean(autoRunning)}
+                title="Keluarkan satu arrow yang bebas (tanpa poin)"
+                className="h-9 px-3 rounded-xl bg-white/80 hover:bg-white text-xs font-bold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+              >
+                <Wand2 className="w-3.5 h-3.5" /> Auto
+              </button>
+              <button
+                type="button"
+                data-testid="arrow-all"
+                onClick={handleAll}
+                disabled={Boolean(autoRunning)}
+                title="Selesaikan seluruh puzzle otomatis (tanpa poin)"
+                className="h-9 px-3 rounded-xl bg-slate-900 text-white hover:bg-slate-800 text-xs font-bold flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+              >
+                <FastForward className="w-3.5 h-3.5" /> All
+              </button>
+            </>
+          )}
+          {canResetBoard && !puzzleDone && (
+            <Button size="sm" variant="outline" onClick={handleNewBoard} className="gap-1.5 text-xs font-semibold bg-white/80">
+              <RotateCcw className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Papan Baru</span>
+            </Button>
+          )}
+          {puzzleDone && isHost && (
+            <div className="flex items-center gap-1.5 text-xs font-bold">
+              <Play className="w-3.5 h-3.5" /> Tekan Next Game
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
