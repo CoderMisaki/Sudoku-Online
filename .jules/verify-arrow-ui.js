@@ -85,7 +85,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function seedRoom(variant, difficulty, extra = {}) {
   const store = useGameStore.getState();
-  const mode = variant === 'classic' ? 'arrow_classic' : 'arrow_competition';
+  // 'practice' memakai papan sendiri (variant competition) tapi mode arrow_practice
+  // — di sinilah tombol Auto & All tersedia (mode belajar).
+  const mode = variant === 'classic' ? 'arrow_classic' : variant === 'practice' ? 'arrow_practice' : 'arrow_competition';
+  const boardVariant = variant === 'classic' ? 'classic' : 'competition';
   const startedAt = 1700000000000;
   store.setUserInfo(ME, 'AKU');
   store.setRoom({
@@ -97,7 +100,7 @@ function seedRoom(variant, difficulty, extra = {}) {
     maxPlayers: 4,
     status: 'playing',
     players: {
-      [HOST]: { id: HOST, username: 'HOST', color: '#3b82f6', isHost: variant === 'competition', score: 0, hints: 3, status: 'online' },
+      [HOST]: { id: HOST, username: 'HOST', color: '#3b82f6', isHost: variant === 'competition' || variant === 'practice', score: 0, hints: 3, status: 'online' },
       [ME]: { id: ME, username: 'AKU', color: '#ef4444', isHost: variant === 'classic', score: 0, hints: 3, status: 'online' },
     },
     createdAt: startedAt,
@@ -105,7 +108,7 @@ function seedRoom(variant, difficulty, extra = {}) {
     ...extra,
   });
   store.replaceAllArrowPuzzleState(
-    arrow.createArrowRound(difficulty, variant, arrow.buildArrowSeed('VERIFY', difficulty, startedAt), 0)
+    arrow.createArrowRound(difficulty, boardVariant, arrow.buildArrowSeed('VERIFY', difficulty, startedAt), 0)
   );
 }
 
@@ -284,7 +287,18 @@ async function waitExits(container, ms = 900) {
     });
     eq(arrowEls(container, 'idle').length, state.arrows.length - 1, 'competition: langkah lawan tidak menghapus arrow di papan saya');
     ok(!container.textContent.includes('Puzzle Complete'), 'competition: overlay tidak muncul karena lawan selesai');
+    ok(!container.querySelector('[data-testid="arrow-auto"]') && !container.querySelector('[data-testid="arrow-all"]'), 'competition: tombol Auto/All TIDAK ada (bukan mode belajar)');
 
+    act(() => root.unmount());
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 2b. CLASSIC — juga tanpa tombol Auto/All (fitur belajar hanya di Practice)
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    seedRoom('classic', 'easy');
+    const { root, container } = mount('root-classic-noauto', { broadcastPlayerStats: () => {} });
+    ok(!container.querySelector('[data-testid="arrow-auto"]') && !container.querySelector('[data-testid="arrow-all"]'), 'classic: tombol Auto/All TIDAK ada (bukan mode belajar)');
     act(() => root.unmount());
   }
 
@@ -292,7 +306,7 @@ async function waitExits(container, ms = 900) {
   // 3. AUTO / ALL — menyelesaikan puzzle otomatis satu per satu
   // ───────────────────────────────────────────────────────────────────────────
   {
-    seedRoom('competition', 'easy');
+    seedRoom('practice', 'easy');
     const { root, container } = mount('root-auto', { broadcastPlayerStats: () => {} });
     const total = myState().arrows.length;
     const autoBtn = container.querySelector('[data-testid="arrow-auto"]');

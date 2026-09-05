@@ -144,9 +144,9 @@ export default function Home() {
       if (difficulty === '3x3' || difficulty === '8x8') {
         setDifficulty('medium');
       }
-      // Arrow Puzzle boleh 2-8 pemain (Classic ko-op / Competition papan sendiri),
+      // Arrow Puzzle boleh 2-8 pemain (Classic ko-op / Competition / Practice papan sendiri),
       // jadi pilihan jumlah pemain tidak dipaksa kembali ke 4.
-      if (newMode !== 'arrow_classic' && newMode !== 'arrow_competition') {
+      if (newMode !== 'arrow_classic' && newMode !== 'arrow_competition' && newMode !== 'arrow_practice') {
         setMaxPlayers(4);
       }
     }
@@ -354,8 +354,9 @@ export default function Home() {
               <option value="zen">Zen (Santai)</option>
               <option value="snakes_and_ladders">Snakes &amp; Ladders (Ular Tangga)</option>
               <option value="tic_tac_toe">Tic Tac Toe</option>
-              <option value="arrow_classic">Arrow Puzzle Master — Classic (Ko-op)</option>
+              <option value="arrow_classic">Arrow Puzzle Master — Classic</option>
               <option value="arrow_competition">Arrow Puzzle Master — Competition</option>
+              <option value="arrow_practice">Arrow Puzzle Master — Practice</option>
             </select>
           </div>
 
@@ -396,6 +397,12 @@ export default function Home() {
               <p className="text-[11px] text-secondary mt-1">
                 * Arrow Competition: tiap pemain dapat papan sendiri, adu cepat mengeluarkan semua arrow
                 seperti Sudoku Competition.
+              </p>
+            )}
+            {mode === 'arrow_practice' && (
+              <p className="text-[11px] text-secondary mt-1">
+                * Arrow Practice: mode belajar — tiap pemain dapat papan acak sendiri (tidak pernah sama),
+                lengkap dengan tombol Auto &amp; All untuk membantu tanpa batas poin.
               </p>
             )}
           </div>

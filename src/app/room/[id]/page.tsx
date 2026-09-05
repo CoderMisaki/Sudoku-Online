@@ -286,7 +286,7 @@ export default function RoomPage() {
         broadcastNextGame(null, null, updatedRoom, null, newTicTacToeState);
         toast.success('Game Tic Tac Toe baru dimulai!', { id: 'nextGame' });
       }
-      // MODE 3: ARROW PUZZLE MASTER (Classic ko-op / Competition papan sendiri)
+      // MODE 3: ARROW PUZZLE MASTER (Classic ko-op / Competition / Practice)
       else if (isArrowGameMode(gameMode)) {
         const variant = gameMode === 'arrow_classic' ? 'classic' : 'competition';
         const roundStartedAt = updatedRoom.startedAt ?? Date.now();
@@ -294,12 +294,20 @@ export default function RoomPage() {
         const baseRevision = useGameStore.getState().arrowPuzzleState?.revision ?? 0;
         const freshArrow = createArrowRound(diff, variant, arrowSeed, baseRevision);
 
-        useGameStore.getState().replaceAllArrowPuzzleState(freshArrow);
-        // Classic: papan host dibagikan. Competition: tiap pemain menyusun sendiri.
+        if (gameMode === 'arrow_practice') {
+          // Practice: tiap pemain menyusun papan acak sendiri (Math.random), jadi
+          // host tidak menyiarkan papan. Kosongkan agar <ArrowPuzzleBoard /> membuat yang baru.
+          useGameStore.getState().clearArrowPuzzleState();
+        } else {
+          useGameStore.getState().replaceAllArrowPuzzleState(freshArrow);
+        }
+        // Classic: papan host dibagikan. Competition & Practice: tiap pemain menyusun sendiri.
         broadcastNextGame(null, null, updatedRoom, null, null, gameMode === 'arrow_classic' ? freshArrow : null);
         toast.success(
           gameMode === 'arrow_classic'
             ? 'Arrow Puzzle Classic baru dimulai!'
+            : gameMode === 'arrow_practice'
+            ? 'Arrow Practice baru dimulai!'
             : 'Arrow Competition baru dimulai!',
           { id: 'nextGame' }
         );
@@ -981,9 +989,11 @@ export default function RoomPage() {
                   {room?.mode === 'tic_tac_toe'
                     ? 'Tic Tac Toe'
                     : room?.mode === 'arrow_classic'
-                    ? 'Arrow Classic (Ko-op)'
+                    ? 'Arrow Classic'
                     : room?.mode === 'arrow_competition'
                     ? 'Arrow Competition'
+                    : room?.mode === 'arrow_practice'
+                    ? 'Arrow Practice'
                     : room?.mode || 'collaborative'}
                 </p>
               </div>
@@ -1231,8 +1241,9 @@ export default function RoomPage() {
                 <option value="zen">Zen (Santai)</option>
                 <option value="snakes_and_ladders">Snakes &amp; Ladders (Ular Tangga)</option>
                 <option value="tic_tac_toe">Tic Tac Toe</option>
-                <option value="arrow_classic">Arrow Puzzle Master — Classic (Ko-op)</option>
+                <option value="arrow_classic">Arrow Puzzle Master — Classic</option>
                 <option value="arrow_competition">Arrow Puzzle Master — Competition</option>
+                <option value="arrow_practice">Arrow Puzzle Master — Practice</option>
               </select>
             </div>
 

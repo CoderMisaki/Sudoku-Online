@@ -73,29 +73,29 @@ export type ArrowDifficulty = 'easy' | 'medium' | 'hard' | 'expert' | 'evil';
 
 export const ARROW_DIFFICULTY: Record<ArrowDifficulty, ArrowDifficultyConfig> = {
   easy: {
-    size: 6, arrowCount: 5, minLength: 2, maxLength: 4, turnChance: 0.35, blockBias: 0.55,
-    maxFreeRatio: 0.7, minBlocked: 1,
-    label: 'Easy', description: 'Sedikit arrow, jalur pendek, blocking sederhana',
+    size: 6, arrowCount: 7, minLength: 2, maxLength: 3, turnChance: 0.45, blockBias: 0.6,
+    maxFreeRatio: 0.7, minBlocked: 2,
+    label: 'Easy', description: 'Arrow pendek & berdempetan, jumlah mulai banyak, blocking ringan',
   },
   medium: {
-    size: 7, arrowCount: 8, minLength: 2, maxLength: 5, turnChance: 0.4, blockBias: 0.65,
-    maxFreeRatio: 0.55, minBlocked: 3,
-    label: 'Medium', description: 'Lebih banyak arrow, dependency mulai bercabang',
+    size: 7, arrowCount: 10, minLength: 2, maxLength: 4, turnChance: 0.5, blockBias: 0.7,
+    maxFreeRatio: 0.6, minBlocked: 4,
+    label: 'Medium', description: 'Lebih banyak arrow, dependency makin bercabang & berdempetan',
   },
   hard: {
-    size: 8, arrowCount: 11, minLength: 3, maxLength: 6, turnChance: 0.45, blockBias: 0.75,
-    maxFreeRatio: 0.45, minBlocked: 5,
-    label: 'Hard', description: 'Papan padat, rantai dependency bercabang',
+    size: 8, arrowCount: 14, minLength: 2, maxLength: 5, turnChance: 0.55, blockBias: 0.8,
+    maxFreeRatio: 0.5, minBlocked: 7,
+    label: 'Hard', description: 'Papan padat, rantai dependency bercabang & saling menghalangi',
   },
   expert: {
-    size: 9, arrowCount: 14, minLength: 3, maxLength: 7, turnChance: 0.5, blockBias: 0.8,
-    maxFreeRatio: 0.4, minBlocked: 7,
-    label: 'Expert', description: 'Banyak arrow panjang, blocking kompleks',
+    size: 9, arrowCount: 18, minLength: 3, maxLength: 6, turnChance: 0.6, blockBias: 0.85,
+    maxFreeRatio: 0.45, minBlocked: 10,
+    label: 'Expert', description: 'Sangat banyak arrow panjang, blocking kompleks & berdempetan',
   },
   evil: {
-    size: 10, arrowCount: 18, minLength: 3, maxLength: 8, turnChance: 0.5, blockBias: 0.85,
-    maxFreeRatio: 0.35, minBlocked: 10,
-    label: 'Evil', description: 'Papan sangat padat, dependency panjang — tetap 100% solvable',
+    size: 10, arrowCount: 22, minLength: 3, maxLength: 6, turnChance: 0.6, blockBias: 0.9,
+    maxFreeRatio: 0.4, minBlocked: 13,
+    label: 'Evil', description: 'Papan ekstrem padat, dependency panjang & rapat — tetap 100% solvable',
   },
 };
 

@@ -133,9 +133,11 @@ export function useRealtime(roomId: string) {
   const buildSyncPayload = useCallback((senderId: string) => {
     const store = useGameStore.getState();
     const isCompetition = store.room?.mode === 'competition';
-    // ARROW COMPETITION ISOLATION: tiap pemain memegang papan sendiri, jadi papan
-    // Arrow tidak pernah dikirim ke guest. Mode Classic sebaliknya: satu papan bersama.
-    const isArrowCompetition = store.room?.mode === 'arrow_competition';
+    // ARROW COMPETITION / PRACTICE ISOLATION: tiap pemain memegang papan sendiri
+    // (seed acak di Practice), jadi papan Arrow tidak pernah dikirim ke guest.
+    // Mode Classic sebaliknya: satu papan bersama.
+    const isArrowCompetition =
+      store.room?.mode === 'arrow_competition' || store.room?.mode === 'arrow_practice';
     return {
       room: store.room,
       grid: isCompetition ? null : store.grid,
@@ -505,8 +507,9 @@ export function useRealtime(roomId: string) {
         } else if (payload.room?.mode === 'arrow_classic' && isValidArrowPuzzleState(payload.arrowPuzzleState)) {
           store.replaceAllArrowPuzzleState(payload.arrowPuzzleState as ArrowPuzzleState);
           lastArrowStateAtRef.current = Date.now();
-        } else if (payload.room?.mode === 'arrow_competition') {
-          // Papan kompetisi dibuat ulang lokal oleh tiap pemain (seed = startedAt baru).
+        } else if (payload.room?.mode === 'arrow_competition' || payload.room?.mode === 'arrow_practice') {
+          // Papan kompetisi/practice dibuat ulang lokal oleh tiap pemain
+          // (seed = startedAt baru; Practice memakai seed acak per ronde).
           store.clearArrowPuzzleState();
         } else if (payload.room?.mode === 'competition') {
           // Kosongkan grid lama agar memicu pengambilan puzzle baru.
