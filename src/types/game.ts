@@ -10,7 +10,8 @@ export type GameMode =
   | 'tic_tac_toe'
   | 'arrow_classic'
   | 'arrow_competition'
-  | 'arrow_practice';
+  | 'arrow_practice'
+  | 'harvest_moon';
 
 /** Game yang memakai papan Arrow Puzzle Master (bukan papan Sudoku). */
 export type ArrowGameMode = 'arrow_classic' | 'arrow_competition' | 'arrow_practice';

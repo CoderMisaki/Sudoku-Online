@@ -420,6 +420,13 @@ export default function RoomPage() {
     }
   };
 
+  // Harvest Moon punya halaman dunia sendiri (open-world + character creation).
+  useEffect(() => {
+    if (room?.mode === 'harvest_moon') {
+      router.replace(`/harvest/${roomId}`);
+    }
+  }, [room?.mode, roomId, router]);
+
   useEffect(() => {
     if (!roomId || isInitializedRef.current) return;
     isInitializedRef.current = true;
