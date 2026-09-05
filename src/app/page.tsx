@@ -34,6 +34,7 @@ export default function Home() {
   const [mode, setMode] = useState<GameMode>('collaborative');
   const [maxPlayers, setMaxPlayers] = useState(4);
   const [joinCode, setJoinCode] = useState('');
+  const [joinGameType, setJoinGameType] = useState<'classic' | 'harvest'>('classic');
   const [error, setError] = useState('');
 
   // Admin gate — password never in client bundle, verified via /api/admin/verify
@@ -139,6 +140,9 @@ export default function Home() {
         setDifficulty('3x3');
       }
       setMaxPlayers(2);
+    } else if (newMode === 'harvest_moon') {
+      // Open-world farm: hingga 16 pemain dalam satu world.
+      setMaxPlayers((prev) => Math.min(Math.max(prev, 2), 16));
     } else {
       // Arrow Puzzle Master & Sudoku sama-sama memakai Easy .. Evil.
       if (difficulty === '3x3' || difficulty === '8x8') {
@@ -166,7 +170,9 @@ export default function Home() {
       mode,
       maxPlayers: finalMaxPlayers
     }));
-    router.push(`/room/${roomId}`);
+    // Harvest Moon memakai halaman khusus (open-world + character creation),
+    // room lain tetap ke /room/[id].
+    router.push(mode === 'harvest_moon' ? `/harvest/${roomId}` : `/room/${roomId}`);
   };
 
   const handleCreateRoom = (e: React.FormEvent) => {
@@ -244,7 +250,7 @@ export default function Home() {
     setError('');
     handleSaveUsername(username);
     clearRoomStateBeforeNavigate();
-    router.push(`/room/${cleanCode}`);
+    router.push(joinGameType === 'harvest' ? `/harvest/${cleanCode}` : `/room/${cleanCode}`);
   };
 
   return (
@@ -316,29 +322,31 @@ export default function Home() {
         title="Pengaturan Room"
       >
         <form onSubmit={handleCreateRoom} className="space-y-4">
-          <div>
-            <label className="text-sm font-medium block mb-1.5">Kesulitan (Difficulty)</label>
-            <select
-              value={difficulty}
-              onChange={(e) => setDifficulty(e.target.value as Difficulty)}
-              className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground cursor-pointer"
-            >
-              {mode === 'tic_tac_toe' ? (
-                <>
-                  <option value="3x3">3x3 (Klasik - 3 Segaris)</option>
-                  <option value="8x8">8x8 (Lanjutan - 5 Segaris)</option>
-                </>
-              ) : (
-                <>
-                  <option value="easy">Easy (Mudah)</option>
-                  <option value="medium">Medium (Sedang)</option>
-                  <option value="hard">Hard (Sulit)</option>
-                  <option value="expert">Expert (Pakar)</option>
-                  <option value="evil">Evil (Ekstrem)</option>
-                </>
-              )}
-            </select>
-          </div>
+          {mode !== 'harvest_moon' && (
+            <div>
+              <label className="text-sm font-medium block mb-1.5">Kesulitan (Difficulty)</label>
+              <select
+                value={difficulty}
+                onChange={(e) => setDifficulty(e.target.value as Difficulty)}
+                className="w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground cursor-pointer"
+              >
+                {mode === 'tic_tac_toe' ? (
+                  <>
+                    <option value="3x3">3x3 (Klasik - 3 Segaris)</option>
+                    <option value="8x8">8x8 (Lanjutan - 5 Segaris)</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="easy">Easy (Mudah)</option>
+                    <option value="medium">Medium (Sedang)</option>
+                    <option value="hard">Hard (Sulit)</option>
+                    <option value="expert">Expert (Pakar)</option>
+                    <option value="evil">Evil (Ekstrem)</option>
+                  </>
+                )}
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="text-sm font-medium block mb-1.5">Mode Permainan</label>
@@ -357,6 +365,7 @@ export default function Home() {
               <option value="arrow_classic">Arrow Puzzle Master — Classic</option>
               <option value="arrow_competition">Arrow Puzzle Master — Competition</option>
               <option value="arrow_practice">Arrow Puzzle Master — Practice</option>
+              <option value="harvest_moon">Harvest Moon — Open World Farming</option>
             </select>
           </div>
 
@@ -372,6 +381,14 @@ export default function Home() {
             >
               {mode === 'tic_tac_toe' ? (
                 <option value={2}>2 Pemain (Maksimal)</option>
+              ) : mode === 'harvest_moon' ? (
+                <>
+                  <option value={2}>2 Pemain</option>
+                  <option value={4}>4 Pemain</option>
+                  <option value={8}>8 Pemain</option>
+                  <option value={12}>12 Pemain</option>
+                  <option value={16}>16 Pemain (Maks)</option>
+                </>
               ) : (
                 <>
                   <option value={2}>2 Pemain</option>
@@ -385,6 +402,12 @@ export default function Home() {
             {mode === 'tic_tac_toe' && (
               <p className="text-[11px] text-secondary mt-1">
                 * Tic Tac Toe otomatis bermain lawan Bot jika sendirian di room.
+              </p>
+            )}
+            {mode === 'harvest_moon' && (
+              <p className="text-[11px] text-secondary mt-1">
+                * Harvest Moon: world open-world farming persisten yang bisa dihuni bersama (2–16 pemain).
+                Karakter dibuat saat pertama masuk ke dunia.
               </p>
             )}
             {mode === 'arrow_classic' && (
@@ -426,6 +449,29 @@ export default function Home() {
         title="Gabung Room"
       >
         <form onSubmit={handleJoinRoom} className="space-y-4">
+          <div>
+            <label className="text-sm font-medium block mb-1.5">Jenis Room</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setJoinGameType('classic')}
+                className={`rounded-[16px] border px-3 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                  joinGameType === 'classic' ? 'border-foreground bg-foreground text-background' : 'border-border hover:bg-hover'
+                }`}
+              >
+                🧩 Klasik / Puzzle
+              </button>
+              <button
+                type="button"
+                onClick={() => setJoinGameType('harvest')}
+                className={`rounded-[16px] border px-3 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                  joinGameType === 'harvest' ? 'border-emerald-500 bg-emerald-500/15 text-emerald-500' : 'border-border hover:bg-hover'
+                }`}
+              >
+                🌾 Harvest Moon (Open World)
+              </button>
+            </div>
+          </div>
           <div className="relative">
             <Input
               label="Kode Room"

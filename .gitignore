@@ -39,6 +39,9 @@ yarn-error.log*
 # artefak sementara skrip verifikasi (.jules/verify-arrow-*.js)
 .tmp-*
 
+# Harvest Moon persistent world data (server runtime)
+/server/data/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
