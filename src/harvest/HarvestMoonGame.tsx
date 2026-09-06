@@ -7,6 +7,7 @@ import { SyncClient } from './sync';
 import { useHarvestStore } from './store';
 import { audio } from './audio';
 import { getOrCreateUserId } from '@/utils/uuid';
+import { useOrientation } from './orientation';
 import type { ClientMsg, ServerMsg, EventMsg, SnapshotMsg, PlayerState } from './types';
 import { HudLayer, Toasts } from './Hud';
 import { Menus } from './Menus';
@@ -45,27 +46,19 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
   const startedRef = useRef(false);
   const [engineVersion, setEngineVersion] = useState(0);
 
-  // ── landscape-only gate (auto-dismisses when rotated) ──
-  const [portrait, setPortrait] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia('(orientation: portrait)');
-    const update = () => setPortrait(mq.matches);
-    update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
-  }, []);
+  // ── Authoritative multi-layer orientation detection ──
+  const { isLandscape } = useOrientation();
 
   // ── session identity ──
   useEffect(() => {
     const uid = getOrCreateUserId();
-    const name = (typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') : null) || '';
+    let name = (typeof window !== 'undefined' ? localStorage.getItem('sudoku_username') : null) || '';
     if (!name) {
-      router.replace('/');
-      return;
+      name = 'FARMER_' + uid.slice(0, 4).toUpperCase();
+      try { localStorage.setItem('sudoku_username', name); } catch {}
     }
     setSession(roomId.toUpperCase(), uid, name.toUpperCase());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId]);
+  }, [roomId, setSession]);
 
   // ── audio unlock on first gesture ──
   useEffect(() => {
@@ -148,24 +141,28 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
         applySnapMeta(msg.time, msg.day, msg.season, msg.weather);
         setPlayersShort([
           { id: store.userId, name: store.me?.username || store.userName, online: true },
-          ...msg.players.filter((p) => String(p[0]) !== store.userId).map((p) => ({ id: String(p[0]), name: '', online: p[6] === 1 })),
+          ...msg.players.filter((p) => String(p[0]) !== store.userId).map((p) => ({
+            id: String(p[0]),
+            name: (p[7] as string) || '',
+            online: p[6] === 1,
+          })),
         ]);
         break;
       }
       case 'event': {
         const e = (msg as EventMsg).e;
         const engine = engineRef.current;
-          if (engine) {
-            engine.handleEvent(e);
-            if (e.type === 'festival') {
-              if ((e.active as boolean) && e.items) engine.setFestivalItems(e.items as { x: number; y: number; item: string }[]);
-              if (!e.active) engine.clearFestivalItems();
-            }
-            if (e.type === 'equipped') engine.setSelectedItem((e.item as string) || null);
-            if (e.type === 'inv' && store.me) {
-              engine.setMyPlayer({ ...store.me, inv: (e.inv || []) as PlayerState['inv'] });
-            }
+        if (engine) {
+          engine.handleEvent(e);
+          if (e.type === 'festival') {
+            if ((e.active as boolean) && e.items) engine.setFestivalItems(e.items as { x: number; y: number; item: string }[]);
+            if (!e.active) engine.clearFestivalItems();
           }
+          if (e.type === 'equipped') engine.setSelectedItem((e.item as string) || null);
+          if (e.type === 'inv' && store.me) {
+            engine.setMyPlayer({ ...store.me, inv: (e.inv || []) as PlayerState['inv'] });
+          }
+        }
         applyEvent(e);
         break;
       }
@@ -214,7 +211,7 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
     };
   }, [handleMessage, roomId, setStatus, toast]);
 
-  // ── character creation bridge (retries until the socket is open, then fails loudly) ──
+  // ── character creation bridge ──
   useEffect(() => {
     const onCreate = (ev: Event) => {
       const detail = (ev as CustomEvent<{ char: PlayerState['char']; farmName: string }>).detail;
@@ -227,11 +224,11 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
           return;
         }
         tries += 1;
-        if (tries > 10) {
+        if (tries > 15) {
           window.dispatchEvent(new CustomEvent('harvest-create-ack', { detail: { ok: false, msg: 'Koneksi ke server gagal. Muat ulang halaman.' } }));
           return;
         }
-        setTimeout(trySend, 400);
+        setTimeout(trySend, 300);
       };
       trySend();
     };
@@ -254,7 +251,7 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
     audio.setSfxVolume(useHarvestStore.getState().settings.sfx);
   }, []);
 
-  // ── server status watcher (greet → in_game, welcome when snapshot arrives) ──
+  // ── server status watcher ──
   useEffect(() => {
     const unsub = useHarvestStore.subscribe((s, prev) => {
       if (s.me && !prev.me && s.status !== 'closed') setStatus('connected');
@@ -278,7 +275,9 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
       engineRef.current?.setSelectedItem(id || null);
       syncRef.current?.send({ t: 'action', a: 'equip', item: id || 'none' } as ClientMsg);
     },
-    sendChat: (text) => syncRef.current?.send({ t: 'chat', text } as ClientMsg),
+    sendChat: (text, channel = 'public', targetPlayerId) => {
+      syncRef.current?.send({ t: 'chat', text, channel, targetPlayerId } as ClientMsg);
+    },
     emote: (id) => syncRef.current?.send({ t: 'emote', emote: id } as ClientMsg),
     leave: () => {
       router.replace('/');
@@ -288,6 +287,11 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
   // ── keyboard shortcuts ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        if (e.key === 'Escape') target.blur();
+        return;
+      }
       const st = useHarvestStore.getState();
       const key = e.key.toLowerCase();
       if (e.key === 'Escape') {
@@ -302,10 +306,15 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
       else if (key === 'q') setMenu(st.menu === 'quests' ? null : 'quests');
       else if (key === 'j') setMenu(st.menu === 'journal' ? null : 'journal');
       else if (key === 'c') setMenu(st.menu === 'crafting' ? null : 'crafting');
-      else if (key === 'e' || key === ' ' || key === 'enter') { e.preventDefault(); api.interact(); }
+      else if (key === 'e' || key === ' ' || key === 'enter') {
+        if (key !== 'enter' || !st.chatOpen) {
+          e.preventDefault();
+          api.interact();
+        }
+      }
       else if (key === 'p' || key === 'l') setMenu(st.menu === 'relationships' ? null : 'relationships');
       else if (key === 'n') setMenu(st.menu === 'settings' ? null : 'settings');
-      else if (key === '1' || key === '2' || key === '3' || key === '4' || key === '5' || key === '6' || key === '7' || key === '8') {
+      else if (['1', '2', '3', '4', '5', '6', '7', '8'].includes(key)) {
         const idx = Number(key) - 1;
         const quick = getQuickSlots(useHarvestStore.getState().me, useHarvestStore.getState().defs);
         if (quick[idx]) api.select(quick[idx]);
@@ -328,7 +337,7 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#101a2e] select-none" style={{ height: '100dvh' }}>
-      {(portrait || screen === 'orientation') && <OrientationGate />}
+      {!isLandscape && <OrientationGate />}
       {(screen === 'loading' || screen === 'creator') && <div ref={canvasHostRef} className="absolute inset-0" />}
       {screen === 'game' && (
         <>
@@ -340,9 +349,7 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
       )}
       {screen === 'creator' && <CharacterCreator />}
       {screen === 'error' && <ErrorScreen message={errorMsg} onRetry={() => window.location.reload()} />}
-      {(screen === 'loading' || status === 'connecting' || status === 'reconnecting') && screen !== 'orientation' && screen !== 'error' && <LoadingScreen status={status} />}
+      {(screen === 'loading' || status === 'connecting' || status === 'reconnecting') && screen !== 'error' && <LoadingScreen status={status} />}
     </div>
   );
 }
-
-
