@@ -12,6 +12,7 @@ const testFiles = [
   'tests/05_chat_system.test.mjs',
   'tests/06_inventory_economy.test.mjs',
   'tests/07_persistence_reconnect.test.mjs',
+  'tests/08_mobile_lifecycle_reconnect.test.mjs',
   '.jules/harvest-test-suite.mjs',
 ];
 
