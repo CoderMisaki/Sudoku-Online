@@ -4,6 +4,7 @@
 export type ConnectionStatus =
   | 'connecting'
   | 'hello'
+  | 'syncing'
   | 'ready'
   | 'reconnecting'
   | 'lost'

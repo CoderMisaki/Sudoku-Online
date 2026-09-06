@@ -7,7 +7,7 @@ import { SyncClient } from './sync';
 import { useHarvestStore } from './store';
 import { audio } from './audio';
 import { getOrCreateUserId } from '@/utils/uuid';
-import { useOrientation } from './orientation';
+import { useOrientation, isLandscapeDevice, waitForViewportSettle } from './orientation';
 import type { ClientMsg, ServerMsg, EventMsg, SnapshotMsg, PlayerState } from './types';
 import { HudLayer, Toasts } from './Hud';
 import { Menus } from './Menus';
@@ -16,6 +16,23 @@ import { OrientationGate, LoadingScreen, ErrorScreen } from './Screens';
 import { UIApi, getQuickSlots } from './api';
 
 export type { UIApi };
+
+/**
+ * Post-resume resync: if the socket is healthy but the UI never reached the
+ * game screen (snapshot was lost during rotation/backgrounding), ask the
+ * server for the authoritative snapshot again via the existing `req_state`
+ * protocol. Never sent before the hello handshake completes.
+ */
+function maybeResyncAfterResume(client: SyncClient) {
+  const st = useHarvestStore.getState();
+  if (st.screen !== 'game') {
+    client.requestResync();
+    return;
+  }
+  if (st.status === 'reconnecting' || st.status === 'connecting' || st.status === 'hello' || st.status === 'syncing') {
+    client.requestResync();
+  }
+}
 
 export function HarvestMoonGame({ roomId }: { roomId: string }) {
   const router = useRouter();
@@ -94,6 +111,8 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
       }
       case 'snapshot': {
         const snap = msg as SnapshotMsg;
+        const prevStatus = useHarvestStore.getState().status;
+        setStatus('syncing');
         try {
           if (!engineRef.current && canvasHostRef.current) {
             const engine = new WorldEngine(canvasHostRef.current, {
@@ -127,7 +146,15 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
           }
           applySnapshot(snap.me, snap.defs, snap.world, snap.prices);
           audio.applySeason(snap.world.season);
-          setScreen('game');
+          // The authoritative snapshot is the ONLY thing that may enter the
+          // game screen — orientation merely gates visibility, never state.
+          // (A resync for a not-yet-created character must stay on creator.)
+          if (snap.me.char) {
+            setScreen('game');
+            if (prevStatus === 'reconnecting' || prevStatus === 'error') {
+              console.log('[harvest] game recovered');
+            }
+          }
         } catch (err) {
           console.error('[harvest] snapshot apply failed', err);
           setError('Gagal memuat dunia. Coba muat ulang.');
@@ -184,7 +211,8 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
     }
   }, [applyEvent, applySnapMeta, applySnapshot, setError, setInteraction, setPlayersShort, setScreen, setStatus, toast]);
 
-  // ── connect ──
+  // ── connect (created exactly once — rotation must never recreate it) ──
+  const lastSyncStateRef = useRef<string>('');
   useEffect(() => {
     if (startedRef.current) return;
     const st = useHarvestStore.getState();
@@ -196,15 +224,23 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
       st.userName,
       handleMessage,
       (s) => {
+        const prev = lastSyncStateRef.current;
+        lastSyncStateRef.current = s;
         if (s === 'reconnecting') {
           setStatus('reconnecting');
-          toast('info', 'Koneksi terputus — mencoba menghubungkan kembali...');
+          // One toast per disconnect episode, not one per retry attempt.
+          if (prev !== 'reconnecting') {
+            toast('info', 'Koneksi terputus — mencoba menghubungkan kembali...');
+          }
         } else if (s === 'open') {
           setStatus('hello');
         } else if (s === 'closed') {
           setStatus('closed');
+        } else if (s === 'error') {
+          setStatus('error');
+          toast('warn', 'Koneksi belum pulih — ketuk Hubungkan Ulang.');
         } else {
-          setStatus(s);
+          setStatus('connecting');
         }
       }
     );
@@ -219,26 +255,85 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
     };
   }, [handleMessage, roomId, setStatus, toast]);
 
-  // ── recover from background / network blips (common when rotating on mobile) ──
-  useEffect(() => {
-    const tryReconnect = () => {
+  // ── single mobile-lifecycle recovery coordinator ──
+  // Rotation / backgrounding / PWA viewport changes can leave the WebSocket
+  // OPEN-but-dead without ever firing onclose. Every resume signal funnels
+  // through this one coordinator (coalesced, never spawning a second socket):
+  // - passive signals (rotation/resize/viewport): health check only, keeps the
+  //   automatic retry budget.
+  // - explicit resume signals (foreground/pageshow/focus/online): force a
+  //   fresh handshake when unhealthy, resync when already healthy.
+  const lastRecoveryRef = useRef(0);
+  const recoverFromLifecycle = useCallback((source: string, aggressive: boolean) => {
+    const now = Date.now();
+    if (now - lastRecoveryRef.current < 1500) return; // coalesce event bursts
+    lastRecoveryRef.current = now;
+    // Let the browser finish its rotation reflow first, then read the fresh
+    // viewport and socket health (double-rAF, no arbitrary delay).
+    waitForViewportSettle(() => {
       const s = syncRef.current;
       if (!s) return;
-      const st = useHarvestStore.getState();
-      if (!s.isOpen() || st.status === 'reconnecting' || st.status === 'closed') {
-        s.ensureOpen();
+      const landscape = isLandscapeDevice();
+      if (aggressive) {
+        if (!s.isHealthy()) {
+          console.log(`[harvest] lifecycle resume (${source}, landscape=${landscape}) — forcing reconnect`);
+          s.forceReconnect(`lifecycle:${source}`);
+        } else {
+          maybeResyncAfterResume(s);
+        }
+        return;
       }
-    };
+      s.ensureOpen();
+      if (s.isHealthy()) maybeResyncAfterResume(s);
+    });
+  }, []);
+
+  useEffect(() => {
+    const passive = () => recoverFromLifecycle('viewport', false);
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') tryReconnect();
+      if (document.visibilityState === 'visible') recoverFromLifecycle('visibility', true);
     };
-    window.addEventListener('focus', tryReconnect);
-    window.addEventListener('online', tryReconnect);
+    const onPageShow = () => recoverFromLifecycle('pageshow', true);
+    const onFocus = () => recoverFromLifecycle('focus', true);
+    const onOnline = () => recoverFromLifecycle('online', true);
+    window.addEventListener('orientationchange', passive, { passive: true });
+    window.addEventListener('resize', passive, { passive: true });
+    try { window.visualViewport?.addEventListener('resize', passive); } catch {}
     document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onOnline);
     return () => {
-      window.removeEventListener('focus', tryReconnect);
-      window.removeEventListener('online', tryReconnect);
+      window.removeEventListener('orientationchange', passive);
+      window.removeEventListener('resize', passive);
+      try { window.visualViewport?.removeEventListener('resize', passive); } catch {}
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [recoverFromLifecycle]);
+
+  // Rotating into landscape re-checks the connection (passive — the snapshot,
+  // not the orientation, is what enters the game screen).
+  const prevLandscapeRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const prev = prevLandscapeRef.current;
+    prevLandscapeRef.current = isLandscape;
+    if (prev === null) return; // skip initial mount
+    if (isLandscape && !prev) recoverFromLifecycle('orientation', false);
+  }, [isLandscape, recoverFromLifecycle]);
+
+  // ── diagnostics hook (used by automated lifecycle tests) ──
+  useEffect(() => {
+    try {
+      (window as unknown as { __harvest?: unknown }).__harvest = {
+        get sync() { return syncRef.current; },
+        getState: () => useHarvestStore.getState(),
+      };
+    } catch {}
+    return () => {
+      try { delete (window as unknown as { __harvest?: unknown }).__harvest; } catch {}
     };
   }, []);
 
@@ -380,12 +475,20 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
       )}
       {screen === 'creator' && <CharacterCreator />}
       {screen === 'error' && <ErrorScreen message={errorMsg} onRetry={() => window.location.reload()} />}
-      {(screen === 'loading' || status === 'connecting' || status === 'reconnecting') && screen !== 'error' && (
+      {screen !== 'error' && (
+        screen === 'loading' ||
+        status === 'connecting' ||
+        status === 'reconnecting' ||
+        status === 'error' ||
+        ((status === 'hello' || status === 'syncing') && screen !== 'creator')
+      ) && (
         <LoadingScreen
           status={status}
+          failed={status === 'error'}
           onRetry={() => {
-            syncRef.current?.ensureOpen();
+            syncRef.current?.forceReconnect('manual-retry');
           }}
+          onReload={() => window.location.reload()}
         />
       )}
     </div>

@@ -33,6 +33,24 @@ function readViewport(): { w: number; h: number } {
   return { w, h };
 }
 
+/**
+ * Run `cb` after the browser finished its rotation reflow (two animation
+ * frames), so viewport reads + connection recovery observe the final layout —
+ * without any arbitrary millisecond delay.
+ */
+export function waitForViewportSettle(cb: () => void): void {
+  if (typeof window === 'undefined') return;
+  try {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        cb();
+      });
+    });
+  } catch {
+    cb();
+  }
+}
+
 export function screenOrientationType(): string | null {
   try {
     return typeof window.screen?.orientation?.type === 'string'

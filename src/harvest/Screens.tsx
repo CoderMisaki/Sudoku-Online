@@ -9,12 +9,12 @@ export function OrientationGate() {
     <div
       role="alert"
       aria-live="assertive"
-      className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-gradient-to-b from-[#101a2e] via-[#14243d] to-[#0f1a2c] text-white text-center px-6 select-none overflow-hidden"
+      className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-gradient-to-b from-[#0d1826] via-[#0f1a2c] to-[#070d18] text-white text-center px-6 select-none overflow-hidden"
     >
-      {/* decorative ambient glow */}
+      {/* decorative ambient glow — project palette only (emerald + amber) */}
       <div className="pointer-events-none absolute inset-0 opacity-40">
         <div className="absolute left-1/4 top-1/4 w-72 h-72 rounded-full bg-emerald-400/10 blur-3xl" />
-        <div className="absolute right-1/4 bottom-1/4 w-72 h-72 rounded-full bg-sky-400/10 blur-3xl" />
+        <div className="absolute right-1/4 bottom-1/4 w-72 h-72 rounded-full bg-amber-400/10 blur-3xl" />
       </div>
 
       <div className="relative flex items-center justify-center">
@@ -67,58 +67,91 @@ export function OrientationGate() {
           Putar perangkatmu ke posisi <b className="text-emerald-300 font-bold">Landscape (Mendatar)</b> untuk memulai permainan.
         </p>
       </div>
-
-      {/* animated instruction row */}
-      <motion.div
-        className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-2 text-xs text-white/70"
-        animate={{ y: [0, -3, 0] }}
-        transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
-      >
-        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-        Otomatis melanjutkan saat perangkat diputar
-      </motion.div>
     </div>
   );
 }
 
-export function LoadingScreen({ status, onRetry }: { status: string; onRetry?: () => void }) {
+export function LoadingScreen({
+  status,
+  failed = false,
+  onRetry,
+  onReload,
+}: {
+  status: string;
+  /** true when the automatic retry budget is exhausted — show recovery actions, never auto-reload. */
+  failed?: boolean;
+  onRetry?: () => void;
+  onReload?: () => void;
+}) {
   const isReconnect = status === 'reconnecting';
+  const title = failed
+    ? 'Koneksi belum berhasil dipulihkan'
+    : isReconnect
+      ? 'Menghubungkan Kembali...'
+      : status === 'connecting'
+        ? 'Menghubungkan ke Server...'
+        : status === 'syncing'
+          ? 'Memuat Data Dunia...'
+          : 'Menyiapkan Dunia...';
   return (
-    <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-5 bg-[#101a2e]/90 backdrop-blur-md text-white text-center px-6 select-none">
+    <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-5 bg-[#0d1826]/90 backdrop-blur-md text-white text-center px-6 select-none">
       <div className="relative w-16 h-16">
         <div className="absolute inset-0 rounded-full border-4 border-emerald-400/20" />
         <div
           className={`absolute inset-0 rounded-full border-4 border-t-emerald-300 border-r-transparent border-b-transparent border-l-transparent ${
-            isReconnect ? 'animate-pulse' : 'animate-spin'
+            isReconnect || failed ? 'animate-pulse' : 'animate-spin'
           }`}
         />
-        <div className="absolute inset-0 flex items-center justify-center text-2xl">🌾</div>
+        <div className="absolute inset-0 flex items-center justify-center text-2xl">{failed ? '📡' : '🌾'}</div>
       </div>
       <div className="space-y-1">
-        <h2 className="text-lg font-bold">
-          {isReconnect ? 'Menghubungkan Kembali...' : status === 'connecting' ? 'Menghubungkan ke Server...' : 'Menyiapkan Dunia...'}
-        </h2>
+        <h2 className="text-lg font-bold">{title}</h2>
         <p className="text-xs text-white/60 max-w-xs">
-          {isReconnect
-            ? 'Koneksi terputus. Data kamu aman — kami menghubungkan kembali.'
-            : 'Sinkronisasi world, farm, inventory, dan pemain lain.'}
+          {failed
+            ? 'Server tidak menjawab setelah beberapa kali percobaan. Data kamu aman — coba hubungkan ulang tanpa reload.'
+            : isReconnect
+              ? 'Koneksi terputus. Data kamu aman — kami menghubungkan kembali.'
+              : 'Sinkronisasi world, farm, inventory, dan pemain lain.'}
         </p>
       </div>
       <div className="w-56 h-1.5 rounded-full bg-white/10 overflow-hidden">
         <div
           className={`h-full rounded-full bg-emerald-400 ${
-            isReconnect ? 'w-full animate-pulse' : 'w-1/3 animate-[loadbar_1.6s_ease-in-out_infinite]'
+            isReconnect || failed ? 'w-full animate-pulse' : 'w-1/3 animate-[loadbar_1.6s_ease-in-out_infinite]'
           }`}
         />
       </div>
-      {onRetry && (
-        <button
-          onClick={onRetry}
-          className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-xs text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer active:scale-95"
-        >
-          <RotateCw className="w-3.5 h-3.5" />
-          Coba Sambungkan Lagi
-        </button>
+      {failed ? (
+        <div className="flex items-center gap-2">
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-emerald-950 px-4 py-2 text-xs font-bold transition-colors cursor-pointer active:scale-95"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+              Hubungkan Ulang
+            </button>
+          )}
+          {onReload && (
+            <button
+              onClick={onReload}
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-xs text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer active:scale-95"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Muat Ulang Game
+            </button>
+          )}
+        </div>
+      ) : (
+        onRetry && (
+          <button
+            onClick={onRetry}
+            className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-xs text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer active:scale-95"
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+            Coba Sambungkan Lagi
+          </button>
+        )
       )}
     </div>
   );

@@ -37,10 +37,18 @@ try {
 const server = http.createServer(async (req, res) => {
   try {
     // Health endpoint for deployment checks / diagnostics.
+    // NOTE: this only proves HTTP is up. The game ALSO needs a persistent
+    // WebSocket upgrade on /ws/harvest — see docs/harvest-websocket-deployment.md.
     if (req.url === '/api/harvest/health') {
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Cache-Control', 'no-store');
-      res.end(JSON.stringify({ ok: true, gameServer: Boolean(harvestServer), now: Date.now() }));
+      res.end(JSON.stringify({
+        ok: true,
+        gameServer: Boolean(harvestServer),
+        websocketPath: '/ws/harvest',
+        requiresCustomServer: true,
+        now: Date.now(),
+      }));
       return;
     }
     await handle(req, res);

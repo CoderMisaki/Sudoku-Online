@@ -833,6 +833,31 @@ export class HarvestServer {
       peer.close(1008);
       return;
     }
+    // Idempotent re-hello on the SAME socket (client retried hello without
+    // reopening): just resend the latest snapshot, never duplicate anything.
+    const self = this.clients.get(peer);
+    if (self && self.roomCode === roomCode && self.player.id === userId) {
+      const wSelf = this.getWorld(self.roomCode);
+      self.player.lastSeen = nowMs();
+      if (self.player.char) {
+        this.sendSnapshot(peer, self, wSelf, true);
+      } else {
+        peer.send({ t: 'hello_ack', player: null, needsCreation: true });
+      }
+      return;
+    }
+    // Duplicate-connection safety: the same room+userId reconnecting on a NEW
+    // socket must take over. Unmap + close the stale peer FIRST so it can
+    // never clobber the new connection, double-count players, or emit a bogus
+    // 'leave' for a player that is actually still here.
+    for (const [otherPeer, otherClient] of this.clients) {
+      if (otherPeer !== peer && otherClient.roomCode === roomCode && otherClient.player.id === userId) {
+        this.clients.delete(otherPeer);
+        this.connections.delete(otherPeer);
+        try { otherPeer.close(1000); } catch {}
+        // Its onclose will no-op: the mapping above is already gone.
+      }
+    }
     const w = this.getWorld(roomCode);
     const players = this.playersOf(w);
     // Cap players per world (2–16)
