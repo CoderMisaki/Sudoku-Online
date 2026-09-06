@@ -1,104 +1,17 @@
 import assert from 'assert';
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
+import {
+  loadTs, sleep, sockets, MockWebSocket, liveSockets, waitForSocket, cleanBuildDir,
+} from './helpers/harvest.mjs';
+import { installDom } from './helpers/dom.mjs';
 
 console.log('--- TEST SUITE 8: MOBILE LIFECYCLE + WEBSOCKET RECONNECT ---');
 
-const require = createRequire(import.meta.url);
-let ts;
-try {
-  ts = require('typescript');
-} catch {
-  console.error('❌ typescript is required for suite 8 — run `npm install` first.');
-  process.exit(1);
-}
+cleanBuildDir();
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Load the REAL client sources (transpiled in-memory, no build step)
-// ─────────────────────────────────────────────────────────────────────────────
-const tmpDir = new URL('./.tmp-build/', import.meta.url);
-fs.rmSync(tmpDir, { recursive: true, force: true });
-fs.mkdirSync(tmpDir, { recursive: true });
-
-async function loadTs(relPath) {
-  const src = fs.readFileSync(new URL('../' + relPath, import.meta.url), 'utf8');
-  const out = ts.transpileModule(src, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
-  });
-  const file = new URL('./.tmp-build/' + relPath.replaceAll('/', '_').replace(/\.ts$/, '.mjs'), import.meta.url);
-  fs.writeFileSync(file, out.outputText);
-  return import(file.href);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Deterministic WebSocket mock (no network)
-// ─────────────────────────────────────────────────────────────────────────────
-const sockets = [];
-class MockWebSocket {
-  static CONNECTING = 0;
-  static OPEN = 1;
-  static CLOSING = 2;
-  static CLOSED = 3;
-  constructor(url) {
-    this.url = url;
-    this.readyState = MockWebSocket.CONNECTING;
-    this.sent = [];
-    this.onopen = null;
-    this.onmessage = null;
-    this.onclose = null;
-    this.onerror = null;
-    sockets.push(this);
-  }
-  send(data) {
-    this.sent.push(String(data));
-    // Behave like the real server: answer heartbeat pings so the client-side
-    // heartbeat stays healthy unless the test deliberately withholds pongs.
-    if (!this.noPong && String(data).includes('"ping"') && this.readyState === MockWebSocket.OPEN) {
-      queueMicrotask(() => this.__receive({ t: 'pong', ts: Date.now() }));
-    }
-  }
-  close() {
-    if (this.readyState === MockWebSocket.CLOSED) return;
-    this.readyState = MockWebSocket.CLOSED;
-    queueMicrotask(() => { try { this.onclose && this.onclose({}); } catch {} });
-  }
-  __open() {
-    if (this.readyState !== MockWebSocket.CONNECTING) return;
-    this.readyState = MockWebSocket.OPEN;
-    this.onopen && this.onopen({});
-  }
-  __receive(obj) {
-    this.onmessage && this.onmessage({ data: JSON.stringify(obj) });
-  }
-  __serverClose() {
-    if (this.readyState === MockWebSocket.CLOSED) return;
-    this.readyState = MockWebSocket.CLOSED;
-    this.onclose && this.onclose({});
-  }
-}
-const liveSockets = () =>
-  sockets.filter((s) => s.readyState === MockWebSocket.OPEN || s.readyState === MockWebSocket.CONNECTING);
-
-/** Wait for a socket created at/after index `since`; optionally open it at once. */
-async function waitForSocket(since, { open = false, timeout = 2000, poll = 10 } = {}) {
-  const t0 = Date.now();
-  while (Date.now() - t0 < timeout) {
-    const fresh = sockets.slice(since).find(
-      (s) => s.readyState === MockWebSocket.CONNECTING || s.readyState === MockWebSocket.OPEN,
-    );
-    if (fresh) {
-      if (open && fresh.readyState === MockWebSocket.CONNECTING) fresh.__open();
-      return fresh;
-    }
-    await sleep(poll);
-  }
-  return null;
-}
-
-globalThis.window = { location: { protocol: 'http:', host: 'test.local' } };
-globalThis.WebSocket = MockWebSocket;
+// jsdom window (landscape phone). The client modules read window.* lazily, so
+// PART 6 can still swap in synthetic windows for orientation scenarios.
+installDom({ width: 844, height: 390, touch: true });
 
 // NOTE: transpiling is synchronous and blocks the event loop, so ALL test
 // modules are loaded up-front before any client timers start.
@@ -113,8 +26,8 @@ function mkClient(onMsg, onState, opts) {
   const states = [];
   const c = new syncMod.SyncClient(
     'ROOM1', 'user-1', 'BOB',
-    (raw) => { msgs.push(JSON.parse(raw)); onMsg && onMsg(JSON.parse(raw)); },
-    (s, e, info) => { states.push(s); onState && onState(s, e, info); },
+    (raw) => { msgs.push(JSON.parse(raw)); if (onMsg) onMsg(JSON.parse(raw)); },
+    (s, e, info) => { states.push(s); if (onState) onState(s, e, info); },
     opts,
   );
   clients.push(c);
@@ -147,6 +60,7 @@ const lastHello = (sock) => {
 
   sock.__receive({ t: 'hello_ack', needsCreation: true });
   assert.strictEqual(c.isHandshakeDone(), true, 'hello_ack completes the handshake');
+  assert.deepStrictEqual(states, ['connecting', 'open', 'ready'], 'handshake has an explicit terminal state');
   assert.strictEqual(c.isHealthy(), true, 'healthy after hello_ack + fresh heartbeat');
   assert.strictEqual(c.socketState(), 'open');
   assert.strictEqual(c.requestResync(), true, 'resync allowed after handshake');
@@ -483,11 +397,144 @@ const lastHello = (sock) => {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PART 8 — resume probe, generation guard, single-socket invariants
+// ─────────────────────────────────────────────────────────────────────────────
+// PART 6 swapped in synthetic windows without `location`; restore a full one.
+installDom({ width: 844, height: 390, touch: true });
+// Close every client from earlier parts so their pending retry timers cannot
+// create sockets while PART 8 counts them.
+for (const prev of clients.splice(0)) { try { prev.close(); } catch {} }
+await sleep(20);
+{
+  // 8a. probeAfterResume on a healthy socket: NO new socket, ping sent.
+  {
+    const { c } = mkClient(null, null, { ...SHORT, resumeGraceMs: 120 });
+    c.connect();
+    const s0 = sockets[sockets.length - 1];
+    s0.__open();
+    s0.__receive({ t: 'hello_ack', needsCreation: false });
+    const created = c.getSocketsCreated();
+    assert.strictEqual(c.probeAfterResume('visibility'), 'probing');
+    assert.strictEqual(c.getSocketsCreated(), created, 'healthy socket is probed, not replaced');
+    assert.ok(s0.messages('ping').length >= 1, 'probe ping sent');
+    await sleep(220); // grace elapses — the pong answered, so nothing happens
+    assert.strictEqual(c.getSocketsCreated(), created, 'no reconnect after a successful probe');
+    assert.strictEqual(c.isHealthy(), true);
+    c.close();
+  }
+
+  // 8b. probeAfterResume on a silent (dead but OPEN) socket → forced handshake.
+  {
+    const { c, states } = mkClient(null, null, { ...SHORT, resumeGraceMs: 80 });
+    c.connect();
+    const s0 = sockets[sockets.length - 1];
+    s0.__open();
+    s0.__receive({ t: 'hello_ack', needsCreation: false });
+    s0.noPong = true; // link is alive at TCP level but the server never answers
+    const since = sockets.length;
+    assert.strictEqual(c.probeAfterResume('visibility'), 'probing');
+    await sleep(160);
+    assert.strictEqual(s0.readyState, MockWebSocket.CLOSED, 'silent socket torn down after grace');
+    const repl = await waitForSocket(since, { open: true });
+    assert.ok(repl, 'fresh socket opened after a failed probe');
+    assert.ok(repl.lastHello(), 'fresh handshake re-sent with the same identity');
+    assert.ok(states.includes('recovering'), 'explicit resume surfaces as recovering, got ' + states.join(','));
+    repl.__receive({ t: 'snapshot' });
+    assert.ok(states.includes('ready'), 'handshake completes with a terminal ready state');
+    c.close();
+  }
+
+  // 8c. probeAfterResume with no socket + exhausted budget → forced recovery.
+  {
+    const { c } = mkClient(null, null, { ...SHORT, maxAutoRetries: 0 });
+    c.scheduleReconnect('probe-budget'); // → error, budget exhausted
+    assert.strictEqual(c.isBudgetExhausted(), true);
+    const created = c.getSocketsCreated();
+    assert.strictEqual(c.probeAfterResume('online'), 'forced', 'resume always gets a fresh handshake');
+    assert.strictEqual(c.isBudgetExhausted(), false, 'explicit resume resets the budget');
+    assert.strictEqual(c.getSocketsCreated(), created + 1, 'exactly one socket opened');
+    c.close();
+  }
+
+  // 8d. GENERATION GUARD — a stale socket must never touch the new session.
+  {
+    const { c, msgs, states } = mkClient(null, null, { ...SHORT, resumeGraceMs: 60 });
+    c.connect();
+    const stale = sockets[sockets.length - 1];
+    stale.__open();
+    stale.__receive({ t: 'hello_ack', needsCreation: false });
+    const genBefore = c.getGeneration();
+    c.forceReconnect('test-generation');
+    const fresh = sockets[sockets.length - 1];
+    assert.strictEqual(c.getGeneration(), genBefore + 1, 'generation bumped for the new socket');
+    fresh.__open();
+
+    // Late callbacks from the nuked socket arrive AFTER the fresh one is live.
+    const msgsBefore = msgs.length;
+    const statesBefore = states.length;
+    stale.__receive({ t: 'snapshot', me: { id: 'GHOST' } });
+    stale.__serverClose();
+    await sleep(30);
+    assert.strictEqual(msgs.length, msgsBefore, 'stale socket messages are dropped');
+    assert.deepStrictEqual(states.slice(statesBefore), [], 'stale socket cannot emit state');
+    assert.strictEqual(c.socketState(), 'open', 'fresh socket still open');
+    assert.ok(liveSockets().includes(fresh), 'fresh socket untouched by the stale close');
+
+    fresh.__receive({ t: 'snapshot', me: { id: 'user-1' } });
+    assert.strictEqual(msgs[msgs.length - 1].me.id, 'user-1', 'only the fresh socket feeds the app');
+    c.close();
+  }
+
+  // 8e. RAPID EVENT STORM — many forceReconnect/ensureOpen calls, one socket.
+  {
+    const { c } = mkClient(null, null, { ...SHORT });
+    c.connect();
+    sockets[sockets.length - 1].__open();
+    for (let i = 0; i < 12; i++) {
+      c.ensureOpen();
+      c.probeAfterResume('resize');
+    }
+    assert.strictEqual(liveSockets().filter((s) => s.url.includes('/ws/harvest')).length >= 1, true);
+    const live = liveSockets();
+    assert.ok(live.length <= 2, `no socket pile-up during an event storm, live=${live.length}`);
+    c.forceReconnect('storm');
+    c.forceReconnect('storm');
+    c.forceReconnect('storm');
+    await sleep(20);
+    assert.strictEqual(liveSockets().length, 1, 'exactly one live socket after repeated force reconnects');
+    c.close();
+  }
+
+  // 8f. ready clears a pending automatic retry (no zombie reconnect later).
+  {
+    const { c, states } = mkClient(null, null, { ...SHORT });
+    c.connect();
+    const first = sockets[sockets.length - 1];
+    first.__open();
+    first.__serverClose(); // → scheduleReconnect (800ms base delay)
+    assert.ok(states.includes('reconnecting'));
+    c.forceReconnect('user');
+    const second = sockets[sockets.length - 1];
+    second.__open();
+    second.__receive({ t: 'snapshot' });
+    assert.ok(states.includes('ready'));
+    assert.strictEqual(c.getRetryCount(), 0, 'retry budget reset by the handshake');
+    const total = sockets.length;
+    await sleep(1000); // the stale retry timer window has passed
+    assert.strictEqual(sockets.length, total, 'no zombie retry socket after recovery');
+    assert.strictEqual(liveSockets().length, 1);
+    c.close();
+  }
+
+  console.log('✔ PART 8 — resume probe, generation guard, event-storm + zombie-retry invariants');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Cleanup (timers must not keep the process alive)
 // ─────────────────────────────────────────────────────────────────────────────
 for (const c of clients) {
   try { c.close(); } catch {}
 }
-fs.rmSync(tmpDir, { recursive: true, force: true });
+cleanBuildDir();
 
 console.log('SUITE 8 PASSED!\n');

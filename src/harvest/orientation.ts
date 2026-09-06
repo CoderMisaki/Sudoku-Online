@@ -1,13 +1,55 @@
 "use client";
-// Authoritative multi-layered orientation detection and responsive lifecycle hooks.
+// Authoritative multi-layered orientation detection, PWA/display-mode
+// detection and *progressive-enhancement* landscape locking.
 //
-// The detection is deliberately "dimensions first":
-// - On installed PWAs some browsers report a stale screen.orientation.type
-//   while the layout actually rotated (or when orientation is locked by the
-//   manifest). The live viewport width/height is the most trustworthy signal.
-// - Desktop / non-touch devices are treated as landscape by default so users
-//   are never forced into the rotate gate on a laptop or desktop monitor.
-import { useEffect, useState, useCallback, useRef } from 'react';
+// Design rules (see docs/harvest-orientation-reconnect.md):
+//
+//  1. Detection is "dimensions first". On installed PWAs some browsers report a
+//     stale `screen.orientation.type` while the layout already rotated (or when
+//     the manifest locks orientation). The live viewport is the truth.
+//  2. Desktop / non-touch devices are NEVER gated and NEVER locked.
+//  3. `screen.orientation.lock('landscape')` is a best-effort enhancement on
+//     phones/tablets. It must never be a hard dependency: when the browser
+//     refuses (iOS Safari, Firefox, non-fullscreen tabs) we fall back to the
+//     OrientationGate instead of crashing, reloading or touching the socket.
+//  4. We NEVER call `screen.orientation.unlock()` — the game wants landscape,
+//     unlocking it is what left installed PWAs stuck in portrait.
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { dlog } from './debug';
+
+export type DeviceClass = 'desktop' | 'tablet' | 'phone';
+export type DisplayMode = 'standalone' | 'fullscreen' | 'minimal-ui' | 'browser' | 'unknown';
+export type LandscapeLockState =
+  | 'idle'        // not attempted (desktop / not needed)
+  | 'locking'     // request in flight
+  | 'locked'      // browser accepted the lock
+  | 'unsupported' // no Screen Orientation lock API (iOS Safari, Firefox, desktop)
+  | 'denied';     // API exists but the browser refused this context
+
+export interface LandscapeLockResult {
+  state: LandscapeLockState;
+  /** DOMException name (NotSupportedError / SecurityError / …) when refused. */
+  reason?: string;
+  /** The lock mode that was accepted, when `state === 'locked'`. */
+  mode?: string;
+}
+
+type ScreenOrientationLike = {
+  type?: string;
+  angle?: number;
+  lock?: (orientation: string) => Promise<void>;
+  unlock?: () => void;
+  addEventListener?: (type: string, cb: () => void) => void;
+  removeEventListener?: (type: string, cb: () => void) => void;
+};
+
+function orientationApi(): ScreenOrientationLike | null {
+  try {
+    return (window.screen?.orientation as ScreenOrientationLike | undefined) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export function isTouchDevice(): boolean {
   if (typeof window === 'undefined') return false;
@@ -37,36 +79,105 @@ function readViewport(): { w: number; h: number } {
  * Run `cb` after the browser finished its rotation reflow (two animation
  * frames), so viewport reads + connection recovery observe the final layout —
  * without any arbitrary millisecond delay.
+ *
+ * rAF is paused on hidden pages, so a short timer guarantees recovery can never
+ * be stalled by a backgrounded tab. The callback runs exactly once.
  */
 export function waitForViewportSettle(cb: () => void): void {
   if (typeof window === 'undefined') return;
+  let done = false;
+  const run = () => {
+    if (done) return;
+    done = true;
+    cb();
+  };
   try {
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        cb();
-      });
+      requestAnimationFrame(run);
     });
   } catch {
-    cb();
+    run();
+    return;
+  }
+  try {
+    setTimeout(run, 250);
+  } catch {
+    /* no timers available — rAF will still fire */
   }
 }
 
 export function screenOrientationType(): string | null {
+  const type = orientationApi()?.type;
+  return typeof type === 'string' ? type : null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PWA / display-mode detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Robust installed-PWA / fullscreen detection:
+ *  - `matchMedia('(display-mode: …)')` (Chromium, Firefox, Safari 13+)
+ *  - `navigator.standalone` (legacy iOS home-screen web apps)
+ */
+export function displayMode(): DisplayMode {
+  if (typeof window === 'undefined') return 'unknown';
+  const modes: DisplayMode[] = ['standalone', 'fullscreen', 'minimal-ui'];
   try {
-    return typeof window.screen?.orientation?.type === 'string'
-      ? window.screen.orientation.type
-      : null;
+    if (typeof window.matchMedia === 'function') {
+      for (const mode of modes) {
+        if (window.matchMedia(`(display-mode: ${mode})`).matches) return mode;
+      }
+    }
   } catch {
-    return null;
+    /* matchMedia unavailable */
   }
+  try {
+    const nav = window.navigator as Navigator & { standalone?: boolean };
+    if (nav.standalone === true) return 'standalone';
+  } catch {
+    /* ignore */
+  }
+  return 'browser';
+}
+
+/** True when running as an installed PWA / standalone web app / fullscreen. */
+export function isStandalonePWA(): boolean {
+  const mode = displayMode();
+  return mode === 'standalone' || mode === 'fullscreen';
 }
 
 /**
- * Authoritative function to check if the current viewport/device is in landscape mode.
+ * Coarse device class. Used to decide whether orientation may be locked at all:
+ * desktops are never locked nor gated, tablets get a soft preference.
+ */
+export function deviceClass(): DeviceClass {
+  if (typeof window === 'undefined') return 'desktop';
+  if (!isTouchDevice()) return 'desktop';
+  const { w, h } = readViewport();
+  let shortSide = Math.min(w || 0, h || 0);
+  try {
+    const sw = window.screen?.width || 0;
+    const sh = window.screen?.height || 0;
+    if (sw > 0 && sh > 0) shortSide = Math.max(shortSide, Math.min(sw, sh));
+  } catch {
+    /* ignore */
+  }
+  if (shortSide <= 0) return 'phone';
+  return shortSide >= 600 ? 'tablet' : 'phone';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Landscape detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Authoritative check for "is the usable viewport landscape?".
  * Evaluates multiple layers:
- * 1. Live viewport dimensions (innerWidth / visualViewport / documentElement)
- * 2. window.matchMedia('(orientation: landscape)')
- * 3. window.screen.orientation.type as the final tie-breaker
+ * 1. Desktop / non-touch wide viewport → always landscape (never gated)
+ * 2. Live viewport dimensions (innerWidth / visualViewport / documentElement)
+ * 3. window.matchMedia('(orientation: landscape)')
+ * 4. window.screen.orientation.type as the final tie-breaker
  */
 export function isLandscapeDevice(): boolean {
   if (typeof window === 'undefined') return true;
@@ -96,6 +207,177 @@ export function isLandscapeDevice(): boolean {
 }
 
 /**
+ * Whether the OrientationGate should be shown at all.
+ * Desktop is exempt — the gate is a *mobile* affordance only.
+ */
+export function shouldGateOrientation(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (deviceClass() === 'desktop') return false;
+  return !isLandscapeDevice();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Progressive-enhancement landscape lock
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function isOrientationLockSupported(): boolean {
+  return typeof orientationApi()?.lock === 'function';
+}
+
+/**
+ * Best-effort `screen.orientation.lock('landscape')`.
+ *
+ * NEVER throws and NEVER unlocks: a rejected lock is a normal, expected
+ * outcome (iOS Safari, Firefox, plain browser tabs without fullscreen) and the
+ * caller must simply fall back to the OrientationGate. Nothing in the game
+ * session may depend on this promise resolving.
+ */
+export async function requestLandscapeLock(): Promise<LandscapeLockResult> {
+  if (typeof window === 'undefined') return { state: 'unsupported', reason: 'ssr' };
+
+  const device = deviceClass();
+  if (device === 'desktop') {
+    // Requirement: desktop must never be forced to rotate.
+    return { state: 'idle', reason: 'desktop' };
+  }
+
+  const api = orientationApi();
+  if (!api || typeof api.lock !== 'function') {
+    dlog('orientation', 'lock unsupported — fallback gate', { device, mode: displayMode() });
+    return { state: 'unsupported', reason: 'no-api' };
+  }
+
+  if (isLandscapeDevice()) {
+    // Already landscape: still lock so an accidental rotation mid-game does not
+    // flip the world, but treat failure as irrelevant.
+    dlog('orientation', 'already landscape — locking to hold it', { device });
+  } else {
+    dlog('orientation', 'detected portrait — requesting landscape lock', { device, mode: displayMode() });
+  }
+
+  let lastReason = 'unknown';
+  for (const mode of ['landscape', 'landscape-primary']) {
+    try {
+      await api.lock(mode);
+      dlog('orientation', 'landscape lock success', { mode });
+      return { state: 'locked', mode };
+    } catch (err) {
+      const name = (err as DOMException)?.name || 'Error';
+      lastReason = name;
+      // NotSupportedError → this browser only knows the concrete primary/
+      // secondary values, so try the next candidate. Anything else
+      // (SecurityError / InvalidStateError / NotAllowedError) means the context
+      // is not allowed to lock at all — stop immediately.
+      if (name !== 'NotSupportedError') break;
+    }
+  }
+
+  const state: LandscapeLockState = lastReason === 'NotSupportedError' ? 'unsupported' : 'denied';
+  dlog('orientation', 'landscape lock refused — fallback gate', { reason: lastReason, state });
+  return { state, reason: lastReason };
+}
+
+/**
+ * React hook: keeps a *best-effort* landscape lock alive while `active`.
+ *
+ * It only ever touches the Screen Orientation API — never the WebSocket, never
+ * the store, never the page location. Browsers differ wildly:
+ *  - Android Chrome (installed PWA / fullscreen): accepts the lock → the OS
+ *    rotates the device by itself, no user action required.
+ *  - Android Chrome (plain tab): refuses without fullscreen → OrientationGate.
+ *  - iOS Safari / PWA: no lock API at all → OrientationGate.
+ * A retry happens on the first user gesture and when the app returns to the
+ * foreground, because several browsers require transient activation.
+ */
+export function useLandscapeLock(active: boolean) {
+  const [lockState, setLockState] = useState<LandscapeLockState>('idle');
+  const [lockReason, setLockReason] = useState<string | undefined>(undefined);
+  const attemptsRef = useRef(0);
+  const inFlightRef = useRef(false);
+
+  const attempt = useCallback(async (source: string) => {
+    if (typeof window === 'undefined') return;
+    if (deviceClass() === 'desktop') {
+      setLockState('idle');
+      return;
+    }
+    if (inFlightRef.current) return;
+    // Automatic attempts are bounded; explicit user gestures always retry.
+    const isGesture = source === 'gesture';
+    if (!isGesture && attemptsRef.current >= 4) return;
+    attemptsRef.current += 1;
+    inFlightRef.current = true;
+    setLockState('locking');
+    dlog('pwa', 'orientation lock attempt', { source, n: attemptsRef.current });
+    try {
+      const res = await requestLandscapeLock();
+      setLockState(res.state);
+      setLockReason(res.reason);
+      if (res.state === 'locked' || res.state === 'idle') return;
+      dlog('pwa', 'orientation lock unavailable — showing fallback gate', { reason: res.reason });
+    } finally {
+      inFlightRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!active) return;
+    // Deferred one frame: lets the browser settle the display mode (installed
+    // PWA vs tab) before we ask for the lock, and keeps the effect body free of
+    // synchronous state updates.
+    const rafId = requestAnimationFrame(() => { void attempt('mount'); });
+
+    // Browsers that need transient activation: retry once on the first gesture.
+    const onGesture = () => { void attempt('gesture'); };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void attempt('foreground');
+    };
+    window.addEventListener('pointerdown', onGesture, { passive: true });
+    window.addEventListener('keydown', onGesture);
+    document.addEventListener('visibilitychange', onVisible);
+
+    // Some platforms apply the manifest lock only after the display mode settles.
+    const onDisplayMode = () => { void attempt('display-mode'); };
+    let mql: MediaQueryList | null = null;
+    try {
+      mql = window.matchMedia?.('(display-mode: standalone)') ?? null;
+      mql?.addEventListener?.('change', onDisplayMode);
+    } catch {
+      mql = null;
+    }
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('pointerdown', onGesture);
+      window.removeEventListener('keydown', onGesture);
+      document.removeEventListener('visibilitychange', onVisible);
+      try {
+        mql?.removeEventListener?.('change', onDisplayMode);
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [active, attempt]);
+
+  return { lockState, lockReason, attempt };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reactive orientation hook
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface OrientationInfo {
+  isLandscape: boolean;
+  orientationReady: boolean;
+  isTouch: boolean;
+  device: DeviceClass;
+  displayMode: DisplayMode;
+  standalone: boolean;
+  /** True only when the mobile rotate gate should really be shown. */
+  showGate: boolean;
+}
+
+/**
  * React hook that stays reactive to:
  * - resize events
  * - orientationchange events
@@ -104,16 +386,50 @@ export function isLandscapeDevice(): boolean {
  * - matchMedia change
  * - visibilitychange, pageshow, and focus lifecycle events
  */
-export function useOrientation() {
-  const [isLandscape, setIsLandscape] = useState<boolean>(true);
-  const [orientationReady, setOrientationReady] = useState<boolean>(false);
+export function useOrientation(): OrientationInfo {
+  const [info, setInfo] = useState<OrientationInfo>({
+    // SSR-safe default: landscape + no gate (never blocks the first paint).
+    isLandscape: true,
+    orientationReady: false,
+    isTouch: false,
+    device: 'desktop',
+    displayMode: 'unknown',
+    standalone: false,
+    showGate: false,
+  });
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rafRef = useRef<number>(0);
 
   const check = useCallback(() => {
     const landscape = isLandscapeDevice();
-    setIsLandscape(landscape);
-    setOrientationReady(true);
+    const device = deviceClass();
+    const mode = displayMode();
+    setInfo((prev) => {
+      const next: OrientationInfo = {
+        isLandscape: landscape,
+        orientationReady: true,
+        isTouch: device !== 'desktop',
+        device,
+        displayMode: mode,
+        standalone: mode === 'standalone' || mode === 'fullscreen',
+        showGate: device !== 'desktop' && !landscape,
+      };
+      if (
+        prev.orientationReady &&
+        prev.isLandscape === next.isLandscape &&
+        prev.device === next.device &&
+        prev.displayMode === next.displayMode
+      ) {
+        return prev; // no state churn on unrelated resize events
+      }
+      if (prev.isLandscape !== next.isLandscape) {
+        dlog('orientation', next.isLandscape ? 'detected landscape' : 'detected portrait', {
+          device: next.device,
+          mode: next.displayMode,
+        });
+      }
+      return next;
+    });
   }, []);
 
   const debouncedCheck = useCallback(() => {
@@ -147,7 +463,7 @@ export function useOrientation() {
 
     // 2. screen.orientation listener
     try {
-      window.screen?.orientation?.addEventListener?.('change', debouncedCheck);
+      orientationApi()?.addEventListener?.('change', debouncedCheck);
     } catch {}
 
     // 3. visualViewport — catches reliable mobile reflow even when
@@ -183,7 +499,7 @@ export function useOrientation() {
         }
       } catch {}
       try {
-        window.screen?.orientation?.removeEventListener?.('change', debouncedCheck);
+        orientationApi()?.removeEventListener?.('change', debouncedCheck);
       } catch {}
       try {
         vv?.removeEventListener?.('resize', debouncedCheck);
@@ -199,5 +515,5 @@ export function useOrientation() {
     };
   }, [debouncedCheck, check]);
 
-  return { isLandscape, orientationReady, isTouch: isTouchDevice() };
+  return info;
 }

@@ -3,6 +3,31 @@ import * as THREE from 'three';
 import { TILE, InteractionHint, Defs, WorldState, PlayerState } from './types';
 import { buildCharacter, buildAnimal, CharRig, AnimalRig } from './charModel';
 import { buildGroundTexture } from './sprites';
+import { dlog } from './debug';
+
+/** Free GPU resources of a detached scenery subtree (never used on rigs). */
+function disposeScenery(root: THREE.Object3D) {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    try {
+      mesh.geometry?.dispose?.();
+      const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(mat)) {
+        for (const m of mat) {
+          const withMap = m as THREE.Material & { map?: { dispose?: () => void } | null };
+          withMap.map?.dispose?.();
+          m.dispose();
+        }
+      } else if (mat) {
+        const withMap = mat as THREE.Material & { map?: { dispose?: () => void } | null };
+        withMap.map?.dispose?.();
+        mat.dispose();
+      }
+    } catch {
+      /* best effort only */
+    }
+  });
+}
 
 const WORLD_Y = 0;
 
@@ -166,6 +191,32 @@ export class WorldEngine {
   }
 
   // ── lifecycle ──
+  /**
+   * The renderer canvas. Exposed so the React layer can guarantee the canvas is
+   * mounted in the *current* host element without rebuilding the engine.
+   */
+  getCanvas(): HTMLCanvasElement {
+    return this.renderer.domElement;
+  }
+
+  /**
+   * Re-attach the existing canvas to `host`.
+   *
+   * Rotation / screen transitions must never dispose the world engine: if the
+   * canvas container is remounted we simply move the canvas across. The WebGL
+   * context, world state, rigs and player positions all survive.
+   */
+  attachTo(host: HTMLElement) {
+    if (this.disposed || !host) return;
+    const moved = this.container !== host;
+    this.container = host;
+    if (this.renderer.domElement.parentElement !== host) {
+      host.appendChild(this.renderer.domElement);
+    }
+    this.onResize();
+    if (moved) dlog('engine', 'canvas re-attached to live host');
+  }
+
   dispose() {
     this.disposed = true;
     cancelAnimationFrame(this.rafId);
@@ -192,7 +243,37 @@ export class WorldEngine {
   }
 
   // ── world build ──
+  /**
+   * Remove every visual produced by a previous `setWorld()`.
+   *
+   * Snapshots are applied on every reconnect/resync, and applying the same
+   * snapshot twice must be **idempotent**: no duplicated ground, buildings,
+   * crops, trees or NPC rigs. Rigs are only detached (their resources may be
+   * shared), scenery is disposed.
+   */
+  private clearWorldVisuals() {
+    for (const child of [...this.sceneRoot.children]) {
+      if (child === this.entityRoot || child === this.mineRoot) continue;
+      this.sceneRoot.remove(child);
+      disposeScenery(child);
+    }
+    for (const [, r] of this.npcRigs) this.entityRoot.remove(r.rig.group);
+    this.npcRigs.clear();
+    this.cropMeshes.clear();
+    this.tilledMeshes.clear();
+    this.forageMeshes.clear();
+    this.treeMeshes.clear();
+    this.festivalMeshes.clear();
+    if (this.waterTex) {
+      try { this.waterTex.dispose(); } catch {}
+      this.waterTex = null;
+    }
+  }
+
   setWorld(world: WorldState, defs: Defs) {
+    // Idempotency: a repeated snapshot rebuilds the scenery from scratch
+    // instead of stacking a second copy of the world on top of the first.
+    this.clearWorldVisuals();
     this.defs = defs;
     this.world = world;
     this.W = world.size[0];

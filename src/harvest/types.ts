@@ -1,12 +1,24 @@
 // Harvest Moon — client-side protocol & shared types.
 // The server is the single source of truth; these types mirror its JSON.
 
+/**
+ * Connection state machine (single source of truth for the UI overlays):
+ *
+ *   connecting → hello → syncing → ready          (first successful handshake)
+ *   ready → reconnecting → hello → ready           (automatic recovery)
+ *   ready → recovering → hello → ready             (explicit resume/manual retry)
+ *   connecting|reconnecting|recovering → error     (FAILED — user action needed)
+ *
+ * `ready` is only reached after the server answered the hello handshake, i.e.
+ * after `hello_ack` or the authoritative `snapshot` — never on socket OPEN.
+ */
 export type ConnectionStatus =
   | 'connecting'
   | 'hello'
   | 'syncing'
   | 'ready'
   | 'reconnecting'
+  | 'recovering'
   | 'lost'
   | 'closed'
   | 'connected'

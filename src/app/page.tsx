@@ -103,6 +103,18 @@ export default function Home() {
     getOrCreateUserId();
   }, [setUserInfo]);
 
+  // Deep link: `/?game=harvest` (the PWA "Add to Home Screen" start_url served
+  // by /harvest) preselects the Harvest Moon flow so an installed Harvest icon
+  // opens the farm directly instead of the classic Sudoku lobby.
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get('game') === 'harvest') {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time deep-link preselection
+        setJoinGameType('harvest');
+      }
+    } catch {}
+  }, []);
+
   // Clear admin verified if username changes away from ADMIN
   useEffect(() => {
     if (username.trim().toUpperCase() !== 'ADMIN' && isAdminVerified) {

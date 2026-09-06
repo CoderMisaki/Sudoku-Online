@@ -13,6 +13,9 @@ const testFiles = [
   'tests/06_inventory_economy.test.mjs',
   'tests/07_persistence_reconnect.test.mjs',
   'tests/08_mobile_lifecycle_reconnect.test.mjs',
+  'tests/09_session_state_machine.test.mjs',
+  'tests/10_overlay_ui_theme.test.mjs',
+  'tests/11_real_transport_recovery.test.mjs',
   '.jules/harvest-test-suite.mjs',
 ];
 
