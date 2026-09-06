@@ -1,46 +1,79 @@
 "use client";
 // Authoritative multi-layered orientation detection and responsive lifecycle hooks.
+//
+// The detection is deliberately "dimensions first":
+// - On installed PWAs some browsers report a stale screen.orientation.type
+//   while the layout actually rotated (or when orientation is locked by the
+//   manifest). The live viewport width/height is the most trustworthy signal.
+// - Desktop / non-touch devices are treated as landscape by default so users
+//   are never forced into the rotate gate on a laptop or desktop monitor.
 import { useEffect, useState, useCallback, useRef } from 'react';
+
+export function isTouchDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const nav = window.navigator as Navigator & { maxTouchPoints?: number };
+    return (nav.maxTouchPoints || 0) > 0 || 'ontouchstart' in window;
+  } catch {
+    return false;
+  }
+}
+
+function readViewport(): { w: number; h: number } {
+  const w = Math.max(
+    window.innerWidth || 0,
+    window.visualViewport?.width || 0,
+    document.documentElement?.clientWidth || 0
+  );
+  const h = Math.max(
+    window.innerHeight || 0,
+    window.visualViewport?.height || 0,
+    document.documentElement?.clientHeight || 0
+  );
+  return { w, h };
+}
+
+export function screenOrientationType(): string | null {
+  try {
+    return typeof window.screen?.orientation?.type === 'string'
+      ? window.screen.orientation.type
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Authoritative function to check if the current viewport/device is in landscape mode.
  * Evaluates multiple layers:
- * 1. window.matchMedia('(orientation: landscape)')
- * 2. window.innerWidth > window.innerHeight
- * 3. window.screen.orientation.type if available
- * 4. document.documentElement dimensions fallback
+ * 1. Live viewport dimensions (innerWidth / visualViewport / documentElement)
+ * 2. window.matchMedia('(orientation: landscape)')
+ * 3. window.screen.orientation.type as the final tie-breaker
  */
 export function isLandscapeDevice(): boolean {
   if (typeof window === 'undefined') return true;
 
-  const w = window.innerWidth || document.documentElement?.clientWidth || 0;
-  const h = window.innerHeight || document.documentElement?.clientHeight || 0;
+  const { w, h } = readViewport();
 
-  // Layer 1: screen.orientation.type
-  try {
-    const screenType = window.screen?.orientation?.type;
-    if (typeof screenType === 'string') {
-      if (screenType.startsWith('landscape') && w >= h * 0.95) return true;
-      if (screenType.startsWith('portrait') && h > w) return false;
-    }
-  } catch {}
+  // Desktop / non-touch monitors are never locked behind the rotate gate.
+  if (!isTouchDevice() && w >= 1024) return true;
 
-  // Layer 2: window.matchMedia('(orientation: landscape)')
-  try {
-    if (typeof window.matchMedia === 'function') {
-      const mql = window.matchMedia('(orientation: landscape)');
-      if (mql && typeof mql.matches === 'boolean') {
-        if (mql.matches && w >= h) return true;
-        if (!mql.matches && h > w) return false;
-      }
-    }
-  } catch {}
-
-  // Layer 3: innerWidth vs innerHeight direct dimension comparison
+  // Dimensions are the ground truth for mobile browsers & installed PWAs.
   if (w > 0 && h > 0) {
-    return w > h;
+    if (w > h) return true;
+    if (h > w) return false;
   }
 
+  // Only use orientation APIs when the viewport is ambiguous (w === h).
+  try {
+    const mql = window.matchMedia?.('(orientation: landscape)');
+    if (mql && typeof mql.matches === 'boolean') return mql.matches;
+  } catch {}
+
+  const type = screenOrientationType();
+  if (type) return type.startsWith('landscape');
+
+  // Ultra-safe fallback: treat square/unknown viewport as landscape-capable.
   return true;
 }
 
@@ -49,11 +82,12 @@ export function isLandscapeDevice(): boolean {
  * - resize events
  * - orientationchange events
  * - screen.orientation change
+ * - visualViewport resize/scroll (mobile address bar / split-screen)
  * - matchMedia change
  * - visibilitychange, pageshow, and focus lifecycle events
  */
 export function useOrientation() {
-  const [isLandscape, setIsLandscape] = useState<boolean>(() => isLandscapeDevice());
+  const [isLandscape, setIsLandscape] = useState<boolean>(true);
   const [orientationReady, setOrientationReady] = useState<boolean>(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rafRef = useRef<number>(0);
@@ -73,9 +107,10 @@ export function useOrientation() {
   }, [check]);
 
   useEffect(() => {
-    // Set orientationReady in requestAnimationFrame to avoid synchronous setState during render
+    // Start with the SSR-safe "landscape" default, then recompute on the client
+    // in a requestAnimationFrame (avoids hydration mismatch on phones).
     const initialRaf = requestAnimationFrame(() => {
-      setOrientationReady(true);
+      check();
     });
 
     // 1. matchMedia listener
@@ -97,11 +132,20 @@ export function useOrientation() {
       window.screen?.orientation?.addEventListener?.('change', debouncedCheck);
     } catch {}
 
-    // 3. resize & orientationchange
+    // 3. visualViewport — catches reliable mobile reflow even when
+    //    orientationchange/matchMedia are delayed by the browser.
+    let vv: VisualViewport | null = null;
+    try {
+      vv = window.visualViewport;
+      vv?.addEventListener?.('resize', debouncedCheck);
+      vv?.addEventListener?.('scroll', debouncedCheck);
+    } catch {}
+
+    // 4. resize & orientationchange
     window.addEventListener('resize', debouncedCheck, { passive: true });
     window.addEventListener('orientationchange', debouncedCheck, { passive: true });
 
-    // 4. Mobile app lifecycle
+    // 5. Mobile app lifecycle
     const onVisibility = () => {
       if (document.visibilityState === 'visible') debouncedCheck();
     };
@@ -123,6 +167,10 @@ export function useOrientation() {
       try {
         window.screen?.orientation?.removeEventListener?.('change', debouncedCheck);
       } catch {}
+      try {
+        vv?.removeEventListener?.('resize', debouncedCheck);
+        vv?.removeEventListener?.('scroll', debouncedCheck);
+      } catch {}
       window.removeEventListener('resize', debouncedCheck);
       window.removeEventListener('orientationchange', debouncedCheck);
       document.removeEventListener('visibilitychange', onVisibility);
@@ -131,7 +179,7 @@ export function useOrientation() {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
       cancelAnimationFrame(rafRef.current);
     };
-  }, [debouncedCheck]);
+  }, [debouncedCheck, check]);
 
-  return { isLandscape, orientationReady };
+  return { isLandscape, orientationReady, isTouch: isTouchDevice() };
 }

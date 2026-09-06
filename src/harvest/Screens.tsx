@@ -2,29 +2,64 @@
 // Orientation gate, loading & error screens.
 import React from 'react';
 import { RotateCw, RefreshCw } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 export function OrientationGate() {
   return (
     <div
       role="alert"
       aria-live="assertive"
-      className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-gradient-to-b from-[#101a2e] via-[#14243d] to-[#0f1a2c] text-white text-center px-6 select-none"
+      className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-gradient-to-b from-[#101a2e] via-[#14243d] to-[#0f1a2c] text-white text-center px-6 select-none overflow-hidden"
     >
+      {/* decorative ambient glow */}
+      <div className="pointer-events-none absolute inset-0 opacity-40">
+        <div className="absolute left-1/4 top-1/4 w-72 h-72 rounded-full bg-emerald-400/10 blur-3xl" />
+        <div className="absolute right-1/4 bottom-1/4 w-72 h-72 rounded-full bg-sky-400/10 blur-3xl" />
+      </div>
+
       <div className="relative flex items-center justify-center">
-        {/* Phone frame with smooth CSS rotation hint */}
-        <div className="relative w-20 h-32 rounded-2xl border-4 border-emerald-400/90 bg-emerald-500/10 shadow-[0_0_30px_rgba(52,211,153,0.3)] flex items-center justify-center animate-[pulse_2s_ease-in-out_infinite]">
+        {/* spinning orbit ring */}
+        <motion.div
+          className="absolute w-44 h-44 rounded-full border-2 border-dashed border-emerald-300/25"
+          animate={{ rotate: 360 }}
+          transition={{ duration: 10, repeat: Infinity, ease: 'linear' }}
+        >
+          <span className="absolute -top-1 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-emerald-300 shadow-[0_0_12px_rgba(52,211,153,0.85)]" />
+        </motion.div>
+
+        {/* Phone that physically tilts toward landscape and back */}
+        <motion.div
+          className="relative w-20 h-32 sm:w-24 sm:h-36 rounded-2xl border-4 border-emerald-400/90 bg-emerald-500/10 shadow-[0_0_30px_rgba(52,211,153,0.3)] flex items-center justify-center"
+          animate={{ rotate: [0, 90, 90, 0], scale: [1, 1.04, 1.04, 1] }}
+          transition={{
+            duration: 2.6,
+            times: [0, 0.42, 0.58, 1],
+            repeat: Infinity,
+            repeatDelay: 0.35,
+            ease: 'easeInOut',
+          }}
+        >
+          {/* camera */}
+          <div className="absolute top-2 w-6 h-1 bg-emerald-300/50 rounded-full" />
+          {/* screen content */}
           <div className="w-8 h-8 rounded-full border-2 border-emerald-300/80 flex items-center justify-center">
             <div className="w-2.5 h-2.5 rounded-full bg-emerald-300" />
           </div>
-          <div className="absolute top-2 w-6 h-1 bg-emerald-300/50 rounded-full" />
+          {/* home button */}
           <div className="absolute bottom-2 w-3 h-3 rounded-full border border-emerald-300/50" />
-        </div>
-        <div className="absolute -right-5 -bottom-2 bg-emerald-400 text-emerald-950 p-2 rounded-full shadow-lg animate-spin" style={{ animationDuration: '4s' }}>
+        </motion.div>
+
+        {/* small arrow gently pointing toward the rotation */}
+        <motion.div
+          className="absolute -right-7 -bottom-2 bg-emerald-400 text-emerald-950 p-2 rounded-full shadow-lg"
+          animate={{ rotate: 360 }}
+          transition={{ duration: 2.2, repeat: Infinity, ease: 'linear' }}
+        >
           <RotateCw className="w-4 h-4" />
-        </div>
+        </motion.div>
       </div>
 
-      <div className="space-y-2 max-w-sm">
+      <div className="space-y-2 max-w-sm relative z-10">
         <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white">
           Mode Landscape Dibutuhkan
         </h2>
@@ -33,15 +68,20 @@ export function OrientationGate() {
         </p>
       </div>
 
-      <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-2 text-xs text-white/60">
+      {/* animated instruction row */}
+      <motion.div
+        className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-2 text-xs text-white/70"
+        animate={{ y: [0, -3, 0] }}
+        transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+      >
         <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
         Otomatis melanjutkan saat perangkat diputar
-      </div>
+      </motion.div>
     </div>
   );
 }
 
-export function LoadingScreen({ status }: { status: string }) {
+export function LoadingScreen({ status, onRetry }: { status: string; onRetry?: () => void }) {
   const isReconnect = status === 'reconnecting';
   return (
     <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-5 bg-[#101a2e]/90 backdrop-blur-md text-white text-center px-6 select-none">
@@ -49,7 +89,7 @@ export function LoadingScreen({ status }: { status: string }) {
         <div className="absolute inset-0 rounded-full border-4 border-emerald-400/20" />
         <div
           className={`absolute inset-0 rounded-full border-4 border-t-emerald-300 border-r-transparent border-b-transparent border-l-transparent ${
-            isReconnect ? '' : 'animate-spin'
+            isReconnect ? 'animate-pulse' : 'animate-spin'
           }`}
         />
         <div className="absolute inset-0 flex items-center justify-center text-2xl">🌾</div>
@@ -71,6 +111,15 @@ export function LoadingScreen({ status }: { status: string }) {
           }`}
         />
       </div>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-4 py-2 text-xs text-white/70 hover:text-white hover:bg-white/10 transition-colors cursor-pointer active:scale-95"
+        >
+          <RotateCw className="w-3.5 h-3.5" />
+          Coba Sambungkan Lagi
+        </button>
+      )}
     </div>
   );
 }

@@ -63,3 +63,15 @@ body {
 .animate-collab-wrong {
   animation: collab-wrong-blink 0.85s ease-in-out infinite;
 }
+
+@keyframes loadbar {
+  0% {
+    transform: translateX(-110%);
+  }
+  55% {
+    transform: translateX(210%);
+  }
+  100% {
+    transform: translateX(360%);
+  }
+}

@@ -71,6 +71,13 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
     };
   }, []);
 
+  // ── ensure installed PWA/browser doesn't stay locked to portrait ──
+  useEffect(() => {
+    try {
+      (window.screen?.orientation as unknown as { unlock?: () => void })?.unlock?.();
+    } catch {}
+  }, []);
+
   // ── message handler ──
   const handleMessage = useCallback((raw: string) => {
     let msg: ServerMsg;
@@ -204,12 +211,36 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
     client.connect();
     syncRef.current = client;
     return () => {
+      startedRef.current = false;
       client.close();
       syncRef.current = null;
       engineRef.current?.dispose();
       engineRef.current = null;
     };
   }, [handleMessage, roomId, setStatus, toast]);
+
+  // ── recover from background / network blips (common when rotating on mobile) ──
+  useEffect(() => {
+    const tryReconnect = () => {
+      const s = syncRef.current;
+      if (!s) return;
+      const st = useHarvestStore.getState();
+      if (!s.isOpen() || st.status === 'reconnecting' || st.status === 'closed') {
+        s.ensureOpen();
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') tryReconnect();
+    };
+    window.addEventListener('focus', tryReconnect);
+    window.addEventListener('online', tryReconnect);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', tryReconnect);
+      window.removeEventListener('online', tryReconnect);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   // ── character creation bridge ──
   useEffect(() => {
@@ -349,7 +380,14 @@ export function HarvestMoonGame({ roomId }: { roomId: string }) {
       )}
       {screen === 'creator' && <CharacterCreator />}
       {screen === 'error' && <ErrorScreen message={errorMsg} onRetry={() => window.location.reload()} />}
-      {(screen === 'loading' || status === 'connecting' || status === 'reconnecting') && screen !== 'error' && <LoadingScreen status={status} />}
+      {(screen === 'loading' || status === 'connecting' || status === 'reconnecting') && screen !== 'error' && (
+        <LoadingScreen
+          status={status}
+          onRetry={() => {
+            syncRef.current?.ensureOpen();
+          }}
+        />
+      )}
     </div>
   );
 }
