@@ -136,7 +136,7 @@ export function HudLayer({ api }: { api: UIApi }) {
             </HudButton>
           </div>
           <FpsBadge />
-          {status === 'reconnecting' && (
+          {(status === 'reconnecting' || status === 'recovering') && (
             <div className="bg-amber-500/90 text-amber-950 text-[10px] font-bold px-2.5 py-1 rounded-full animate-pulse">
               ⚠ Reconnecting...
             </div>

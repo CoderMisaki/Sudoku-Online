@@ -37,8 +37,13 @@ interface HarvestState {
   fishing: { phase: 'idle' | 'cast' | 'bite'; startAt: number; biteAt: number };
   selectedItem: string | null;
   chatOpen: boolean;
+  /** How many authoritative snapshots were applied (idempotency diagnostics). */
+  snapshotCount: number;
+  /** Last lifecycle/reconnect recovery attempt (single coordinator, no loops). */
+  lastRecovery: { source: string; action: string; at: number } | null;
 
   setStatus: (s: ConnectionStatus) => void;
+  markRecovery: (source: string, action: string) => void;
   setScreen: (s: Screen) => void;
   setError: (m: string) => void;
   setSession: (room: string, userId: string, userName: string) => void;
@@ -94,8 +99,11 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
   fishing: { phase: 'idle', startAt: 0, biteAt: 0 },
   selectedItem: null,
   chatOpen: false,
+  snapshotCount: 0,
+  lastRecovery: null,
 
-  setStatus: (s) => set({ status: s }),
+  setStatus: (s) => set((st) => (st.status === s ? st : { status: s })),
+  markRecovery: (source, action) => set({ lastRecovery: { source, action, at: Date.now() } }),
   setScreen: (s) => set({ screen: s }),
   setError: (m) => set({ errorMsg: m, screen: 'error' }),
   setSession: (room, userId, userName) => set({ roomCode: room, userId, userName }),
@@ -115,6 +123,9 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
     screen: me.char ? 'game' : 'creator',
     status: 'ready',
     wasInGame: me.char ? true : st.wasInGame,
+    // Applying the same snapshot twice must never duplicate anything: the whole
+    // authoritative state is replaced wholesale and only this counter moves.
+    snapshotCount: st.snapshotCount + 1,
   })),
 
   applySnapMeta: (timeMin, day, season, weather) => set((st) => ({
@@ -321,5 +332,6 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
     menu: null, dialogue: null, toasts: [], chat: [], activeChatTab: 'public', unreadPrivate: {},
     mine: null, festivalBanner: null, wasInGame: false,
     fishing: { phase: 'idle', startAt: 0, biteAt: 0 }, selectedItem: null, chatOpen: false,
+    snapshotCount: 0, lastRecovery: null,
   }),
 }));
