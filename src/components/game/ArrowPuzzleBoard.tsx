@@ -370,13 +370,14 @@ export const ArrowPuzzleBoard: React.FC<ArrowPuzzleBoardProps> = ({
   const boardId = arrowState?.boardId ?? null;
   useEffect(() => {
     if (!boardId || boardSnapshot?.boardId === boardId) return;
-    // Reset bookkeeping setelah ronde baru ter-render. Sebelumnya setState
-    // dilakukan saat render, memicu render berantai tepat ketika Next Game.
-    setBoardSnapshot({ boardId, initialRemoved: removedIds });
-    setFinishedExitIds([]);
-    setShowComplete(false);
-    lockedRef.current.clear();
-    pendingRef.current.clear();
+    const raf = requestAnimationFrame(() => {
+      setBoardSnapshot({ boardId, initialRemoved: removedIds });
+      setFinishedExitIds([]);
+      setShowComplete(false);
+      lockedRef.current.clear();
+      pendingRef.current.clear();
+    });
+    return () => cancelAnimationFrame(raf);
   }, [boardId, boardSnapshot?.boardId, removedIds]);
 
   const exiting = useMemo<ExitingArrow[]>(() => {

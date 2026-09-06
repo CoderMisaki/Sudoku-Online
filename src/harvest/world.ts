@@ -69,7 +69,7 @@ export class WorldEngine {
   private myDir = 2; // 0 up,1 right,2 down,3 left
   private myAnim = 'idle';
   private mySprint = false;
-  private remote = new Map<string, { rig: CharRig; target: THREE.Vector3; anim: string; sprint: boolean; visible: boolean }>();
+  private remote = new Map<string, { rig: CharRig; target: THREE.Vector3; anim: string; sprint: boolean; visible: boolean; player?: PlayerState | { id: string; username: string } }>();
   private npcRigs = new Map<string, { rig: CharRig; target: THREE.Vector3; anim: string }>();
   private animalRigs = new Map<string, AnimalRig>();
   private entityRoot = new THREE.Group();
@@ -521,7 +521,7 @@ export class WorldEngine {
         const rig = buildCharacter(p.char, { name: p.username, nameColor: '#a9c8ff' });
         rig.group.position.set(p.x + 0.5, 0, p.y + 0.5);
         this.entityRoot.add(rig.group);
-        this.remote.set(p.id, { rig, target: new THREE.Vector3(p.x + 0.5, 0, p.y + 0.5), anim: p.anim || 'idle', sprint: !!p.sprint, visible: true });
+        this.remote.set(p.id, { rig, target: new THREE.Vector3(p.x + 0.5, 0, p.y + 0.5), anim: p.anim || 'idle', sprint: !!p.sprint, visible: true, player: p });
       }
     }
     for (const [id, r] of this.remote) {
@@ -533,10 +533,37 @@ export class WorldEngine {
     // refresh own view of animals
     this.syncPlayerAnimals(players);
   }
-  syncSnapshotPositions(list: [string, number, number, number, string, number, number][]) {
-    for (const [id, x, y, dir, anim, sprint] of list) {
+  syncSnapshotPositions(list: [string, number, number, number, string, number, number, string?][]) {
+    for (const [id, x, y, dir, anim, sprint, alive, username] of list) {
       if (id === this.opts.userId) continue;
-      const r = this.remote.get(String(id));
+      let r = this.remote.get(String(id));
+      if (!r && alive === 1) {
+        const defaultChar = {
+          name: username || 'Player',
+          farmName: 'Farm',
+          gender: 'male' as const,
+          hair: 'short',
+          hairColor: '#4a2c11',
+          skin: '#ffd5b8',
+          eye: '#386fa4',
+          eyeStyle: 'round',
+          outfit: 'overalls',
+          outfitColor: '#34495e',
+          shoes: 'boots',
+          accessory: 'none',
+        };
+        const rig = buildCharacter(defaultChar);
+        this.entityRoot.add(rig.group);
+        r = {
+          rig,
+          target: new THREE.Vector3(x + 0.5, 0, y + 0.5),
+          anim: anim || 'idle',
+          sprint: sprint === 1,
+          visible: true,
+          player: { id, username: username || 'Player' } as PlayerState,
+        };
+        this.remote.set(String(id), r);
+      }
       if (!r) continue;
       r.target.set(x + 0.5, 0, y + 0.5);
       r.anim = anim;
@@ -544,10 +571,19 @@ export class WorldEngine {
       r.rig.group.rotation.y = this.dirToRotation(dir);
     }
   }
-  getRemotePositions(): { id: string; x: number; y: number }[] {
-    const out: { id: string; x: number; y: number }[] = [];
+  getMyPos(): { x: number; y: number; dir: number } {
+    return { x: this.myPos.x - 0.5, y: this.myPos.z - 0.5, dir: this.myDir };
+  }
+  getRemotePositions(): { id: string; name: string; x: number; y: number; dir: number }[] {
+    const out: { id: string; name: string; x: number; y: number; dir: number }[] = [];
     for (const [id, r] of this.remote) {
-      out.push({ id, x: Math.round(r.target.x - 0.5), y: Math.round(r.target.z - 0.5) });
+      out.push({
+        id,
+        name: r.player?.username || 'Player',
+        x: r.target.x - 0.5,
+        y: r.target.z - 0.5,
+        dir: 0,
+      });
     }
     return out;
   }
@@ -659,6 +695,30 @@ export class WorldEngine {
       case 'emote': {
         const r = this.remote.get(String(e.playerId));
         if (r && String(e.playerId) !== this.opts.userId) r.rig.setEmote(String(e.emote));
+        break;
+      }
+      case 'join': {
+        const p = e.player as PlayerState | undefined;
+        if (p && p.id !== this.opts.userId && p.char) {
+          let r = this.remote.get(p.id);
+          if (!r) {
+            const rig = buildCharacter(p.char);
+            this.entityRoot.add(rig.group);
+            r = { rig, target: new THREE.Vector3(p.x + 0.5, 0, p.y + 0.5), anim: p.anim || 'idle', sprint: p.sprint || false, visible: true, player: p };
+            this.remote.set(p.id, r);
+          } else {
+            r.player = p;
+          }
+        }
+        break;
+      }
+      case 'leave': {
+        const playerId = String(e.playerId);
+        const r = this.remote.get(playerId);
+        if (r) {
+          this.entityRoot.remove(r.rig.group);
+          this.remote.delete(playerId);
+        }
         break;
       }
       case 'mine_enter': {
@@ -1009,13 +1069,13 @@ export class WorldEngine {
     }
     // throttle network move (20 Hz)
     const now = performance.now();
-    const tx = Math.round(this.myPos.x * 10) / 10;
-    const tz = Math.round(this.myPos.z * 10) / 10;
+    const tx = Math.round(this.myPos.x * 100) / 100;
+    const tz = Math.round(this.myPos.z * 100) / 100;
     if (now - this.lastSentMove > 50 && (Math.abs(tx - this.lastSentPos.x) > 0.01 || Math.abs(tz - this.lastSentPos.y) > 0.01)) {
       this.lastSentMove = now;
       this.lastSentPos = { x: tx, y: tz };
-      const mx = Math.round(this.myPos.x - 0.5);
-      const my = Math.round(this.myPos.z - 0.5);
+      const mx = +(this.myPos.x - 0.5).toFixed(2);
+      const my = +(this.myPos.z - 0.5).toFixed(2);
       this.opts.onMove(mx, my, this.myDir, this.myAnim, sprinting);
       if (this.myAnim !== 'idle' && (now % 260) < 60) this.opts.onSfx('step');
     }
