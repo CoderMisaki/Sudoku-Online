@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useGameStore } from '../store/gameStore';
-import { ChatMessage, Grid, RoomState, SnakesState, TicTacToeState, Player, ArrowPuzzleState, isArrowGameMode } from '../types/game';
+import { ChatMessage, Grid, RoomState, SnakesState, TicTacToeState, Player, ArrowPuzzleState, SosState, OthelloState, isArrowGameMode } from '../types/game';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { getOrCreateUserId } from '../utils/uuid';
 import { getStoredAvatar, isSafeDataUrl } from '../utils/avatar';
@@ -36,6 +36,8 @@ export function useRealtime(roomId: string) {
   const snakesState = useGameStore((state) => state.snakesState);
   const ticTacToeState = useGameStore((state) => state.ticTacToeState);
   const arrowPuzzleState = useGameStore((state) => state.arrowPuzzleState);
+  const sosState = useGameStore((state) => state.sosState);
+  const othelloState = useGameStore((state) => state.othelloState);
 
   const userIdRef = useRef(userId);
   const usernameRef = useRef(username);
@@ -43,6 +45,8 @@ export function useRealtime(roomId: string) {
   const prevSnakesStateRef = useRef(snakesState);
   const prevTicTacToeStateRef = useRef(ticTacToeState);
   const prevArrowPuzzleStateRef = useRef(arrowPuzzleState);
+  const prevSosStateRef = useRef(sosState);
+  const prevOthelloStateRef = useRef(othelloState);
 
   useEffect(() => {
     userIdRef.current = userId;
@@ -145,6 +149,8 @@ export function useRealtime(roomId: string) {
       snakesState: store.snakesState,
       ticTacToeState: store.ticTacToeState,
       arrowPuzzleState: isArrowCompetition ? null : store.arrowPuzzleState,
+      sosState: store.sosState,
+      othelloState: store.othelloState,
       messages: store.messages,
       senderId,
     };
@@ -198,8 +204,10 @@ export function useRealtime(roomId: string) {
       const isSnakesJustReady = Boolean(snakesState && !prevSnakesStateRef.current);
       const isTicTacToeJustReady = Boolean(ticTacToeState && !prevTicTacToeStateRef.current);
       const isArrowJustReady = Boolean(arrowPuzzleState && !prevArrowPuzzleStateRef.current);
+      const isSosJustReady = Boolean(sosState && !prevSosStateRef.current);
+      const isOthelloJustReady = Boolean(othelloState && !prevOthelloStateRef.current);
 
-      if (isGridJustReady || isSnakesJustReady || isTicTacToeJustReady || isArrowJustReady) {
+      if (isGridJustReady || isSnakesJustReady || isTicTacToeJustReady || isArrowJustReady || isSosJustReady || isOthelloJustReady) {
         addLog(`[Host Broadcast] Membagikan puzzle/state ke semua player.`);
 
         channelRef.current.send({
@@ -216,7 +224,9 @@ export function useRealtime(roomId: string) {
     prevSnakesStateRef.current = snakesState;
     prevTicTacToeStateRef.current = ticTacToeState;
     prevArrowPuzzleStateRef.current = arrowPuzzleState;
-  }, [grid, snakesState, ticTacToeState, arrowPuzzleState, addLog, buildSyncPayload]);
+    prevSosStateRef.current = sosState;
+    prevOthelloStateRef.current = othelloState;
+  }, [grid, snakesState, ticTacToeState, arrowPuzzleState, sosState, othelloState, addLog, buildSyncPayload]);
 
   const connectChannel = useCallback(() => {
     const currentUserId = userIdRef.current || (typeof window !== 'undefined' ? getOrCreateUserId() : '');
@@ -244,6 +254,10 @@ export function useRealtime(roomId: string) {
           ? Boolean(currentState.snakesState)
           : currentState.room?.mode === 'tic_tac_toe'
           ? Boolean(currentState.ticTacToeState)
+          : currentState.room?.mode === 'sos_game'
+          ? Boolean(currentState.sosState)
+          : currentState.room?.mode === 'othello'
+          ? Boolean(currentState.othelloState)
           : isArrowGameMode(currentState.room?.mode)
           ? Boolean(currentState.arrowPuzzleState)
           : Boolean(currentState.grid);
@@ -420,6 +434,12 @@ export function useRealtime(roomId: string) {
         if (payload.ticTacToeState) {
           store.replaceAllTicTacToeState(payload.ticTacToeState as TicTacToeState);
         }
+        if (payload.sosState) {
+          store.replaceAllSosState(payload.sosState as SosState);
+        }
+        if (payload.othelloState) {
+          store.replaceAllOthelloState(payload.othelloState as OthelloState);
+        }
         if (payload.arrowPuzzleState && isValidArrowPuzzleState(payload.arrowPuzzleState)) {
           store.replaceAllArrowPuzzleState(payload.arrowPuzzleState as ArrowPuzzleState);
           lastArrowStateAtRef.current = Date.now();
@@ -504,6 +524,10 @@ export function useRealtime(roomId: string) {
           store.replaceAllSnakesState(payload.snakesState as SnakesState);
         } else if (payload.room?.mode === 'tic_tac_toe' && payload.ticTacToeState) {
           store.replaceAllTicTacToeState(payload.ticTacToeState as TicTacToeState);
+        } else if (payload.room?.mode === 'sos_game' && payload.sosState) {
+          store.replaceAllSosState(payload.sosState as SosState);
+        } else if (payload.room?.mode === 'othello' && payload.othelloState) {
+          store.replaceAllOthelloState(payload.othelloState as OthelloState);
         } else if (payload.room?.mode === 'arrow_classic' && isValidArrowPuzzleState(payload.arrowPuzzleState)) {
           store.replaceAllArrowPuzzleState(payload.arrowPuzzleState as ArrowPuzzleState);
           lastArrowStateAtRef.current = Date.now();
@@ -555,6 +579,28 @@ export function useRealtime(roomId: string) {
             useGameStore.getState().replaceAllTicTacToeState(incoming);
           } else {
             useGameStore.getState().updateTicTacToeState(incoming);
+          }
+        }
+      })
+      .on('broadcast', { event: 'sos_state_update' }, ({ payload }) => {
+        if (payload.sosState) {
+          const incoming = payload.sosState as SosState;
+          const current = useGameStore.getState().sosState;
+          if (incoming.boardId && current?.boardId && incoming.boardId !== current.boardId) {
+            useGameStore.getState().replaceAllSosState(incoming);
+          } else {
+            useGameStore.getState().updateSosState(incoming);
+          }
+        }
+      })
+      .on('broadcast', { event: 'othello_state_update' }, ({ payload }) => {
+        if (payload.othelloState) {
+          const incoming = payload.othelloState as OthelloState;
+          const current = useGameStore.getState().othelloState;
+          if (incoming.boardId && current?.boardId && incoming.boardId !== current.boardId) {
+            useGameStore.getState().replaceAllOthelloState(incoming);
+          } else {
+            useGameStore.getState().updateOthelloState(incoming);
           }
         }
       })
@@ -733,6 +779,10 @@ export function useRealtime(roomId: string) {
               ? Boolean(store.snakesState)
               : store.room?.mode === 'tic_tac_toe'
               ? Boolean(store.ticTacToeState)
+              : store.room?.mode === 'sos_game'
+              ? Boolean(store.sosState)
+              : store.room?.mode === 'othello'
+              ? Boolean(store.othelloState)
               : isArrowGameMode(store.room?.mode)
               ? Boolean(store.arrowPuzzleState)
               : Boolean(store.grid);
@@ -787,6 +837,10 @@ export function useRealtime(roomId: string) {
           ? Boolean(store.snakesState)
           : store.room?.mode === 'tic_tac_toe'
           ? Boolean(store.ticTacToeState)
+          : store.room?.mode === 'sos_game'
+          ? Boolean(store.sosState)
+          : store.room?.mode === 'othello'
+          ? Boolean(store.othelloState)
           : isArrowGameMode(store.room?.mode)
           ? Boolean(store.arrowPuzzleState)
           : Boolean(store.grid);
@@ -969,7 +1023,9 @@ export function useRealtime(roomId: string) {
       updatedRoom?: RoomState,
       snakesState?: SnakesState | null,
       ticTacToeState?: TicTacToeState | null,
-      arrowPuzzleState?: ArrowPuzzleState | null
+      arrowPuzzleState?: ArrowPuzzleState | null,
+      sosState?: SosState | null,
+      othelloState?: OthelloState | null
     ) => {
       if (channelRef.current && statusRef.current === 'SUBSCRIBED') {
         channelRef.current.send({
@@ -982,6 +1038,8 @@ export function useRealtime(roomId: string) {
             snakesState,
             ticTacToeState,
             arrowPuzzleState,
+            sosState,
+            othelloState,
           },
         });
       }
@@ -1053,6 +1111,34 @@ export function useRealtime(roomId: string) {
       type: 'broadcast',
       event: 'tic_tac_toe_state_update',
       payload: { ticTacToeState: newState, sentAt: Date.now() },
+    });
+  }, []);
+
+  const broadcastSosState = useCallback((newState: SosState) => {
+    const current = useGameStore.getState().sosState;
+    if (newState.boardId && current?.boardId && newState.boardId !== current.boardId) {
+      useGameStore.getState().replaceAllSosState(newState);
+    } else {
+      useGameStore.getState().updateSosState(newState);
+    }
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'sos_state_update',
+      payload: { sosState: newState, sentAt: Date.now() },
+    });
+  }, []);
+
+  const broadcastOthelloState = useCallback((newState: OthelloState) => {
+    const current = useGameStore.getState().othelloState;
+    if (newState.boardId && current?.boardId && newState.boardId !== current.boardId) {
+      useGameStore.getState().replaceAllOthelloState(newState);
+    } else {
+      useGameStore.getState().updateOthelloState(newState);
+    }
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'othello_state_update',
+      payload: { othelloState: newState, sentAt: Date.now() },
     });
   }, []);
 
@@ -1176,6 +1262,8 @@ export function useRealtime(roomId: string) {
     broadcastSnakesDiceRoll,
     broadcastSnakesState,
     broadcastTicTacToeState,
+    broadcastSosState,
+    broadcastOthelloState,
     broadcastArrowPuzzleState,
     sendArrowMove,
     broadcastAvatarUpdate,

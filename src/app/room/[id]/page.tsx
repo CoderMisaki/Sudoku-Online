@@ -2,6 +2,8 @@
 
 import { generateInitialSnakesState } from "../../../utils/snakesAndLaddersData";
 import { createInitialTicTacToeState } from "../../../utils/ticTacToe";
+import { createInitialSosState } from "../../../utils/sosGame";
+import { createInitialOthelloState } from "../../../utils/othello";
 import { buildArrowSeed, createArrowRound, isArrowPuzzleFinished } from "../../../utils/arrowPuzzle";
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
@@ -20,6 +22,8 @@ import { SudokuBoard } from '../../../components/game/SudokuBoard';
 import { SudokuBoard3D } from '../../../components/game/SudokuBoard3D';
 import { SnakesAndLaddersBoard } from '../../../components/game/SnakesAndLaddersBoard';
 import { TicTacToeBoard } from '../../../components/game/TicTacToeBoard';
+import { SosBoard } from '../../../components/game/SosBoard';
+import { OthelloBoard } from '../../../components/game/OthelloBoard';
 import { ArrowPuzzleBoard } from '../../../components/game/ArrowPuzzleBoard';
 import {
   Copy,
@@ -132,6 +136,8 @@ export default function RoomPage() {
     broadcastSnakesDiceRoll,
     broadcastSnakesState,
     broadcastTicTacToeState,
+    broadcastSosState,
+    broadcastOthelloState,
     broadcastArrowPuzzleState,
     sendArrowMove,
     broadcastAvatarUpdate,
@@ -147,15 +153,23 @@ export default function RoomPage() {
   const snakesWinners = useGameStore(state => state.snakesState?.winners);
   const snakesWinnerId = useGameStore(state => state.snakesState?.winnerId);
   const ticTacToeWinner = useGameStore(state => state.ticTacToeState?.winner);
+  const sosWinner = useGameStore(state => state.sosState?.winner);
+  const othelloWinner = useGameStore(state => state.othelloState?.winner);
   const arrowPuzzleState = useGameStore(state => state.arrowPuzzleState);
 
-  // Munculkan Next Game jika game selesai (Ular Tangga, Tic Tac Toe, Arrow, atau Sudoku)
+  // Munculkan Next Game jika game selesai (Ular Tangga, Tic Tac Toe, SOS, Othello, Arrow, atau Sudoku)
   const canTriggerNextGame = React.useMemo(() => {
     if (room?.mode === 'snakes_and_ladders') {
       return Boolean((snakesWinners && snakesWinners.length > 0) || snakesWinnerId);
     }
     if (room?.mode === 'tic_tac_toe') {
       return Boolean(ticTacToeWinner);
+    }
+    if (room?.mode === 'sos_game') {
+      return Boolean(sosWinner);
+    }
+    if (room?.mode === 'othello') {
+      return Boolean(othelloWinner);
     }
     if (room?.mode === 'arrow_classic') {
       return Boolean(arrowPuzzleState?.completed);
@@ -172,7 +186,7 @@ export default function RoomPage() {
       }
     }
     return true;
-  }, [grid, room?.mode, snakesWinners, snakesWinnerId, ticTacToeWinner, arrowPuzzleState, userId]);
+  }, [grid, room?.mode, snakesWinners, snakesWinnerId, ticTacToeWinner, sosWinner, othelloWinner, arrowPuzzleState, userId]);
 
   const solutionToken = useGameStore(state => state.solutionToken);
 
@@ -221,7 +235,11 @@ export default function RoomPage() {
     }
     setNextDifficulty(initialDiff);
     setNextMode(room.mode || 'collaborative');
-    setNextMaxPlayers(room.mode === 'tic_tac_toe' ? 2 : (room.maxPlayers || 4));
+    setNextMaxPlayers(
+      room.mode === 'tic_tac_toe' || room.mode === 'sos_game' || room.mode === 'othello'
+        ? 2
+        : (room.maxPlayers || 4)
+    );
     setNextGameStep('confirm');
     setIsApplied(false);
     setIsNextGameModalOpen(true);
@@ -236,7 +254,7 @@ export default function RoomPage() {
         ...room,
         difficulty: diff,
         mode: gameMode,
-        maxPlayers: gameMode === 'tic_tac_toe' ? 2 : maxP,
+        maxPlayers: gameMode === 'tic_tac_toe' || gameMode === 'sos_game' || gameMode === 'othello' ? 2 : maxP,
         startedAt: Date.now(),
         players: Object.fromEntries(
           Object.entries(room.players).map(([id, p]) => [
@@ -286,6 +304,30 @@ export default function RoomPage() {
         useGameStore.getState().updateTicTacToeState(newTicTacToeState);
         broadcastNextGame(null, null, updatedRoom, null, newTicTacToeState);
         toast.success('Game Tic Tac Toe baru dimulai!', { id: 'nextGame' });
+      }
+      // MODE 2b: SOS GAME (8x8)
+      else if (gameMode === 'sos_game') {
+        const activeList = Object.values(updatedRoom.players)
+          .filter((p: Player) => !p.isSpectator && p.status !== 'left');
+        const newSosState = createInitialSosState(activeList, updatedRoom.hostId);
+        const baseRevision = useGameStore.getState().sosState?.revision ?? 0;
+        newSosState.revision = Math.max(newSosState.revision ?? 1, baseRevision + 1);
+
+        useGameStore.getState().updateSosState(newSosState);
+        broadcastNextGame(null, null, updatedRoom, null, null, null, newSosState, null);
+        toast.success('Game SOS baru dimulai!', { id: 'nextGame' });
+      }
+      // MODE 2c: OTHELLO (8x8)
+      else if (gameMode === 'othello') {
+        const activeList = Object.values(updatedRoom.players)
+          .filter((p: Player) => !p.isSpectator && p.status !== 'left');
+        const newOthelloState = createInitialOthelloState(activeList, updatedRoom.hostId);
+        const baseRevision = useGameStore.getState().othelloState?.revision ?? 0;
+        newOthelloState.revision = Math.max(newOthelloState.revision ?? 1, baseRevision + 1);
+
+        useGameStore.getState().updateOthelloState(newOthelloState);
+        broadcastNextGame(null, null, updatedRoom, null, null, null, null, newOthelloState);
+        toast.success('Game Othello baru dimulai!', { id: 'nextGame' });
       }
       // MODE 3: ARROW PUZZLE MASTER (Classic ko-op / Competition / Practice)
       else if (isArrowGameMode(gameMode)) {
@@ -489,6 +531,10 @@ export default function RoomPage() {
         ? Boolean(storeNow.snakesState)
         : persistedRoom!.mode === 'tic_tac_toe'
         ? Boolean(storeNow.ticTacToeState)
+        : persistedRoom!.mode === 'sos_game'
+        ? Boolean(storeNow.sosState)
+        : persistedRoom!.mode === 'othello'
+        ? Boolean(storeNow.othelloState)
         : isArrowGameMode(persistedRoom!.mode)
         ? Boolean(storeNow.arrowPuzzleState)
         : Boolean(storeNow.grid));
@@ -547,6 +593,42 @@ export default function RoomPage() {
           storedUserId
         );
         useGameStore.getState().replaceAllTicTacToeState(initialTicTacToe);
+        setLoading(false);
+      } else if (mode === 'sos_game') {
+        const initialSos = createInitialSosState(
+          [
+            {
+              id: storedUserId,
+              username: storedUsername,
+              color: '#3b82f6',
+              isHost: true,
+              score: 0,
+              hints: 3,
+              status: 'online',
+              avatar: hostAvatar,
+            },
+          ],
+          storedUserId
+        );
+        useGameStore.getState().replaceAllSosState(initialSos);
+        setLoading(false);
+      } else if (mode === 'othello') {
+        const initialOthello = createInitialOthelloState(
+          [
+            {
+              id: storedUserId,
+              username: storedUsername,
+              color: '#3b82f6',
+              isHost: true,
+              score: 0,
+              hints: 3,
+              status: 'online',
+              avatar: hostAvatar,
+            },
+          ],
+          storedUserId
+        );
+        useGameStore.getState().replaceAllOthelloState(initialOthello);
         setLoading(false);
       } else if (isArrowGameMode(mode)) {
         // Papan Arrow Puzzle dibuat oleh <ArrowPuzzleBoard />.
@@ -742,6 +824,8 @@ export default function RoomPage() {
     !grid &&
     room?.mode !== 'snakes_and_ladders' &&
     room?.mode !== 'tic_tac_toe' &&
+    room?.mode !== 'sos_game' &&
+    room?.mode !== 'othello' &&
     !isArrowGameMode(room?.mode)
   ) {
     return (
@@ -789,6 +873,10 @@ export default function RoomPage() {
               ? 'Tic Tac Toe'
               : room?.mode === 'snakes_and_ladders'
               ? 'Ular Tangga'
+              : room?.mode === 'sos_game'
+              ? 'SOS Game'
+              : room?.mode === 'othello'
+              ? 'Othello'
               : isArrowGameMode(room?.mode)
               ? 'Arrow Puzzle Master'
               : 'Sudoku'}
@@ -987,6 +1075,10 @@ export default function RoomPage() {
                       ? `Juara 1 telah keluar! Menunggu host untuk Next Game...`
                       : room?.mode === 'tic_tac_toe'
                       ? `Ronde selesai! Menunggu host untuk Next Game...`
+                      : room?.mode === 'sos_game'
+                      ? `Papan SOS penuh! Menunggu host untuk Next Game...`
+                      : room?.mode === 'othello'
+                      ? `Permainan Othello selesai! Menunggu host untuk Next Game...`
                       : isArrowGameMode(room?.mode)
                       ? `Papan Arrow selesai! Menunggu host untuk Next Game...`
                       : `Game selesai! Menunggu host...`}
@@ -996,6 +1088,10 @@ export default function RoomPage() {
                   Mode:{' '}
                   {room?.mode === 'tic_tac_toe'
                     ? 'Tic Tac Toe'
+                    : room?.mode === 'sos_game'
+                    ? 'SOS Game (8x8)'
+                    : room?.mode === 'othello'
+                    ? 'Othello (8x8)'
                     : room?.mode === 'arrow_classic'
                     ? 'Arrow Classic'
                     : room?.mode === 'arrow_competition'
@@ -1009,6 +1105,8 @@ export default function RoomPage() {
               {/* Toggle Switch 2D / 3D (Hanya untuk Sudoku) */}
               {room?.mode !== 'snakes_and_ladders' &&
                 room?.mode !== 'tic_tac_toe' &&
+                room?.mode !== 'sos_game' &&
+                room?.mode !== 'othello' &&
                 !isArrowGameMode(room?.mode) && (
                 <div className="flex items-center bg-card border border-border p-1 rounded-xl gap-1 shadow-sm">
                   <button
@@ -1048,6 +1146,16 @@ export default function RoomPage() {
                 broadcastTicTacToeState={broadcastTicTacToeState}
                 broadcastPlayerStats={broadcastPlayerStats}
               />
+            ) : room?.mode === 'sos_game' ? (
+              <SosBoard
+                broadcastSosState={broadcastSosState}
+                broadcastPlayerStats={broadcastPlayerStats}
+              />
+            ) : room?.mode === 'othello' ? (
+              <OthelloBoard
+                broadcastOthelloState={broadcastOthelloState}
+                broadcastPlayerStats={broadcastPlayerStats}
+              />
             ) : isArrowGameMode(room?.mode) ? (
               <ArrowPuzzleBoard
                 broadcastArrowPuzzleState={broadcastArrowPuzzleState}
@@ -1084,6 +1192,8 @@ export default function RoomPage() {
             {/* CONTROLS (Hanya Ditampilkan Pada Mode Sudoku) */}
             {room?.mode !== 'snakes_and_ladders' &&
               room?.mode !== 'tic_tac_toe' &&
+              room?.mode !== 'sos_game' &&
+              room?.mode !== 'othello' &&
               !isArrowGameMode(room?.mode) && (
               <div className="w-full flex flex-col sm:flex-row justify-between items-center gap-4">
                 <div className="flex gap-2">
@@ -1232,6 +1342,11 @@ export default function RoomPage() {
                       setNextDifficulty('3x3');
                     }
                     setNextMaxPlayers(2);
+                  } else if (nm === 'sos_game' || nm === 'othello') {
+                    if (nextDifficulty === '3x3' || nextDifficulty === '8x8') {
+                      setNextDifficulty('medium');
+                    }
+                    setNextMaxPlayers(2);
                   } else {
                     if (nextDifficulty === '3x3' || nextDifficulty === '8x8') {
                       setNextDifficulty('medium');
@@ -1249,6 +1364,8 @@ export default function RoomPage() {
                 <option value="zen">Zen (Santai)</option>
                 <option value="snakes_and_ladders">Snakes &amp; Ladders (Ular Tangga)</option>
                 <option value="tic_tac_toe">Tic Tac Toe</option>
+                <option value="sos_game">SOS Game (8x8)</option>
+                <option value="othello">Othello (8x8)</option>
                 <option value="arrow_classic">Arrow Puzzle Master — Classic</option>
                 <option value="arrow_competition">Arrow Puzzle Master — Competition</option>
                 <option value="arrow_practice">Arrow Puzzle Master — Practice</option>
@@ -1263,12 +1380,12 @@ export default function RoomPage() {
                   setNextMaxPlayers(Number(e.target.value));
                   setIsApplied(false);
                 }}
-                disabled={nextMode === 'tic_tac_toe'}
+                disabled={nextMode === 'tic_tac_toe' || nextMode === 'sos_game' || nextMode === 'othello'}
                 className={`w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground ${
-                  nextMode === 'tic_tac_toe' ? 'opacity-80 bg-secondary/10 cursor-not-allowed' : ''
+                  nextMode === 'tic_tac_toe' || nextMode === 'sos_game' || nextMode === 'othello' ? 'opacity-80 bg-secondary/10 cursor-not-allowed' : ''
                 }`}
               >
-                {nextMode === 'tic_tac_toe' ? (
+                {nextMode === 'tic_tac_toe' || nextMode === 'sos_game' || nextMode === 'othello' ? (
                   <option value={2}>2 Pemain (Maksimal)</option>
                 ) : (
                   <>

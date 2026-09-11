@@ -1,9 +1,11 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Grid, RoomState, Player, ChatMessage, SnakesState, TicTacToeState, ArrowPuzzleState, isArrowGameMode } from '../types/game';
+import { Grid, RoomState, Player, ChatMessage, SnakesState, TicTacToeState, ArrowPuzzleState, SosState, OthelloState, isArrowGameMode } from '../types/game';
 import { checkConflicts } from '../utils/sudoku';
 import { generateInitialSnakesState, areSnakesLayoutsEqual } from '../utils/snakesAndLaddersData';
 import { createInitialTicTacToeState } from '../utils/ticTacToe';
+import { createInitialSosState } from '../utils/sosGame';
+import { createInitialOthelloState } from '../utils/othello';
 import { createArrowRound, buildArrowSeed, isValidArrowPuzzleState } from '../utils/arrowPuzzle';
 
 // Debug logging off by default. Enable with: localStorage.setItem('sudoku_debug_snakes', '1')
@@ -57,6 +59,8 @@ interface GameStore {
   snakesState?: SnakesState;
   ticTacToeState?: TicTacToeState;
   arrowPuzzleState?: ArrowPuzzleState;
+  sosState?: SosState;
+  othelloState?: OthelloState;
   addMessage: (msg: ChatMessage) => void;
   setMessages: (msgs: ChatMessage[]) => void;
 
@@ -74,6 +78,10 @@ interface GameStore {
   replaceAllSnakesState: (state: SnakesState) => void;
   updateTicTacToeState: (state: Partial<TicTacToeState>) => void;
   replaceAllTicTacToeState: (state: TicTacToeState) => void;
+  updateSosState: (state: Partial<SosState>) => void;
+  replaceAllSosState: (state: SosState) => void;
+  updateOthelloState: (state: Partial<OthelloState>) => void;
+  replaceAllOthelloState: (state: OthelloState) => void;
   /** Merge sebagian state Arrow Puzzle (langkah pemain, streak salah, dsb). */
   updateArrowPuzzleState: (state: Partial<ArrowPuzzleState>) => void;
   /** Adopsi snapshot penuh Arrow Puzzle dari otoritas (host / hasil langkah lokal). */
@@ -421,6 +429,8 @@ export const useGameStore = create<GameStore>()(
       snakesState: undefined,
       ticTacToeState: undefined,
       arrowPuzzleState: undefined,
+      sosState: undefined,
+      othelloState: undefined,
       setSelectedCell: (cell) => set({ selectedCell: cell }),
       updateSnakesState: (updates) => set((state) => {
         const current = state.snakesState as SnakesState | undefined;
@@ -534,6 +544,100 @@ export const useGameStore = create<GameStore>()(
         };
         return { ticTacToeState: next };
       }),
+      updateSosState: (updates) => set((state) => {
+        const current = state.sosState;
+        const incomingRevision = updates.revision;
+        const incomingBoardId = updates.boardId;
+
+        const isDifferentBoard = Boolean(
+          incomingBoardId && current?.boardId && incomingBoardId !== current.boardId
+        );
+
+        if (!isDifferentBoard && current && typeof incomingRevision === 'number' && typeof current.revision === 'number') {
+          if (incomingRevision <= current.revision) {
+            return state;
+          }
+        }
+
+        let nextRevision = incomingRevision;
+        if (typeof nextRevision !== 'number' && current && typeof current.revision === 'number' && !isDifferentBoard) {
+          nextRevision = current.revision + 1;
+        } else if (typeof nextRevision !== 'number') {
+          nextRevision = 1;
+        }
+
+        const merged: SosState = ({ ...current, ...updates, revision: nextRevision } as SosState);
+
+        return { sosState: merged };
+      }),
+      replaceAllSosState: (incoming) => set((state) => {
+        const current = state.sosState;
+        if (
+          current &&
+          incoming.boardId &&
+          current.boardId &&
+          incoming.boardId === current.boardId &&
+          typeof incoming.revision === 'number' &&
+          typeof current.revision === 'number' &&
+          incoming.revision < current.revision
+        ) {
+          return state;
+        }
+        const next: SosState = {
+          ...incoming,
+          revision: typeof incoming.revision === 'number'
+            ? incoming.revision
+            : Math.max(current?.revision ?? 0, 0) + 1,
+        };
+        return { sosState: next };
+      }),
+      updateOthelloState: (updates) => set((state) => {
+        const current = state.othelloState;
+        const incomingRevision = updates.revision;
+        const incomingBoardId = updates.boardId;
+
+        const isDifferentBoard = Boolean(
+          incomingBoardId && current?.boardId && incomingBoardId !== current.boardId
+        );
+
+        if (!isDifferentBoard && current && typeof incomingRevision === 'number' && typeof current.revision === 'number') {
+          if (incomingRevision <= current.revision) {
+            return state;
+          }
+        }
+
+        let nextRevision = incomingRevision;
+        if (typeof nextRevision !== 'number' && current && typeof current.revision === 'number' && !isDifferentBoard) {
+          nextRevision = current.revision + 1;
+        } else if (typeof nextRevision !== 'number') {
+          nextRevision = 1;
+        }
+
+        const merged: OthelloState = ({ ...current, ...updates, revision: nextRevision } as OthelloState);
+
+        return { othelloState: merged };
+      }),
+      replaceAllOthelloState: (incoming) => set((state) => {
+        const current = state.othelloState;
+        if (
+          current &&
+          incoming.boardId &&
+          current.boardId &&
+          incoming.boardId === current.boardId &&
+          typeof incoming.revision === 'number' &&
+          typeof current.revision === 'number' &&
+          incoming.revision < current.revision
+        ) {
+          return state;
+        }
+        const next: OthelloState = {
+          ...incoming,
+          revision: typeof incoming.revision === 'number'
+            ? incoming.revision
+            : Math.max(current?.revision ?? 0, 0) + 1,
+        };
+        return { othelloState: next };
+      }),
       updateArrowPuzzleState: (updates) => set((state) => {
         const current = state.arrowPuzzleState;
         const incomingBoardId = updates.boardId;
@@ -586,7 +690,7 @@ export const useGameStore = create<GameStore>()(
         return { arrowPuzzleState: next };
       }),
       clearArrowPuzzleState: () => set({ arrowPuzzleState: undefined }),
-      resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null, snakesState: undefined, ticTacToeState: undefined, arrowPuzzleState: undefined }),
+      resetGame: () => set({ room: null, grid: null, solutionToken: null, messages: [], selectedCell: null, snakesState: undefined, ticTacToeState: undefined, arrowPuzzleState: undefined, sosState: undefined, othelloState: undefined }),
 
       startNextGame: (newGrid, newSolutionToken) => set((state) => {
         if (!state.room) return state;
@@ -595,10 +699,14 @@ export const useGameStore = create<GameStore>()(
         const isSnakesMode = state.room.mode === 'snakes_and_ladders';
         const isTicTacToeMode = state.room.mode === 'tic_tac_toe';
         const isArrowMode = isArrowGameMode(state.room.mode);
+        const isSosMode = state.room.mode === 'sos_game';
+        const isOthelloMode = state.room.mode === 'othello';
         const newStartedAt = Date.now();
         let newSnakesState = state.snakesState;
         let newTicTacToeState = state.ticTacToeState;
         let newArrowPuzzleState = state.arrowPuzzleState;
+        let newSosState = state.sosState;
+        let newOthelloState = state.othelloState;
 
         if (isSnakesMode) {
           const fresh = generateInitialSnakesState(state.room.difficulty, Object.keys(newPlayers));
@@ -614,6 +722,20 @@ export const useGameStore = create<GameStore>()(
           newTicTacToeState = {
             ...fresh,
             revision: Math.max(fresh.revision ?? 1, (state.ticTacToeState?.revision ?? 0) + 1),
+          };
+        } else if (isSosMode) {
+          const activeList = Object.values(newPlayers).filter(p => !p.isSpectator && p.status !== 'left');
+          const fresh = createInitialSosState(activeList, state.room.hostId);
+          newSosState = {
+            ...fresh,
+            revision: Math.max(fresh.revision ?? 1, (state.sosState?.revision ?? 0) + 1),
+          };
+        } else if (isOthelloMode) {
+          const activeList = Object.values(newPlayers).filter(p => !p.isSpectator && p.status !== 'left');
+          const fresh = createInitialOthelloState(activeList, state.room.hostId);
+          newOthelloState = {
+            ...fresh,
+            revision: Math.max(fresh.revision ?? 1, (state.othelloState?.revision ?? 0) + 1),
           };
         } else if (isArrowMode) {
           // Ronde baru Arrow Puzzle. Seed memakai startedAt yang sama di semua
@@ -642,7 +764,7 @@ export const useGameStore = create<GameStore>()(
           };
         });
 
-        const isBoardlessMode = isTicTacToeMode || isArrowMode;
+        const isBoardlessMode = isTicTacToeMode || isArrowMode || isSosMode || isOthelloMode;
 
         return {
           room: {
@@ -657,6 +779,8 @@ export const useGameStore = create<GameStore>()(
           snakesState: isSnakesMode ? newSnakesState : undefined,
           ticTacToeState: isTicTacToeMode ? newTicTacToeState : undefined,
           arrowPuzzleState: isArrowMode ? newArrowPuzzleState : undefined,
+          sosState: isSosMode ? newSosState : undefined,
+          othelloState: isOthelloMode ? newOthelloState : undefined,
         };
       }),
 
@@ -678,6 +802,8 @@ export const useGameStore = create<GameStore>()(
           snakesState: undefined,
           ticTacToeState: undefined,
           arrowPuzzleState: undefined,
+          sosState: undefined,
+          othelloState: undefined,
         });
       },
 
@@ -716,6 +842,8 @@ export const useGameStore = create<GameStore>()(
         ticTacToeState: state.ticTacToeState,
         // Papan Arrow Puzzle ikut dipersist supaya refresh tidak menghapus progress
         arrowPuzzleState: state.arrowPuzzleState,
+        sosState: state.sosState,
+        othelloState: state.othelloState,
       }),
     }
   )
