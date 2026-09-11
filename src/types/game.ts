@@ -11,7 +11,9 @@ export type GameMode =
   | 'arrow_classic'
   | 'arrow_competition'
   | 'arrow_practice'
-  | 'harvest_moon';
+  | 'harvest_moon'
+  | 'sos_game'
+  | 'othello';
 
 /** Game yang memakai papan Arrow Puzzle Master (bukan papan Sudoku). */
 export type ArrowGameMode = 'arrow_classic' | 'arrow_competition' | 'arrow_practice';
@@ -214,4 +216,92 @@ export interface ArrowPuzzleState {
     correct: boolean;
     timestamp: number;
   } | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SOS Game Types — pola S-O-S di papan 8x8
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type SosLetter = 'S' | 'O';
+
+/**
+ * Sisi warna monokrom pada papan SOS. Tidak ada hubungannya dengan huruf
+ * S/O yang dipilih tiap langkah — ini murni identitas warna pemain
+ * (hitam lawan putih) dan diundi acak tiap ronde baru.
+ */
+export type SosSide = 'black' | 'white';
+
+export interface SosPlayerInfo {
+  id: string;
+  username: string;
+  color?: string;
+  avatar?: string | null;
+  isBot?: boolean;
+  /** Huruf favorit / identitas pemain (P1 = S, P2 = O). */
+  letter: SosLetter;
+  /** Sisi warna hasil undian: 'black' atau 'white'. */
+  side: SosSide;
+}
+
+export interface SosLine {
+  cells: [{ row: number; col: number }, { row: number; col: number }, { row: number; col: number }];
+  /** userId pemain yang menciptakan pola ini. */
+  byUserId: string;
+}
+
+export interface SosCell {
+  letter: SosLetter | null;
+  /** userId pemain yang mengisi kotak ini. */
+  byUserId: string | null;
+}
+
+export interface SosState {
+  boardId?: string;
+  boardSize: 8;
+  grid: SosCell[][];
+  scores: Record<string, number>;
+  currentTurnUserId: string;
+  /** Huruf yang sedang dipilih pemain yang giliran (S atau O). */
+  selectedLetter: SosLetter;
+  lines: SosLine[];
+  /** userId pemenang, atau 'draw' bila seri, atau null bila belum selesai. */
+  winner: string | 'draw' | null;
+  isAgainstBot: boolean;
+  player1: SosPlayerInfo;
+  player2: SosPlayerInfo;
+  revision: number;
+  lastMove?: { row: number; col: number; letter: SosLetter; userId: string; points: number; timestamp: number } | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Othello (Reversi) Types — papan 8x8, Hitam vs Putih
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type OthelloDisc = 'B' | 'W';
+
+export interface OthelloPlayerInfo {
+  id: string;
+  username: string;
+  disc: OthelloDisc;
+  color?: string;
+  avatar?: string | null;
+  isBot?: boolean;
+}
+
+export interface OthelloState {
+  boardId?: string;
+  boardSize: 8;
+  grid: (OthelloDisc | null)[][];
+  currentTurnDisc: OthelloDisc;
+  currentTurnUserId: string;
+  counts: { B: number; W: number };
+  validMoves: { row: number; col: number }[];
+  /** userId pemenang, atau 'draw' bila seri, atau null bila belum selesai. */
+  winner: string | 'draw' | null;
+  winnerDisc: OthelloDisc | null;
+  isAgainstBot: boolean;
+  playerB: OthelloPlayerInfo;
+  playerW: OthelloPlayerInfo;
+  revision: number;
+  lastMove?: { row: number; col: number; disc: OthelloDisc; userId: string; flipped: { row: number; col: number }[]; skippedOpponent: boolean; timestamp: number } | null;
 }

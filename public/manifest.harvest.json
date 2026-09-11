@@ -1,14 +1,16 @@
 {
-  "name": "Sudoku Together",
-  "short_name": "Sudoku",
-  "description": "Multiplayer Real-time Sudoku Game",
-  "start_url": "/",
-  "id": "/",
+  "name": "Harvest Moon Together",
+  "short_name": "Harvest",
+  "description": "Multiplayer open-world farming game (landscape)",
+  "start_url": "/harvest",
+  "id": "/harvest",
+  "scope": "/",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
-  "orientation": "any",
+  "display_override": ["fullscreen", "standalone", "minimal-ui"],
+  "orientation": "landscape",
   "background_color": "#0a0a0a",
   "theme_color": "#0a0a0a",
+  "categories": ["games", "entertainment"],
   "icons": [
     {
       "src": "/icon-192.png",

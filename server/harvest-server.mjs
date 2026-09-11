@@ -833,6 +833,31 @@ export class HarvestServer {
       peer.close(1008);
       return;
     }
+    // Idempotent re-hello on the SAME socket (client retried hello without
+    // reopening): just resend the latest snapshot, never duplicate anything.
+    const self = this.clients.get(peer);
+    if (self && self.roomCode === roomCode && self.player.id === userId) {
+      const wSelf = this.getWorld(self.roomCode);
+      self.player.lastSeen = nowMs();
+      if (self.player.char) {
+        this.sendSnapshot(peer, self, wSelf, true);
+      } else {
+        peer.send({ t: 'hello_ack', player: null, needsCreation: true });
+      }
+      return;
+    }
+    // Duplicate-connection safety: the same room+userId reconnecting on a NEW
+    // socket must take over. Unmap + close the stale peer FIRST so it can
+    // never clobber the new connection, double-count players, or emit a bogus
+    // 'leave' for a player that is actually still here.
+    for (const [otherPeer, otherClient] of this.clients) {
+      if (otherPeer !== peer && otherClient.roomCode === roomCode && otherClient.player.id === userId) {
+        this.clients.delete(otherPeer);
+        this.connections.delete(otherPeer);
+        try { otherPeer.close(1000); } catch {}
+        // Its onclose will no-op: the mapping above is already gone.
+      }
+    }
     const w = this.getWorld(roomCode);
     const players = this.playersOf(w);
     // Cap players per world (2–16)
@@ -843,10 +868,17 @@ export class HarvestServer {
       peer.close(1008);
       return;
     }
-    if (player) {
-      // resume
+    if (player && player.char) {
+      // resume existing character immediately without stuck loading screen
       player.lastSeen = nowMs();
-      peer.send({ t: 'hello_ack', player: this.playerPublicSafe(player, true), needsCreation: false });
+      const client = { roomCode, player, peer };
+      this.clients.set(peer, client);
+      this.sendWelcome(client, w);
+      this.broadcast(roomCode, { t: 'event', e: { type: 'join', playerId: player.id, name: player.username } }, player.id);
+      return;
+    } else if (player) {
+      player.lastSeen = nowMs();
+      peer.send({ t: 'hello_ack', player: null, needsCreation: true });
     } else {
       player = makePlayer(userId, username);
       players[userId] = player;
@@ -906,13 +938,28 @@ export class HarvestServer {
     const { player } = client;
     const w = this.getWorld(client.roomCode);
     if (!player.char) return;
-    const x = Number(msg.x), y = Number(msg.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-    const maxStep = (msg.sprint ? 0.85 : 0.5);
-    const dx = clamp(x - player.x, -maxStep, maxStep);
-    const dy = clamp(y - player.y, -maxStep, maxStep);
-    player.x = clamp(player.x + dx, 1, WORLD_W - 2);
-    player.y = clamp(player.y + dy, 1, WORLD_H - 2);
+    const targetX = Number(msg.x), targetY = Number(msg.y);
+    if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return;
+
+    const now = nowMs();
+    const lastMove = player._lastMoveTime || (now - 50);
+    const dt = Math.min(0.5, Math.max(0.01, (now - lastMove) / 1000));
+    player._lastMoveTime = now;
+
+    const maxSpeed = (msg.sprint ? 8.5 : 5.5); // tiles per second
+    const maxAllowedDist = maxSpeed * dt + 1.2; // 1.2 tile buffer for network jitter
+
+    const dist = Math.hypot(targetX - player.x, targetY - player.y);
+    if (dist <= maxAllowedDist) {
+      player.x = clamp(targetX, 1, WORLD_W - 2);
+      player.y = clamp(targetY, 1, WORLD_H - 2);
+    } else {
+      // Step too large (anti-teleport / packet latency): smoothly step toward target
+      const ratio = maxAllowedDist / dist;
+      player.x = clamp(player.x + (targetX - player.x) * ratio, 1, WORLD_W - 2);
+      player.y = clamp(player.y + (targetY - player.y) * ratio, 1, WORLD_W - 2);
+    }
+
     player.dir = Math.round(Number(msg.dir) || 0) % 4;
     player.anim = typeof msg.anim === 'string' ? msg.anim.slice(0, 12) : 'idle';
     player.sprint = Boolean(msg.sprint);
@@ -967,6 +1014,9 @@ export class HarvestServer {
         case 'buy_seed': this.actBuy(w, player, { item: msg.item, qty: msg.qty || 1 }); break;
         case 'fert': this.actFertilize(w, player, msg); break;
         case 'festival_collect': this.actFestivalCollect(w, player, msg); break;
+        case 'drop': this.actDrop(w, player, msg); break;
+        case 'split': this.actSplit(w, player, msg); break;
+        case 'move_slot': this.actMoveSlot(w, player, msg); break;
         default: break;
       }
     } catch (err) {
@@ -1704,6 +1754,52 @@ export class HarvestServer {
     return space;
   }
 
+  actDrop(w, p, msg) {
+    let itemId = String(msg.item || '');
+    if (!itemId && typeof msg.slot === 'number' && p.inv[msg.slot]) {
+      itemId = p.inv[msg.slot].id;
+    }
+    const qty = clamp(parseInt(msg.qty || msg.count) || 1, 1, 99);
+    const item = ITEMS[itemId];
+    if (!item || item.cat === 'tool') {
+      this.notify(w, p, 'Item ini tidak bisa dibuang.', 'warn');
+      return;
+    }
+    if (!this.removeItem(w, p, itemId, qty)) {
+      this.notify(w, p, 'Item tidak ditemukan.', 'warn');
+      return;
+    }
+    this.notify(w, p, `Membuang ${item.name} x${qty}.`, 'info');
+  }
+  actSplit(w, p, msg) {
+    let slot = null;
+    if (typeof msg.slot === 'number' && p.inv[msg.slot]) {
+      slot = p.inv[msg.slot];
+    } else if (msg.item) {
+      slot = p.inv.find(i => i.id === msg.item);
+    }
+    if (!slot || slot.qty <= 1) return;
+    if (p.inv.length >= p.invMax) {
+      this.notify(w, p, 'Inventory penuh untuk memisahkan stack.', 'warn');
+      return;
+    }
+    const count = parseInt(msg.count || msg.qty);
+    const splitQty = (Number.isFinite(count) && count > 0 && count < slot.qty) ? count : Math.floor(slot.qty / 2);
+    slot.qty -= splitQty;
+    p.inv.push({ id: slot.id, qty: splitQty });
+    this.sendTo(p.id, w, { t: 'event', e: { type: 'inv', inv: p.inv } });
+  }
+  actMoveSlot(w, p, msg) {
+    const from = parseInt(msg.from);
+    const to = parseInt(msg.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+    if (from < 0 || from >= p.inv.length || to < 0 || to >= p.inv.length) return;
+    const temp = p.inv[from];
+    p.inv[from] = p.inv[to];
+    p.inv[to] = temp;
+    this.sendTo(p.id, w, { t: 'event', e: { type: 'inv', inv: p.inv } });
+  }
+
   // ── crafting / cooking ──
   actCraft(w, p, msg) {
     const rec = RECIPES.find(r => r.id === msg.recipe && r.kind === 'craft');
@@ -1711,7 +1807,7 @@ export class HarvestServer {
     const sk = p.skills[rec.unlock.skill];
     if (sk.level < rec.unlock.level) { this.notify(w, p, `Butuh ${SKILL_NAMES[rec.unlock.skill]} level ${rec.unlock.level}.`, 'warn'); return; }
     for (const [item, qty] of Object.entries(rec.needs)) {
-      if (!this.countItem(p, item) >= qty) { this.notify(w, p, 'Bahan tidak cukup.', 'warn'); return; }
+      if (this.countItem(p, item) < qty) { this.notify(w, p, 'Bahan tidak cukup.', 'warn'); return; }
     }
     for (const [item, qty] of Object.entries(rec.needs)) this.removeItem(w, p, item, qty);
     if (!this.addItem(w, p, rec.out, 1)) {
@@ -1987,15 +2083,54 @@ export class HarvestServer {
 
   // ── chat/emote ──
   onChat(client, msg) {
-    const text = safeName(msg.text, 200);
+    const text = safeName(msg.text, 200).trim();
     if (!text) return;
     const now = nowMs();
     client.player._lastChat = client.player._lastChat || 0;
-    if (now - client.player._lastChat < 350) return;
+    if (now - client.player._lastChat < 250) return;
     client.player._lastChat = now;
-    this.broadcast(client.roomCode, {
-      t: 'event', e: { type: 'chat', playerId: client.player.id, name: client.player.username, text, ts: now },
-    });
+
+    const channel = msg.channel === 'private' || msg.targetPlayerId ? 'private' : 'public';
+    if (channel === 'private' && msg.targetPlayerId) {
+      const targetId = String(msg.targetPlayerId);
+      const w = this.getWorld(client.roomCode);
+      const targetPlayer = w._players[targetId];
+      if (!targetPlayer) {
+        this.notify(w, client.player, 'Pemain tidak ditemukan atau offline.', 'warn');
+        return;
+      }
+      const chatMsg = {
+        t: 'event',
+        e: {
+          type: 'chat',
+          id: uid(),
+          playerId: client.player.id,
+          name: client.player.username,
+          targetPlayerId: targetId,
+          targetName: targetPlayer.username,
+          text,
+          ts: now,
+          channel: 'private',
+        },
+      };
+      // Send ONLY to sender and target
+      client.peer.send(chatMsg);
+      this.sendTo(targetId, w, chatMsg);
+    } else {
+      // Public broadcast to room
+      this.broadcast(client.roomCode, {
+        t: 'event',
+        e: {
+          type: 'chat',
+          id: uid(),
+          playerId: client.player.id,
+          name: client.player.username,
+          text,
+          ts: now,
+          channel: 'public',
+        },
+      });
+    }
   }
   onEmote(client, msg) {
     const emote = String(msg.emote || '').slice(0, 24);
@@ -2040,7 +2175,7 @@ export class HarvestServer {
         if (c.roomCode !== w.roomCode) continue;
         const p = c.player;
         if (!p.char) continue;
-        others.push([p.id, +p.x.toFixed(2), +p.y.toFixed(2), p.dir, p.anim, p.sprint ? 1 : 0, c.peer.alive ? 1 : 0]);
+        others.push([p.id, +p.x.toFixed(2), +p.y.toFixed(2), p.dir, p.anim, p.sprint ? 1 : 0, c.peer.alive ? 1 : 0, p.username || '']);
       }
       const npcs = [];
       for (const n of NPCS) {

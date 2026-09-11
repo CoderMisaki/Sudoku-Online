@@ -27,6 +27,8 @@ interface HarvestState {
   dialogue: DialogueState | null;
   toasts: UiToast[];
   chat: ChatLine[];
+  activeChatTab: string; // 'public' or targetPlayerId
+  unreadPrivate: Record<string, number>;
   settings: { music: number; sfx: number; quality: 'high' | 'low'; showFps: boolean };
   fps: number;
   mine: { active: boolean; depth: number; S: number; grid: number[]; ores: Record<string, string> } | null;
@@ -35,8 +37,13 @@ interface HarvestState {
   fishing: { phase: 'idle' | 'cast' | 'bite'; startAt: number; biteAt: number };
   selectedItem: string | null;
   chatOpen: boolean;
+  /** How many authoritative snapshots were applied (idempotency diagnostics). */
+  snapshotCount: number;
+  /** Last lifecycle/reconnect recovery attempt (single coordinator, no loops). */
+  lastRecovery: { source: string; action: string; at: number } | null;
 
   setStatus: (s: ConnectionStatus) => void;
+  markRecovery: (source: string, action: string) => void;
   setScreen: (s: Screen) => void;
   setError: (m: string) => void;
   setSession: (room: string, userId: string, userName: string) => void;
@@ -49,6 +56,8 @@ interface HarvestState {
   toast: (kind: UiToast['kind'], msg: string) => void;
   dismissToast: (id: number) => void;
   pushChat: (line: ChatLine) => void;
+  setActiveChatTab: (tab: string) => void;
+  clearUnreadPrivate: (playerId: string) => void;
   setSettings: (p: Partial<HarvestState['settings']>) => void;
   setFps: (fps: number) => void;
   setMine: (m: HarvestState['mine']) => void;
@@ -60,13 +69,12 @@ interface HarvestState {
 }
 
 let toastId = 1;
-let chatId = 1;
 
 const initialMeta = { timeMin: 6 * 60, day: 1, season: 'spring', weather: 'sunny', community: null, festival: { active: false, def: null } };
 
 export const useHarvestStore = create<HarvestState>((set, get) => ({
   status: 'connecting',
-  screen: 'orientation',
+  screen: 'loading',
   errorMsg: '',
   roomCode: '',
   userId: '',
@@ -81,6 +89,8 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
   dialogue: null,
   toasts: [],
   chat: [],
+  activeChatTab: 'public',
+  unreadPrivate: {},
   settings: { music: 0.5, sfx: 0.8, quality: 'high', showFps: false },
   fps: 60,
   mine: null,
@@ -89,8 +99,11 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
   fishing: { phase: 'idle', startAt: 0, biteAt: 0 },
   selectedItem: null,
   chatOpen: false,
+  snapshotCount: 0,
+  lastRecovery: null,
 
-  setStatus: (s) => set({ status: s }),
+  setStatus: (s) => set((st) => (st.status === s ? st : { status: s })),
+  markRecovery: (source, action) => set({ lastRecovery: { source, action, at: Date.now() } }),
   setScreen: (s) => set({ screen: s }),
   setError: (m) => set({ errorMsg: m, screen: 'error' }),
   setSession: (room, userId, userName) => set({ roomCode: room, userId, userName }),
@@ -110,6 +123,9 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
     screen: me.char ? 'game' : 'creator',
     status: 'ready',
     wasInGame: me.char ? true : st.wasInGame,
+    // Applying the same snapshot twice must never duplicate anything: the whole
+    // authoritative state is replaced wholesale and only this counter moves.
+    snapshotCount: st.snapshotCount + 1,
   })),
 
   applySnapMeta: (timeMin, day, season, weather) => set((st) => ({
@@ -155,7 +171,7 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
           quests: { ...m.quests, done: m.quests.done.includes(e.questId as string) ? m.quests.done : [...m.quests.done, e.questId as string] },
           gold: e.gold as number,
         }));
-        st.toast('quest', `Quest selesai! (+${(e.reward as { gold: number }).gold} G)`);
+        st.toast('quest', `Quest selesai! (+${(e.reward as { gold: number })?.gold || 0} G)`);
         break;
       }
       case 'levelup': {
@@ -182,7 +198,32 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
       }
       case 'can_propose': st.toast('heart', `${st.defs?.npcs?.find(n => n.id === e.npc)?.name || 'Seseorang'} menerima lamaranmu!`); break;
       case 'marriage': st.toast('heart', `${e.name} menikah dengan ${e.npc}! 💍`); break;
-      case 'chat': set({ chat: [...st.chat.slice(-49), { id: chatId++, playerId: e.playerId as string, name: e.name as string, text: e.text as string, ts: e.ts as number }] }); break;
+      case 'chat': {
+        const line: ChatLine = {
+          id: (e.id as string | number) || Date.now(),
+          playerId: e.playerId as string,
+          name: e.name as string,
+          text: e.text as string,
+          ts: (e.ts as number) || Date.now(),
+          channel: (e.channel as 'public' | 'private') || 'public',
+          targetPlayerId: e.targetPlayerId as string | undefined,
+          targetName: e.targetName as string | undefined,
+        };
+        // Deduplicate if already exists
+        const exists = st.chat.some((c) => c.id === line.id || (c.playerId === line.playerId && c.ts === line.ts && c.text === line.text));
+        if (!exists) {
+          const newChat = [...st.chat.slice(-99), line];
+          const unread = { ...st.unreadPrivate };
+          if (line.channel === 'private' && line.playerId !== st.userId) {
+            if (st.activeChatTab !== line.playerId || !st.chatOpen) {
+              unread[line.playerId] = (unread[line.playerId] || 0) + 1;
+              st.toast('info', `💬 Pesan pribadi dari ${line.name}`);
+            }
+          }
+          set({ chat: newChat, unreadPrivate: unread });
+        }
+        break;
+      }
       case 'weather': update['worldMeta'] = { ...st.worldMeta, weather: e.weather as string }; break;
       case 'time': update['worldMeta'] = { ...st.worldMeta, timeMin: e.time as number, day: e.day as number, season: e.season as string }; break;
       case 'season': update['worldMeta'] = { ...st.worldMeta, season: e.season as string }; break;
@@ -235,8 +276,18 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
       case 'festival_pts': st.toast('festival', `Poin festival: ${e.points}`); break;
       case 'rain_watered': st.toast('info', 'Hujan menyirami tanamanmu!'); break;
       case 'house_upgrade_visual': st.toast('craft', `Rumah ${e.name || 'seseorang'} naik ke Lv ${e.level}!`); break;
-      case 'join': st.toast('info', `${e.name} bergabung ke dunia!`); break;
-      case 'leave': st.toast('info', `${e.name} pergi.`); break;
+      case 'join': {
+        if ((e.playerId as string) !== st.userId) {
+          st.toast('info', `${e.name} bergabung ke dunia!`);
+        }
+        break;
+      }
+      case 'leave': {
+        if ((e.playerId as string) !== st.userId) {
+          st.toast('info', `${e.name} pergi.`);
+        }
+        break;
+      }
       default: break;
     }
     if (Object.keys(update).length) set(update);
@@ -251,7 +302,23 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
     setTimeout(() => get().dismissToast(id), 4200);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter(t => t.id !== id) })),
-  pushChat: (line) => set((s) => ({ chat: [...s.chat.slice(-49), line] })),
+  pushChat: (line) => {
+    const st = get();
+    const exists = st.chat.some((c) => c.id === line.id || (c.playerId === line.playerId && c.ts === line.ts && c.text === line.text));
+    if (!exists) {
+      set({ chat: [...st.chat.slice(-99), line] });
+    }
+  },
+  setActiveChatTab: (tab) => {
+    const unread = { ...get().unreadPrivate };
+    delete unread[tab];
+    set({ activeChatTab: tab, unreadPrivate: unread });
+  },
+  clearUnreadPrivate: (playerId) => {
+    const unread = { ...get().unreadPrivate };
+    delete unread[playerId];
+    set({ unreadPrivate: unread });
+  },
   setSettings: (p) => set((s) => ({ settings: { ...s.settings, ...p } })),
   setFps: (fps) => set({ fps }),
   setMine: (m) => set({ mine: m }),
@@ -260,9 +327,11 @@ export const useHarvestStore = create<HarvestState>((set, get) => ({
   setSelectedItem: (id) => set({ selectedItem: id }),
   setChatOpen: (open) => set({ chatOpen: open }),
   reset: () => set({
-    status: 'connecting', screen: 'orientation', errorMsg: '', me: null, defs: null, prices: {},
+    status: 'connecting', screen: 'loading', errorMsg: '', me: null, defs: null, prices: {},
     worldMeta: initialMeta, playersShort: {}, interaction: { kind: null, label: '', x: 0, y: 0 },
-    menu: null, dialogue: null, toasts: [], chat: [], mine: null, festivalBanner: null, wasInGame: false,
+    menu: null, dialogue: null, toasts: [], chat: [], activeChatTab: 'public', unreadPrivate: {},
+    mine: null, festivalBanner: null, wasInGame: false,
     fishing: { phase: 'idle', startAt: 0, biteAt: 0 }, selectedItem: null, chatOpen: false,
+    snapshotCount: 0, lastRecovery: null,
   }),
 }));

@@ -1,11 +1,24 @@
 // Harvest Moon — client-side protocol & shared types.
 // The server is the single source of truth; these types mirror its JSON.
 
+/**
+ * Connection state machine (single source of truth for the UI overlays):
+ *
+ *   connecting → hello → syncing → ready          (first successful handshake)
+ *   ready → reconnecting → hello → ready           (automatic recovery)
+ *   ready → recovering → hello → ready             (explicit resume/manual retry)
+ *   connecting|reconnecting|recovering → error     (FAILED — user action needed)
+ *
+ * `ready` is only reached after the server answered the hello handshake, i.e.
+ * after `hello_ack` or the authoritative `snapshot` — never on socket OPEN.
+ */
 export type ConnectionStatus =
   | 'connecting'
   | 'hello'
+  | 'syncing'
   | 'ready'
   | 'reconnecting'
+  | 'recovering'
   | 'lost'
   | 'closed'
   | 'connected'
@@ -92,6 +105,7 @@ export interface ItemDef {
   cat: 'tool' | 'crop' | 'seed' | 'forage' | 'fish' | 'mineral' | 'product' | 'meal' | 'furniture' | 'fert' | 'bait' | 'insect' | 'special';
   value: number;
   color: string;
+  desc?: string;
   rare?: boolean;
   buff?: { stam: number; speed: number; duration: number };
 }
@@ -212,7 +226,7 @@ export interface SnapMsg {
   day: number;
   season: string;
   weather: string;
-  players: [string, number, number, number, string, number, number][];
+  players: [string, number, number, number, string, number, number, string?][];
   npcs: [string, number, number, string, string][];
 }
 
@@ -234,9 +248,9 @@ export type ServerMsg = SnapshotMsg | SnapMsg | EventMsg | HelloAck | ErrMsg | {
 export type ClientMsg =
   | { t: 'hello'; room: string; userId: string; username: string }
   | { t: 'create'; char: CharDef; farmName: string }
-  | { t: 'move'; x: number; y: number; dir: number; anim: string; sprint: boolean }
+  | { t: 'move'; x: number; y: number; dir: number; anim: string; sprint: boolean; seq?: number; ts?: number }
   | { t: 'action'; a: string; [k: string]: unknown }
-  | { t: 'chat'; text: string }
+  | { t: 'chat'; text: string; channel?: 'public' | 'private'; targetPlayerId?: string }
   | { t: 'emote'; emote: string }
   | { t: 'ping'; ts: number }
   | { t: 'req_state' };
@@ -251,7 +265,16 @@ export interface InteractionHint {
 
 export interface UiToast { id: number; kind: 'info' | 'success' | 'warn' | 'quest' | 'heart' | 'fish' | 'craft' | 'festival' | 'world' | 'animal' | 'sleep'; msg: string; }
 
-export interface ChatLine { id: number; playerId: string; name: string; text: string; ts: number; }
+export interface ChatLine {
+  id: string | number;
+  playerId: string;
+  name: string;
+  text: string;
+  ts: number;
+  channel: 'public' | 'private';
+  targetPlayerId?: string;
+  targetName?: string;
+}
 
 export interface DialogueState {
   npcId: string;

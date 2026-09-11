@@ -103,6 +103,18 @@ export default function Home() {
     getOrCreateUserId();
   }, [setUserInfo]);
 
+  // Deep link: `/?game=harvest` (the PWA "Add to Home Screen" start_url served
+  // by /harvest) preselects the Harvest Moon flow so an installed Harvest icon
+  // opens the farm directly instead of the classic Sudoku lobby.
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get('game') === 'harvest') {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time deep-link preselection
+        setJoinGameType('harvest');
+      }
+    } catch {}
+  }, []);
+
   // Clear admin verified if username changes away from ADMIN
   useEffect(() => {
     if (username.trim().toUpperCase() !== 'ADMIN' && isAdminVerified) {
@@ -140,6 +152,12 @@ export default function Home() {
         setDifficulty('3x3');
       }
       setMaxPlayers(2);
+    } else if (newMode === 'sos_game' || newMode === 'othello') {
+      // SOS & Othello: papan fixed 8x8, selalu 2 pemain (Solo vs Bot jika sendirian).
+      if (difficulty === '3x3' || difficulty === '8x8') {
+        setDifficulty('medium');
+      }
+      setMaxPlayers(2);
     } else if (newMode === 'harvest_moon') {
       // Open-world farm: hingga 16 pemain dalam satu world.
       setMaxPlayers((prev) => Math.min(Math.max(prev, 2), 16));
@@ -161,7 +179,7 @@ export default function Home() {
     clearRoomStateBeforeNavigate();
     const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
     const finalDiff = mode === 'tic_tac_toe' && difficulty !== '3x3' && difficulty !== '8x8' ? '3x3' : difficulty;
-    const finalMaxPlayers = mode === 'tic_tac_toe' ? 2 : maxPlayers;
+    const finalMaxPlayers = mode === 'tic_tac_toe' || mode === 'sos_game' || mode === 'othello' ? 2 : maxPlayers;
 
     sessionStorage.setItem(`sudoku_host_room_${roomId}`, '1');
     sessionStorage.setItem(`sudoku_room_config_${roomId}`, JSON.stringify({
@@ -267,7 +285,7 @@ export default function Home() {
         <div className="space-y-3">
           <h1 className="text-4xl font-bold tracking-tight">Sudoku Together</h1>
           <p className="text-secondary text-sm">
-            Mainkan Sudoku, Ular Tangga, Tic Tac Toe, &amp; Arrow Puzzle Master secara
+            Mainkan Sudoku, Ular Tangga, Tic Tac Toe, SOS, Othello, &amp; Arrow Puzzle Master secara
             multiplayer real-time bersama teman-temanmu.
           </p>
         </div>
@@ -322,7 +340,7 @@ export default function Home() {
         title="Pengaturan Room"
       >
         <form onSubmit={handleCreateRoom} className="space-y-4">
-          {mode !== 'harvest_moon' && (
+          {mode !== 'harvest_moon' && mode !== 'sos_game' && mode !== 'othello' && (
             <div>
               <label className="text-sm font-medium block mb-1.5">Kesulitan (Difficulty)</label>
               <select
@@ -366,6 +384,8 @@ export default function Home() {
               <option value="arrow_competition">Arrow Puzzle Master — Competition</option>
               <option value="arrow_practice">Arrow Puzzle Master — Practice</option>
               <option value="harvest_moon">Harvest Moon — Open World Farming</option>
+              <option value="sos_game">SOS Game (8x8)</option>
+              <option value="othello">Othello (8x8)</option>
             </select>
           </div>
 
@@ -374,12 +394,12 @@ export default function Home() {
             <select
               value={maxPlayers}
               onChange={(e) => setMaxPlayers(Number(e.target.value))}
-              disabled={mode === 'tic_tac_toe'}
+              disabled={mode === 'tic_tac_toe' || mode === 'sos_game' || mode === 'othello'}
               className={`w-full h-11 rounded-[16px] border border-border bg-background px-4 text-sm focus:outline-none focus:ring-2 focus:ring-foreground cursor-pointer ${
-                mode === 'tic_tac_toe' ? 'opacity-80 bg-secondary/10' : ''
+                mode === 'tic_tac_toe' || mode === 'sos_game' || mode === 'othello' ? 'opacity-80 bg-secondary/10' : ''
               }`}
             >
-              {mode === 'tic_tac_toe' ? (
+              {mode === 'tic_tac_toe' || mode === 'sos_game' || mode === 'othello' ? (
                 <option value={2}>2 Pemain (Maksimal)</option>
               ) : mode === 'harvest_moon' ? (
                 <>
@@ -402,6 +422,18 @@ export default function Home() {
             {mode === 'tic_tac_toe' && (
               <p className="text-[11px] text-secondary mt-1">
                 * Tic Tac Toe otomatis bermain lawan Bot jika sendirian di room.
+              </p>
+            )}
+            {mode === 'sos_game' && (
+              <p className="text-[11px] text-secondary mt-1">
+                * SOS: papan 8x8 — bentuk pola S-O-S (mendatar, tegak, diagonal) sebanyak-banyaknya.
+                Tiap pola = 1 poin + giliran ekstra. Solo otomatis lawan Bot.
+              </p>
+            )}
+            {mode === 'othello' && (
+              <p className="text-[11px] text-secondary mt-1">
+                * Othello: papan 8x8, Hitam jalan duluan. Apit keping lawan untuk membaliknya.
+                Keping terbanyak saat permainan usai menang. Solo otomatis lawan Bot.
               </p>
             )}
             {mode === 'harvest_moon' && (
