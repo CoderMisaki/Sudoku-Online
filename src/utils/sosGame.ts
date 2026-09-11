@@ -1,8 +1,40 @@
-import { SosState, SosLetter, SosCell, SosLine, Player, SosPlayerInfo } from '../types/game';
+import { SosState, SosLetter, SosCell, SosLine, Player, SosPlayerInfo, SosSide } from '../types/game';
 
 export const SOS_BOT_USER_ID = 'sos-bot-player';
 export const SOS_BOT_NAME = 'BOT (Master AI)';
 export const SOS_BOARD_SIZE = 8;
+
+/** Sisi lawan dari sisi tertentu. */
+export function oppositeSosSide(side: SosSide): SosSide {
+  return side === 'black' ? 'white' : 'black';
+}
+
+/**
+ * Undian sisi warna untuk ronde baru: pemain 1 bisa dapat hitam atau putih,
+ * pemain 2 otomatis kebalikannya. Dipakai supaya tiap ronde bisa berganti
+ * "aku hitam lawan putih" / "aku putih lawan hitam" secara acak.
+ */
+export function drawSosSides(): { player1: SosSide; player2: SosSide } {
+  const player1: SosSide = Math.random() < 0.5 ? 'black' : 'white';
+  return { player1, player2: oppositeSosSide(player1) };
+}
+
+/**
+ * Sisi warna milik `userId` pada state SOS. Aman untuk state lama yang belum
+ * menyimpan `side` (fallback: pemain 1 hitam, pemain 2 putih).
+ */
+export function getSosSideForUser(state: SosState | null | undefined, userId: string | null | undefined): SosSide {
+  if (!state || !userId) return 'black';
+  if (userId === state.player1.id) {
+    return state.player1.side === 'white' ? 'white' : 'black';
+  }
+  if (userId === state.player2.id) {
+    return state.player2.side === 'black' || state.player2.side === 'white'
+      ? state.player2.side
+      : oppositeSosSide(getSosSideForUser(state, state.player1.id));
+  }
+  return 'black';
+}
 
 const DIRS = [
   { dr: 0, dc: 1 }, // horizontal
@@ -26,6 +58,9 @@ export function createInitialSosState(activePlayers: Player[], hostId: string): 
 
   const isAgainstBot = !secondPlayer;
 
+  // Undian acak: siapa pegang hitam dan siapa pegang putih tiap ronde baru.
+  const sides = drawSosSides();
+
   const player1: SosPlayerInfo = {
     id: hostPlayer ? hostPlayer.id : 'host',
     username: hostPlayer ? hostPlayer.username || 'Pemain 1' : 'Pemain 1',
@@ -33,6 +68,7 @@ export function createInitialSosState(activePlayers: Player[], hostId: string): 
     avatar: hostPlayer?.avatar || null,
     isBot: false,
     letter: 'S',
+    side: sides.player1,
   };
 
   const player2: SosPlayerInfo = secondPlayer
@@ -43,6 +79,7 @@ export function createInitialSosState(activePlayers: Player[], hostId: string): 
         avatar: secondPlayer.avatar || null,
         isBot: false,
         letter: 'O',
+        side: sides.player2,
       }
     : {
         id: SOS_BOT_USER_ID,
@@ -51,6 +88,7 @@ export function createInitialSosState(activePlayers: Player[], hostId: string): 
         avatar: null,
         isBot: true,
         letter: 'O',
+        side: sides.player2,
       };
 
   return {

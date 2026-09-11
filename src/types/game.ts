@@ -224,14 +224,23 @@ export interface ArrowPuzzleState {
 
 export type SosLetter = 'S' | 'O';
 
+/**
+ * Sisi warna monokrom pada papan SOS. Tidak ada hubungannya dengan huruf
+ * S/O yang dipilih tiap langkah — ini murni identitas warna pemain
+ * (hitam lawan putih) dan diundi acak tiap ronde baru.
+ */
+export type SosSide = 'black' | 'white';
+
 export interface SosPlayerInfo {
   id: string;
   username: string;
   color?: string;
   avatar?: string | null;
   isBot?: boolean;
-  /** Huruf favorit / identitas pemain (P1 = S biru, P2 = O merah). */
+  /** Huruf favorit / identitas pemain (P1 = S, P2 = O). */
   letter: SosLetter;
+  /** Sisi warna hasil undian: 'black' atau 'white'. */
+  side: SosSide;
 }
 
 export interface SosLine {
