@@ -578,6 +578,95 @@ class SoundFX {
     }
   }
 
+  // ─────────────────────────── SOS GAME ─────────────────────────────────────
+  /** Menaruh huruf S atau O: pop taktil dengan pitch berbeda per huruf. */
+  sosPlace(letter: 'S' | 'O'): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      const freq = letter === 'S' ? 520 : 660;
+      this.tone(ctx, this.master, t, {
+        type: 'triangle',
+        freq,
+        freqEnd: freq * 0.85,
+        dur: 0.08,
+        gain: 0.2,
+      });
+      this.noiseBurst(ctx, this.master, t, {
+        type: 'bandpass',
+        freq: 2400,
+        dur: 0.03,
+        gain: 0.06,
+      });
+    } catch {
+      /* abaikan */
+    }
+  }
+
+  /** Berhasil membentuk pola S-O-S: chime ceria (makin banyak poin, nada akhir makin tinggi). */
+  sosScore(combo: number): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      const base = [783.99, 987.77]; // G5, B5
+      base.forEach((f, i) => {
+        this.tone(ctx, this.master!, t + i * 0.06, {
+          freq: f,
+          dur: 0.25,
+          gain: 0.11,
+          shimmerSend: 0.45,
+        });
+      });
+      const extra = Math.min(Math.max(combo, 1), 5);
+      this.tone(ctx, this.master, t + 0.12, {
+        freq: 1174.66 * Math.pow(1.059, extra - 1),
+        dur: 0.3,
+        gain: 0.1,
+        shimmerSend: 0.5,
+      });
+    } catch {
+      /* abaikan */
+    }
+  }
+
+  // ───────────────────────────── OTHELLO ────────────────────────────────────
+  /** Menaruh keping: bunyi \"tok\" kayu + klik balik keping. */
+  othelloPlace(flippedCount: number): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      this.tone(ctx, this.master, t, { type: 'triangle', freq: 340, freqEnd: 210, dur: 0.09, gain: 0.22 });
+      this.noiseBurst(ctx, this.master, t, { freq: 1100, q: 1.6, dur: 0.04, gain: 0.08 });
+      // Klik beruntun mengikuti jumlah keping yang dibalik (maks 6 klik).
+      const clicks = Math.min(Math.max(flippedCount, 1), 6);
+      for (let i = 0; i < clicks; i++) {
+        this.tone(ctx, this.master, t + 0.05 + i * 0.045, {
+          type: 'square',
+          freq: 1900 + Math.random() * 500,
+          dur: 0.02,
+          gain: 0.03,
+        });
+      }
+    } catch {
+      /* abaikan */
+    }
+  }
+
+  /** Giliran dilewati (tidak ada langkah sah): nada turun singkat. */
+  othelloPass(): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    try {
+      const t = ctx.currentTime;
+      this.tone(ctx, this.master, t, { freq: 520, freqEnd: 330, dur: 0.22, gain: 0.12 });
+    } catch {
+      /* abaikan */
+    }
+  }
+
   // ─────────────────────── ARROW PUZZLE MASTER ───────────────────────────────
   /** Langkah benar: "whoosh" pendek yang nadanya naik mengikuti urutan langkah. */
   arrowStep(seq: number): void {
