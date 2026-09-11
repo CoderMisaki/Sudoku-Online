@@ -469,62 +469,117 @@ export const SosBoard: React.FC<SosBoardProps> = ({
 
       {/* Papan 8x8 */}
       <div className="relative w-full aspect-square max-w-[480px] p-2 sm:p-3 bg-card border-2 border-border rounded-3xl shadow-xl flex items-center justify-center">
-        <div className="grid w-full h-full gap-1 grid-cols-8 grid-rows-8">
-          {grid.map((row, rIdx) =>
-            row.map((cell, cIdx) => {
-              const ownerId = lineCellOwner.get(`${rIdx}-${cIdx}`);
-              const isLast = isCellLastMove(rIdx, cIdx);
-              const isClickable = cell.letter === null && !winner && isMyTurn && !isBotThinking;
+        <div className="relative w-full h-full">
+          <div className="grid w-full h-full gap-1 grid-cols-8 grid-rows-8">
+            {grid.map((row, rIdx) =>
+              row.map((cell, cIdx) => {
+                const ownerId = lineCellOwner.get(`${rIdx}-${cIdx}`);
+                const isLast = isCellLastMove(rIdx, cIdx);
+                const isClickable = cell.letter === null && !winner && isMyTurn && !isBotThinking;
 
-              return (
-                <button
-                  key={`${rIdx}-${cIdx}`}
-                  type="button"
-                  onClick={() => handleCellClick(rIdx, cIdx)}
-                  disabled={cell.letter !== null || winner !== null || (!isMyTurn && !isSolo) || isBotThinking}
-                  className={`relative flex items-center justify-center rounded-md sm:rounded-lg transition-all duration-150 font-black cursor-pointer ${
-                    ownerId
-                      ? ownerId === player1.id
-                        ? 'bg-blue-500/20 border-2 border-blue-500/60 shadow-sm'
-                        : sosState.isAgainstBot && ownerId === SOS_BOT_USER_ID
-                        ? 'bg-emerald-500/20 border-2 border-emerald-500/60 shadow-sm'
-                        : 'bg-red-500/20 border-2 border-red-500/60 shadow-sm'
-                      : isLast
-                      ? 'bg-secondary/25 border-2 border-border shadow-xs'
-                      : cell.letter !== null
-                      ? 'bg-secondary/10 border border-border/60'
-                      : isClickable
-                      ? 'bg-background border border-border/80 hover:bg-secondary/20 hover:border-foreground/30 hover:scale-[0.97]'
-                      : 'bg-background/80 border border-border/40 opacity-70 cursor-not-allowed'
-                  }`}
-                  style={{ fontSize: 'clamp(0.85rem, 3.2vw, 1.3rem)' }}
-                >
-                  <AnimatePresence>
-                    {cell.letter && (
-                      <motion.span
-                        initial={{ scale: 0, opacity: 0, rotate: -15 }}
-                        animate={{ scale: 1, opacity: 1, rotate: 0 }}
-                        transition={{ type: 'spring', stiffness: 400, damping: 20 }}
-                        className={`leading-none ${
-                          cell.byUserId === player1.id
-                            ? 'text-blue-500 dark:text-blue-400'
-                            : sosState.isAgainstBot && cell.byUserId === SOS_BOT_USER_ID
-                            ? 'text-emerald-500 dark:text-emerald-400'
-                            : 'text-red-500 dark:text-red-400'
-                        }`}
-                      >
-                        {cell.letter}
-                      </motion.span>
+                return (
+                  <button
+                    key={`${rIdx}-${cIdx}`}
+                    type="button"
+                    onClick={() => handleCellClick(rIdx, cIdx)}
+                    disabled={cell.letter !== null || winner !== null || (!isMyTurn && !isSolo) || isBotThinking}
+                    className={`relative flex items-center justify-center rounded-md sm:rounded-lg transition-all duration-150 font-black cursor-pointer ${
+                      ownerId
+                        ? ownerId === player1.id
+                          ? 'bg-blue-500/20 border-2 border-blue-500/60 shadow-sm'
+                          : sosState.isAgainstBot && ownerId === SOS_BOT_USER_ID
+                          ? 'bg-emerald-500/20 border-2 border-emerald-500/60 shadow-sm'
+                          : 'bg-red-500/20 border-2 border-red-500/60 shadow-sm'
+                        : isLast
+                        ? 'bg-secondary/25 border-2 border-border shadow-xs'
+                        : cell.letter !== null
+                        ? 'bg-secondary/10 border border-border/60'
+                        : isClickable
+                        ? 'bg-background border border-border/80 hover:bg-secondary/20 hover:border-foreground/30 hover:scale-[0.97]'
+                        : 'bg-background/80 border border-border/40 opacity-70 cursor-not-allowed'
+                    }`}
+                    style={{ fontSize: 'clamp(0.85rem, 3.2vw, 1.3rem)' }}
+                  >
+                    <AnimatePresence>
+                      {cell.letter && (
+                        <motion.span
+                          initial={{ scale: 0, opacity: 0, rotate: -15 }}
+                          animate={{ scale: 1, opacity: 1, rotate: 0 }}
+                          transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+                          className={`leading-none ${
+                            cell.byUserId === player1.id
+                              ? 'text-blue-500 dark:text-blue-400'
+                              : sosState.isAgainstBot && cell.byUserId === SOS_BOT_USER_ID
+                              ? 'text-emerald-500 dark:text-emerald-400'
+                              : 'text-red-500 dark:text-red-400'
+                          }`}
+                        >
+                          {cell.letter}
+                        </motion.span>
+                      )}
+                    </AnimatePresence>
+                    {cell.letter === null && isClickable && (
+                      <span className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-40 font-black text-secondary pointer-events-none">
+                        {chosenLetter}
+                      </span>
                     )}
-                  </AnimatePresence>
-                  {cell.letter === null && isClickable && (
-                    <span className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-40 font-black text-secondary pointer-events-none">
-                      {chosenLetter}
-                    </span>
-                  )}
-                </button>
-              );
-            })
+                  </button>
+                );
+              })
+            )}
+          </div>
+
+          {/*
+           * Satu papan bisa memiliki beberapa SOS. Garis digambar di atas
+           * pusat ketiga sel supaya arah mendatar, tegak, dan diagonal tetap
+           * terlihat jelas tanpa menghalangi tap pada sel.
+           */}
+          {sosState.lines.length > 0 && (
+            <svg
+              className="pointer-events-none absolute inset-0 z-10 h-full w-full"
+              viewBox="0 0 8 8"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              {sosState.lines.map((line, index) => {
+                const start = line.cells[0];
+                const end = line.cells[2];
+                const color =
+                  line.byUserId === player1.id
+                    ? '#3b82f6'
+                    : sosState.isAgainstBot && line.byUserId === SOS_BOT_USER_ID
+                    ? '#10b981'
+                    : '#ef4444';
+                const key = `${line.byUserId}-${line.cells.map((cell) => `${cell.row}-${cell.col}`).join('-')}`;
+
+                return (
+                  <g key={`${key}-${index}`}>
+                    {/* Outline putih membuat garis tetap terbaca di atas huruf dan sel berwarna. */}
+                    <line
+                      x1={start.col + 0.5}
+                      y1={start.row + 0.5}
+                      x2={end.col + 0.5}
+                      y2={end.row + 0.5}
+                      stroke="white"
+                      strokeWidth="0.18"
+                      strokeLinecap="round"
+                      opacity="0.9"
+                    />
+                    <line
+                      x1={start.col + 0.5}
+                      y1={start.row + 0.5}
+                      x2={end.col + 0.5}
+                      y2={end.row + 0.5}
+                      stroke={color}
+                      strokeWidth="0.1"
+                      strokeLinecap="round"
+                    />
+                    <circle cx={start.col + 0.5} cy={start.row + 0.5} r="0.1" fill={color} />
+                    <circle cx={end.col + 0.5} cy={end.row + 0.5} r="0.1" fill={color} />
+                  </g>
+                );
+              })}
+            </svg>
           )}
         </div>
       </div>
