@@ -316,11 +316,11 @@ export const OthelloBoard: React.FC<OthelloBoardProps> = ({
       ? playerB.username
       : playerW.username;
 
+  // Keping dibuat statis. Animasi spring pada setiap render sebelumnya membuat
+  // seluruh papan tampak bergetar setiap kali sebuah langkah ditekan.
   const renderDisc = (disc: OthelloDisc, small = false) => (
-    <motion.span
-      initial={{ scale: 0.4, opacity: 0 }}
-      animate={{ scale: 1, opacity: 1 }}
-      transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+    <span
+      aria-hidden="true"
       className={`rounded-full block ${
         disc === 'B'
           ? 'bg-gradient-to-br from-neutral-700 via-neutral-900 to-black shadow-[0_2px_6px_rgba(0,0,0,0.45),inset_0_2px_3px_rgba(255,255,255,0.25)] border border-black/60'
@@ -471,18 +471,19 @@ export const OthelloBoard: React.FC<OthelloBoardProps> = ({
                   type="button"
                   onClick={() => handleCellClick(rIdx, cIdx)}
                   disabled={cell !== null || winner !== null || (!isMyTurn && !isSolo) || isBotThinking}
-                  className={`relative flex items-center justify-center rounded-[4px] transition-all duration-150 cursor-pointer ${
+                  className={`relative flex items-center justify-center rounded-[4px] transition-colors duration-150 cursor-pointer touch-manipulation ${
                     isLast
                       ? 'bg-emerald-600/80 dark:bg-emerald-700/80 ring-2 ring-amber-300/80'
                       : 'bg-emerald-600/40 dark:bg-emerald-800/60 hover:bg-emerald-500/50'
                   } ${!isClickable && cell === null ? 'cursor-not-allowed' : ''}`}
+                  style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
                 >
                   {cell && renderDisc(cell)}
                   {!cell && isValid && showHints && !winner && (
                     <span
-                      className={`rounded-full block transition-all ${
+                      className={`rounded-full block ${
                         isClickable
-                          ? 'w-[26%] h-[26%] bg-emerald-200/90 shadow animate-pulse'
+                          ? 'w-[26%] h-[26%] bg-emerald-200/90 shadow'
                           : 'w-[18%] h-[18%] bg-white/25'
                       }`}
                     />
