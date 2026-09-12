@@ -87,27 +87,43 @@ export function useRealtime(roomId: string) {
     };
   }, []);
 
-  // Presence cleanup saat tab ditutup — sinkron untuk status disconnect
+  // Presence cleanup saat tab ditutup — kirim broadcast + untrack + removeChannel
+  // supaya client lain SEGERA mendapat status disconnect (realtime, no delay).
   useEffect(() => {
     const handleTabClose = () => {
-      if (channelRef.current) {
-        try {
-          // Supabase presence: untrack akan memicu event 'leave' di client lain
-          channelRef.current.untrack();
-        } catch {}
-        // Fallback: coba removeChannel dengan sendBeacon-like (non-blocking)
-        try {
-          // Jangan removeChannel di beforeunload (bisa race), biarkan server timeout
-          // tapi untrack sudah cukup untuk trigger disconnect
-        } catch {}
-      }
+      const ch = channelRef.current;
+      if (!ch) return;
+      const currentUid = userIdRef.current || getOrCreateUserId();
+
+      try {
+        // 1) Broadcast.disconnect — fire-and-forget, WebSocket masih hidup
+        //    saat beforeunload sehingga pesan sampai ke client lain SEBELUM
+        //    koneksi ditutup browser.
+        ch.send({
+          type: 'broadcast',
+          event: 'player_disconnecting',
+          payload: { userId: currentUid },
+        });
+      } catch {}
+
+      try {
+        // 2) Untrack presence — memicu 'leave' event di client lain
+        ch.untrack();
+      } catch {}
+
+      try {
+        // 3) Remove channel — cegah auto-reconnect Supabase & pastikan server
+        //    mendeteksi disconnect sesegera mungkin.
+        supabase.removeChannel(ch);
+        channelRef.current = null;
+      } catch {}
+
+      statusRef.current = 'CLOSED';
     };
     const handleVisibilityHide = () => {
       if (document.visibilityState === 'hidden' && channelRef.current) {
-        try {
-          // Untuk mobile/tab yang di-background, tetap jaga presence
-          // tidak untrack di hidden, hanya di pagehide/beforeunload
-        } catch {}
+        // Tab di-background (bukan ditutup): JANGAN untrack/remove, cukup jaga
+        // presence supaya tidak muncul disconnect palsu saat user kembali.
       }
     };
 
@@ -503,6 +519,14 @@ export function useRealtime(roomId: string) {
       })
       .on('broadcast', { event: 'player_leave_room' }, ({ payload }) => {
         useGameStore.getState().updatePlayer(payload.userId, { status: 'left' });
+      })
+      .on('broadcast', { event: 'player_disconnecting' }, ({ payload }) => {
+        // Player menutup tab / browser — segera tampilkan status disconnect
+        // (realtime, tanpa menunggu presence timeout dari server).
+        const store = useGameStore.getState();
+        if (store.room?.players[payload.userId]?.status !== 'left') {
+          store.updatePlayer(payload.userId, { status: 'disconnected' });
+        }
       })
       .on('broadcast', { event: 'next_game' }, ({ payload }) => {
         addLog(`[Next Game] Game baru dimulai oleh host.`);
@@ -1050,20 +1074,29 @@ export function useRealtime(roomId: string) {
   const broadcastLeaveRoom = useCallback(async () => {
     const currentUid = userIdRef.current || getOrCreateUserId();
     useGameStore.getState().updatePlayer(currentUid, { status: 'left' });
-    try {
-      channelRef.current?.send({
-        type: 'broadcast',
-        event: 'player_leave_room',
-        payload: { userId: currentUid },
-      });
-    } catch {}
-    await new Promise((r) => setTimeout(r, 150));
-    if (channelRef.current) {
+
+    // 1) Kirim broadcast 'player_leave_room' DAN TUNGGU acknowledgenya.
+    //    Ini memastikan client lain MENERIMA status 'left' SEBELUM channel
+    //    di-destroy — sehingga status muncul realtime tanpa delay.
+    const ch = channelRef.current;
+    if (ch && statusRef.current === 'SUBSCRIBED') {
       try {
-        await channelRef.current.untrack();
+        await ch.send({
+          type: 'broadcast',
+          event: 'player_leave_room',
+          payload: { userId: currentUid },
+        });
+      } catch {}
+    }
+
+    // 2) Untrack presence & hapus channel — memicu 'leave' di client lain
+    //    sebagai fallback / konfirmasi.
+    if (ch) {
+      try {
+        await ch.untrack();
       } catch {}
       try {
-        supabase.removeChannel(channelRef.current);
+        supabase.removeChannel(ch);
       } catch {}
       channelRef.current = null;
     }
